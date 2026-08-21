@@ -4,10 +4,11 @@
 Go, CPU, длинные файлы, **word-level тайминги**, OpenAI-совместимый API и встроенный
 тестовый интерфейс.
 
-> **Статус: скелет.** Архитектура, контракты и каркас на месте; конвейер распознавания
-> реализуется по вехам M1–M5. Каждая заглушка помечена `TODO(Mn)` и привязана к вехе
-> из [docs/SPEC.md](docs/SPEC.md). Спецификация — источник правды, включая список
-> открытых вопросов (§19).
+> **Статус: M1 закрыта.** Сквозной путь работает: файл → декод → 16 кГц → VAD →
+> распознавание → пословные тайминги → `/v1/audio/transcriptions`. Очередь задач,
+> реестр со скачиванием, UI и постобработка — вехи M2–M5, каждая заглушка помечена
+> `TODO(Mn)`. Источник правды — [docs/SPEC.md](docs/SPEC.md), включая открытые
+> вопросы (§19).
 
 ## Что это
 
@@ -23,9 +24,18 @@ Go, CPU, длинные файлы, **word-level тайминги**, OpenAI-со
 ## Быстрый старт
 
 ```bash
+make models               # GigaAM v2 CTC (ru) + Silero VAD в ./.models
 make web build            # собрать SPA и сервер
-./dist/nanoasr version    # версии, семейства моделей, диалекты
+./dist/nanoasr models list -config configs/nanoasr.dev.yaml
 ./dist/nanoasr serve -config configs/nanoasr.dev.yaml
+```
+
+Распознать файл:
+
+```bash
+curl -s localhost:8080/v1/audio/transcriptions \
+  -F file=@call.wav -F response_format=verbose_json \
+  | jq '.text, .timestamp_source, .words[:3]'
 ```
 
 Dev-конфиг слушает `127.0.0.1:8080` без аутентификации — открытый режим разрешён
@@ -65,8 +75,9 @@ internal/core      доменные типы и контракт сервиса 
 internal/audio     сниффинг, WAV/PCM, ffmpeg, ресемплинг
 internal/vad       нарезка речи и зоны тишины
 internal/asr       граница с sherpa-onnx + реестр семейств моделей
-internal/words     токены → слова с таймингами (реализовано, покрыто тестами)
-internal/pool      LRU, refcount, hot swap, CPU-губернатор (реализовано)
+internal/words     токены → слова с таймингами
+internal/pool      LRU, refcount, hot swap, CPU-губернатор
+internal/pipeline  сквозной конвейер, реализует core.Service
 internal/registry  манифесты, каталог, скачивание с проверкой sha256
 internal/job       очередь, воркеры, SSE
 internal/api       adapter + диалекты openai и native
@@ -78,8 +89,10 @@ docs/SPEC.md       спецификация
 ## Разработка
 
 ```bash
-make lint        # go vet + gofmt + eslint + tsc
-make test-race   # пул, очередь и губернатор корректны только под -race
+make lint             # go vet + gofmt + eslint + tsc
+make test-race        # пул, очередь и губернатор корректны только под -race
+make models testdata  # веса и аудио для сквозных тестов
+make test-integration # реальное распознавание + отчёт по RTF и таймингам
 cd web && npm run dev
 ```
 

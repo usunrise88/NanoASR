@@ -5,8 +5,6 @@
 // The server starts with no configuration file at all.
 package config
 
-import "time"
-
 type Config struct {
 	Server      Server      `yaml:"server"`
 	Auth        Auth        `yaml:"auth"`
@@ -24,10 +22,10 @@ type Config struct {
 }
 
 type Server struct {
-	Addr              string        `yaml:"addr"`
-	ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
-	MaxUploadBytes    int64         `yaml:"max_upload_bytes"`
-	ShutdownGrace     time.Duration `yaml:"shutdown_grace"`
+	Addr              string   `yaml:"addr"`
+	ReadHeaderTimeout Duration `yaml:"read_header_timeout"`
+	MaxUploadBytes    int64    `yaml:"max_upload_bytes"`
+	ShutdownGrace     Duration `yaml:"shutdown_grace"`
 }
 
 // Auth in mode "open" is accepted only when Server.Addr binds a loopback
@@ -56,12 +54,12 @@ type UI struct {
 type Audio struct {
 	// FFmpegPath may be empty: then only WAV/PCM inputs are accepted and
 	// everything else fails with unsupported_media_type.
-	FFmpegPath       string        `yaml:"ffmpeg_path"`
-	FFmpegTimeout    time.Duration `yaml:"ffmpeg_timeout"`
-	MaxDuration      time.Duration `yaml:"max_duration"`
-	TargetSampleRate int           `yaml:"target_sample_rate"`
-	ChannelMode      string        `yaml:"channel_mode"`
-	Denoise          bool          `yaml:"denoise"`
+	FFmpegPath       string   `yaml:"ffmpeg_path"`
+	FFmpegTimeout    Duration `yaml:"ffmpeg_timeout"`
+	MaxDuration      Duration `yaml:"max_duration"`
+	TargetSampleRate int      `yaml:"target_sample_rate"`
+	ChannelMode      string   `yaml:"channel_mode"`
+	Denoise          bool     `yaml:"denoise"`
 }
 
 type VAD struct {
@@ -74,15 +72,15 @@ type VAD struct {
 }
 
 type ASR struct {
-	ModelsDir         string        `yaml:"models_dir"`
-	DefaultModel      string        `yaml:"default_model"`
-	MaxResidentModels int           `yaml:"max_resident_models"`
-	MaxModelRSSMB     int           `yaml:"max_model_rss_mb"`
-	InferenceSlots    int           `yaml:"inference_slots"`
-	NumThreads        int           `yaml:"num_threads"`
-	IdleTTL           time.Duration `yaml:"idle_ttl"`
-	AcquireTimeout    time.Duration `yaml:"acquire_timeout"`
-	Batch             Batch         `yaml:"batch"`
+	ModelsDir         string   `yaml:"models_dir"`
+	DefaultModel      string   `yaml:"default_model"`
+	MaxResidentModels int      `yaml:"max_resident_models"`
+	MaxModelRSSMB     int      `yaml:"max_model_rss_mb"`
+	InferenceSlots    int      `yaml:"inference_slots"`
+	NumThreads        int      `yaml:"num_threads"`
+	IdleTTL           Duration `yaml:"idle_ttl"`
+	AcquireTimeout    Duration `yaml:"acquire_timeout"`
+	Batch             Batch    `yaml:"batch"`
 }
 
 type Batch struct {
@@ -99,10 +97,10 @@ type Registry struct {
 }
 
 type Jobs struct {
-	QueueSize         int           `yaml:"queue_size"`
-	MaxConcurrent     int           `yaml:"max_concurrent"`
-	MaxProcessingTime time.Duration `yaml:"max_processing_time"`
-	HistoryTTL        time.Duration `yaml:"history_ttl"`
+	QueueSize         int      `yaml:"queue_size"`
+	MaxConcurrent     int      `yaml:"max_concurrent"`
+	MaxProcessingTime Duration `yaml:"max_processing_time"`
+	HistoryTTL        Duration `yaml:"history_ttl"`
 }
 
 type PostProc struct {
@@ -138,7 +136,7 @@ type Storage struct {
 	// KeepAudioTTL of 0 means uploaded audio never outlives the active job.
 	// This is the default and the reason the UI plays the local File instead
 	// of asking the server for audio (SPEC §2.1).
-	KeepAudioTTL time.Duration `yaml:"keep_audio_ttl"`
+	KeepAudioTTL Duration `yaml:"keep_audio_ttl"`
 }
 
 type Log struct {

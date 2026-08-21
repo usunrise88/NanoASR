@@ -25,6 +25,8 @@ func (transducer) Validate(files map[string]string) error {
 }
 
 func (transducer) Capabilities() core.Capabilities {
+	// Confidence comes from ys_log_probs, which the transducer decoders fill.
+	// Unverified against a real transducer model — see the note above.
 	return core.Capabilities{WordTimestamps: true, Confidence: true}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +191,26 @@ func TestRouterReportsUnsupportedWithoutFFmpeg(t *testing.T) {
 	var e *core.Error
 	if !errors.As(err, &e) || e.Code != core.CodeUnsupportedMediaType {
 		t.Fatalf("got %v, want unsupported_media_type", err)
+	}
+	// The operator has to be able to tell "install ffmpeg" from "that was not
+	// audio"; both are 415 and only the message distinguishes them.
+	if !strings.Contains(e.Message, "ffmpeg") {
+		t.Errorf("message %q should point at the missing ffmpeg", e.Message)
+	}
+}
+
+func TestRouterDistinguishesUnrecognisableInput(t *testing.T) {
+	router := NewRouter(NewWAVDecoder(), newTestFFmpeg(t))
+
+	_, _, err := router.Decode(context.Background(), bytes.NewReader([]byte("not audio at all")),
+		Options{TargetSampleRate: 16000})
+
+	var e *core.Error
+	if !errors.As(err, &e) || e.Code != core.CodeUnsupportedMediaType {
+		t.Fatalf("got %v, want unsupported_media_type", err)
+	}
+	if strings.Contains(e.Message, "ffmpeg") {
+		t.Errorf("message %q blames ffmpeg for input that is not audio", e.Message)
 	}
 }
 

@@ -11,7 +11,8 @@ LDFLAGS     := -X main.version=$(VERSION)
 DIST        := dist
 UI_DIST     := internal/ui/dist
 
-.PHONY: all web build dist docker lint test test-race run clean tidy help
+.PHONY: all web build build-noui dist docker lint test test-race test-integration \
+	models testdata golden-update run clean tidy help
 
 all: web build
 
@@ -49,9 +50,26 @@ lint:
 	cd web && $(NPM) run lint
 	cd web && $(NPM) run typecheck
 
+## models: download the models the dev loop and integration tests need
+models:
+	./scripts/fetch-dev-models.sh
+
+## testdata: download and derive the integration test audio
+testdata:
+	./scripts/fetch-testdata.sh
+
 ## test: unit tests
 test:
 	$(GO) test ./...
+
+## test-integration: end-to-end tests against real weights (needs models testdata)
+test-integration:
+	$(GO) test -tags integration ./... -v -run "Integration|M1Report"
+
+## golden-update: regenerate the golden transcript from the current model
+golden-update:
+	$(GO) test -tags integration ./internal/pipeline/ \
+		-run TestIntegrationTranscribesReferenceClip -update-golden -v
 
 ## test-race: the pool, the queue and the governor are only correct under -race
 test-race:

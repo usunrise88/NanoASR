@@ -130,3 +130,42 @@ func near(a, b float64) bool {
 	d := a - b
 	return d < 1e-6 && d > -1e-6
 }
+
+// GigaAM's Russian CTC uses a character vocabulary whose separator is a
+// literal space with a frame of its own. Folding that frame into the next word
+// would bias every word start early and leave a leading space in the text.
+func TestAssembleCharUnitDropsSeparatorFrames(t *testing.T) {
+	r := rec(
+		[]string{" ", "д", "а", " ", "н", "е", "т"},
+		[]float32{0.00, 0.08, 0.16, 0.24, 0.32, 0.40, 0.48},
+		[]float32{0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08},
+		nil,
+	)
+	got := Assemble(r, Options{ModelingUnit: UnitChar, SegmentEnd: 1})
+
+	if len(got) != 2 {
+		t.Fatalf("got %d words %+v, want 2", len(got), got)
+	}
+	if got[0].Word != "да" || got[1].Word != "нет" {
+		t.Fatalf("got %q and %q", got[0].Word, got[1].Word)
+	}
+	// The word starts at its first letter, not at the space before it.
+	if !near(got[0].Start, 0.08) {
+		t.Errorf("first word starts at %.3f, want 0.08 — the separator frame leaked in", got[0].Start)
+	}
+	if !near(got[1].Start, 0.32) {
+		t.Errorf("second word starts at %.3f, want 0.32", got[1].Start)
+	}
+	if !near(got[0].End, 0.24) {
+		t.Errorf("first word ends at %.3f, want 0.24", got[0].End)
+	}
+}
+
+func TestAssembleCharUnitWithoutLeadingSeparator(t *testing.T) {
+	r := rec([]string{"д", "а"}, []float32{0.00, 0.08}, []float32{0.08, 0.08}, nil)
+
+	got := Assemble(r, Options{ModelingUnit: UnitChar, SegmentEnd: 1})
+	if len(got) != 1 || got[0].Word != "да" || !near(got[0].Start, 0) {
+		t.Fatalf("got %+v, want one word starting at 0", got)
+	}
+}

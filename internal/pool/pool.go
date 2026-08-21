@@ -368,6 +368,7 @@ func (p *Pool) List() []core.ModelInfo {
 		out = append(out, core.ModelInfo{
 			ID:           e.id,
 			Revision:     e.manifest.Revision,
+			Kind:         e.manifest.EffectiveKind(),
 			DisplayName:  e.manifest.DisplayName,
 			Family:       e.manifest.Family,
 			Languages:    e.manifest.Languages,

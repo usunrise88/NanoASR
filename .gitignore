@@ -1,5 +1,6 @@
 # Build output
 /dist/
+/nanoasr
 /nanoasr-*.tar.gz
 /web/dist/
 /web/node_modules/
@@ -12,6 +13,9 @@
 
 # Local state
 /.models/
+# Audio is fetched by scripts/fetch-testdata.sh: it has its own licensing and
+# every derived form is reproducible. The golden transcript IS committed.
+/testdata/audio/
 /.nanoasr.db*
 *.db-wal
 *.db-shm

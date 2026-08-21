@@ -70,7 +70,7 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("NANOASR_MAX_DURATION"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
-			c.Audio.MaxDuration = d
+			c.Audio.MaxDuration = Dur(d)
 		}
 	}
 }

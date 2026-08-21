@@ -52,13 +52,24 @@ func Assemble(rec asr.Recognition, opt Options) []core.Word {
 
 	type group struct{ first, last int }
 	var groups []group
+	breakPending := false
 
 	for i, tok := range rec.Tokens {
 		if isSpecial(tok) {
 			continue
 		}
-		if len(groups) == 0 || startsWord(tok, opt.ModelingUnit) {
+		// A separator ends the current word without joining the next one.
+		// Character-level vocabularies — GigaAM's Russian CTC, for instance —
+		// emit an explicit space token with a frame of its own; folding it
+		// into the following word would drag that word's start earlier by a
+		// frame and leave a leading space in its text.
+		if isSeparator(tok, opt.ModelingUnit) {
+			breakPending = true
+			continue
+		}
+		if len(groups) == 0 || breakPending || startsWord(tok, opt.ModelingUnit) {
 			groups = append(groups, group{first: i, last: i})
+			breakPending = false
 			continue
 		}
 		groups[len(groups)-1].last = i
@@ -97,10 +108,23 @@ func startsWord(tok, unit string) bool {
 	case UnitCJKCharBPE:
 		return strings.HasPrefix(tok, wordBoundary) || isCJK(tok)
 	case UnitChar:
-		return tok == " "
+		// Characters accumulate; separators do the splitting.
+		return false
 	default: // UnitBPE and anything unrecognised: SentencePiece semantics
 		return strings.HasPrefix(tok, wordBoundary)
 	}
+}
+
+// isSeparator reports a token that delimits words but is not part of one.
+//
+// SentencePiece encodes the boundary as a prefix on the following token, so
+// only character vocabularies have a standalone separator. Both an ASCII space
+// and a bare SentencePiece marker count as one.
+func isSeparator(tok, unit string) bool {
+	if unit != UnitChar {
+		return false
+	}
+	return strings.TrimSpace(strings.ReplaceAll(tok, wordBoundary, "")) == ""
 }
 
 // tokenEnd resolves the end of the token at index i, in segment-relative

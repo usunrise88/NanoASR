@@ -43,7 +43,10 @@ func (ctc) Validate(files map[string]string) error {
 }
 
 func (ctc) Capabilities() core.Capabilities {
-	return core.Capabilities{WordTimestamps: true, Confidence: true}
+	// No confidence: sherpa-onnx's CTC decoders return timestamps but leave
+	// ys_log_probs empty, verified against GigaAM v2. Claiming otherwise would
+	// advertise a field that is always absent.
+	return core.Capabilities{WordTimestamps: true}
 }
 
 func (c ctc) Configure(m registry.Manifest, dir string, cfg *sonnx.OfflineModelConfig) error {

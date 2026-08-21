@@ -111,6 +111,7 @@ func describe(man registry.Manifest, state core.ModelState) core.ModelInfo {
 	return core.ModelInfo{
 		ID:           man.ID,
 		Revision:     man.Revision,
+		Kind:         man.EffectiveKind(),
 		DisplayName:  man.DisplayName,
 		Family:       man.Family,
 		Languages:    man.Languages,

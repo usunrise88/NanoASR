@@ -46,9 +46,12 @@ type Capabilities struct {
 
 // ModelInfo is the operator-facing view of one model.
 type ModelInfo struct {
-	ID           string       `json:"id"`
-	Revision     string       `json:"revision"`
-	DisplayName  string       `json:"display_name"`
+	ID          string `json:"id"`
+	Revision    string `json:"revision"`
+	DisplayName string `json:"display_name"`
+	// Kind separates transcription models from the supporting ones — VAD,
+	// punctuation, diarization — that share the same registry.
+	Kind         string       `json:"kind"`
 	Family       string       `json:"family"`
 	Languages    []string     `json:"languages"`
 	License      string       `json:"license"`

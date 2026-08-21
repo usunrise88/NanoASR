@@ -106,6 +106,9 @@ func (*Adapter) models(deps adapter.Deps) http.HandlerFunc {
 		}
 		out := modelList{Object: "list", Data: make([]modelObject, 0, len(infos))}
 		for _, info := range infos {
+			if !isTranscriptionModel(info) {
+				continue
+			}
 			out.Data = append(out.Data, toModelObject(info))
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -121,7 +124,7 @@ func (*Adapter) model(deps adapter.Deps) http.HandlerFunc {
 			return
 		}
 		for _, info := range infos {
-			if info.ID == id {
+			if info.ID == id && isTranscriptionModel(info) {
 				writeJSON(w, http.StatusOK, toModelObject(info))
 				return
 			}
@@ -135,6 +138,12 @@ func listModels(ctx context.Context, deps adapter.Deps) ([]core.ModelInfo, error
 		return nil, core.Errorf(core.CodeInternal, "model service is not configured")
 	}
 	return deps.Models.List(ctx)
+}
+
+// isTranscriptionModel keeps supporting models — VAD, punctuation,
+// diarization — out of a list whose entries are meant to be passed as `model`.
+func isTranscriptionModel(info core.ModelInfo) bool {
+	return info.Kind == "" || info.Kind == "asr"
 }
 
 func toModelObject(info core.ModelInfo) modelObject {

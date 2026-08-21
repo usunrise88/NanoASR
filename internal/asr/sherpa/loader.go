@@ -40,6 +40,11 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 	}
 
 	return func(ctx context.Context, m registry.Manifest, dir string) (asr.Recognizer, error) {
+		if kind := m.EffectiveKind(); kind != registry.KindASR {
+			return nil, core.Errorf(core.CodeInvalidRequest,
+				"model %s is a %s model and cannot be used for transcription", m.ID, kind)
+		}
+
 		fam, err := LookupFamily(m.Family)
 		if err != nil {
 			return nil, err

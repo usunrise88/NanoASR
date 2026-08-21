@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
@@ -22,6 +23,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/config"
 	"github.com/usunrise88/nanoasr/internal/httpx"
+	"github.com/usunrise88/nanoasr/internal/registry"
 	"github.com/usunrise88/nanoasr/internal/ui"
 )
 
@@ -111,19 +113,33 @@ func serve(args []string) error {
 			"note", "resident models plus decoded PCM of every concurrent job")
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	srv, err := build(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer srv.Close()
+	srv.preload(ctx, cfg.ASR.DefaultModel, log)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","version":%q,"sherpa_onnx":%q,"onnxruntime":%q}`, version, so, ort)
 	})
-	// TODO(M3): readyz should report the queue and the pool, not just liveness.
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
+	// TODO(M3): readiness should also report queue depth once the queue exists.
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := srv.models.List(r.Context()); err != nil {
+			http.Error(w, `{"status":"degraded"}`, http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"ready"}`)
 	})
 
-	// TODO(M1..M3): build the real service (registry → pool → pipeline → queue)
-	// and pass it here instead of nil.
-	if err := adapter.MountAll(mux, cfg.API.Dialects, nil, adapter.Deps{
+	if err := adapter.MountAll(mux, cfg.API.Dialects, srv.service, adapter.Deps{
+		Models:         srv.models,
 		MaxUploadBytes: cfg.Server.MaxUploadBytes,
 	}); err != nil {
 		return err
@@ -152,18 +168,15 @@ func serve(args []string) error {
 			"note", "open mode is only permitted on a loopback address")
 	}
 
-	srv := &http.Server{
+	httpSrv := &http.Server{
 		Addr:              cfg.Server.Addr,
 		Handler:           httpx.Chain(mux, mw...),
-		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
+		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.Duration,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
@@ -175,18 +188,59 @@ func serve(args []string) error {
 		log.Info("shutting down", "grace", cfg.Server.ShutdownGrace)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownGrace)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownGrace.Duration)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	return httpSrv.Shutdown(shutdownCtx)
 }
 
-// TODO(M2): implement against the registry once the catalog is populated.
 func models(args []string) error {
-	fs := flag.NewFlagSet("models", flag.ExitOnError)
+	// The subcommand is consumed before flag parsing: flag stops at the first
+	// positional argument, so "models list -config x" would otherwise ignore
+	// the flag and silently read the default configuration.
+	sub := "list"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		sub, args = args[0], args[1:]
+	}
+
+	fs := flag.NewFlagSet("models "+sub, flag.ExitOnError)
+	cfgPath := fs.String("config", os.Getenv("NANOASR_CONFIG"), "path to nanoasr.yaml")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return fmt.Errorf("models: not implemented (milestone M2)")
+
+	if sub != "list" {
+		// Downloading needs the registry's fetch half, which is a later
+		// milestone; saying so beats a confusing failure.
+		return fmt.Errorf("models %s: not implemented; place models in the models directory", sub)
+	}
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	reg, err := registry.NewLocal(cfg.ASR.ModelsDir)
+	if err != nil {
+		return err
+	}
+
+	found, err := reg.Local(context.Background())
+	if err != nil {
+		return err
+	}
+	if len(found) == 0 {
+		fmt.Printf("no models in %s\n", cfg.ASR.ModelsDir)
+		return nil
+	}
+
+	fmt.Printf("%-24s %-14s %-12s %-10s %s\n", "ID", "FAMILY", "KIND", "LANGS", "REVISION")
+	for _, m := range found {
+		fmt.Printf("%-24s %-14s %-12s %-10s %s\n",
+			m.ID, m.Family, m.EffectiveKind(), strings.Join(m.Languages, ","), m.Revision)
+	}
+	for _, p := range reg.Problems() {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", p)
+	}
+	return nil
 }
 
 func newLogger(c config.Log) *slog.Logger {

@@ -66,6 +66,11 @@ func TestFamilyConfigureTargetsTheRightField(t *testing.T) {
 			if !fam.Capabilities().WordTimestamps {
 				t.Error("every v1 family must be able to produce word timestamps")
 			}
+			// CTC decoders in sherpa-onnx return timestamps but no log
+			// probabilities; only the transducer families may claim confidence.
+			if wantConfidence := c.family == "transducer"; fam.Capabilities().Confidence != wantConfidence {
+				t.Errorf("Confidence = %v, want %v", fam.Capabilities().Confidence, wantConfidence)
+			}
 		})
 	}
 }

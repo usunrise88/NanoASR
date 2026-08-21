@@ -129,6 +129,29 @@ func (rt *Router) Decode(ctx context.Context, r io.Reader, opts Options) (PCM, F
 			return pcm, f, err
 		}
 	}
+
+	// Two different failures wear the same status code, and the difference
+	// matters to whoever has to fix it: an unrecognised container is the
+	// caller's problem, a missing ffmpeg is the operator's.
+	if f == FormatUnknown {
+		return PCM{}, f, core.Errorf(core.CodeUnsupportedMediaType,
+			"the upload is not recognisable audio")
+	}
+	if !rt.handlesCompressed() {
+		return PCM{}, f, core.Errorf(core.CodeUnsupportedMediaType,
+			"format %q needs ffmpeg, which is not installed on the server", f)
+	}
 	return PCM{}, f, core.Errorf(core.CodeUnsupportedMediaType,
-		"no decoder for format %q (install ffmpeg to handle compressed formats)", f)
+		"no decoder for format %q", f)
+}
+
+// handlesCompressed reports whether any registered decoder covers formats the
+// native path does not.
+func (rt *Router) handlesCompressed() bool {
+	for _, d := range rt.decoders {
+		if d.CanDecode(FormatMP3) {
+			return true
+		}
+	}
+	return false
 }
