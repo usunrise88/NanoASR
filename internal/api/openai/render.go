@@ -1,0 +1,180 @@
+package openai
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/usunrise88/nanoasr/internal/core"
+)
+
+// Response formats accepted by /v1/audio/transcriptions.
+const (
+	formatJSON        = "json"
+	formatVerboseJSON = "verbose_json"
+	formatText        = "text"
+	formatSRT         = "srt"
+	formatVTT         = "vtt"
+)
+
+func validFormat(f string) bool {
+	switch f {
+	case formatJSON, formatVerboseJSON, formatText, formatSRT, formatVTT:
+		return true
+	}
+	return false
+}
+
+// simpleResponse is what response_format=json returns: OpenAI sends the text
+// and nothing else, and clients rely on that.
+type simpleResponse struct {
+	Text string `json:"text"`
+}
+
+// verboseResponse follows OpenAI's verbose_json, plus fields of our own.
+//
+// The extra fields are additive — timestamp_source, silence, warnings and
+// stats — because an OpenAI client ignores keys it does not know, and dropping
+// them would mean a caller could not tell model-provided timings from VAD
+// fallbacks.
+type verboseResponse struct {
+	Task     string  `json:"task"`
+	Language string  `json:"language"`
+	Duration float64 `json:"duration"`
+	Text     string  `json:"text"`
+
+	Segments []verboseSegment `json:"segments,omitempty"`
+	Words    []verboseWord    `json:"words,omitempty"`
+
+	TimestampSource core.TimestampSource `json:"timestamp_source"`
+	Silence         []core.Silence       `json:"silence,omitempty"`
+	Warnings        []core.Warning       `json:"warnings,omitempty"`
+	Stats           *core.Stats          `json:"stats,omitempty"`
+}
+
+type verboseSegment struct {
+	ID      int     `json:"id"`
+	Seek    int     `json:"seek"`
+	Start   float64 `json:"start"`
+	End     float64 `json:"end"`
+	Text    string  `json:"text"`
+	Speaker *string `json:"speaker,omitempty"`
+	// AvgLogprob is OpenAI's field name. Ours is a geometric mean of token
+	// probabilities converted back to a log, and it is not calibrated.
+	AvgLogprob float64 `json:"avg_logprob"`
+}
+
+type verboseWord struct {
+	Word       string  `json:"word"`
+	Start      float64 `json:"start"`
+	End        float64 `json:"end"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Speaker    *string `json:"speaker,omitempty"`
+}
+
+// render writes the result in the requested format.
+func render(w http.ResponseWriter, res *core.Result, format string, wantWords bool) {
+	switch format {
+	case formatText:
+		writeText(w, "text/plain; charset=utf-8", res.Text+"\n")
+	case formatSRT:
+		writeText(w, "application/x-subrip; charset=utf-8", renderSRT(res))
+	case formatVTT:
+		writeText(w, "text/vtt; charset=utf-8", renderVTT(res))
+	case formatVerboseJSON:
+		writeJSON(w, http.StatusOK, buildVerbose(res, wantWords))
+	default:
+		writeJSON(w, http.StatusOK, simpleResponse{Text: res.Text})
+	}
+}
+
+func buildVerbose(res *core.Result, wantWords bool) verboseResponse {
+	out := verboseResponse{
+		Task:            "transcribe",
+		Language:        res.Language,
+		Duration:        res.Duration,
+		Text:            res.Text,
+		TimestampSource: res.TimestampSource,
+		Silence:         res.Silence,
+		Warnings:        res.Warnings,
+		Stats:           &res.Stats,
+	}
+
+	for _, s := range res.Segments {
+		out.Segments = append(out.Segments, verboseSegment{
+			ID:         s.ID,
+			Seek:       int(s.Start * 100), // OpenAI reports seek in centiseconds
+			Start:      s.Start,
+			End:        s.End,
+			Text:       s.Text,
+			Speaker:    s.Speaker,
+			AvgLogprob: logprob(s.AvgConfidence),
+		})
+		if !wantWords {
+			continue
+		}
+		for _, word := range s.Words {
+			out.Words = append(out.Words, verboseWord{
+				Word:       word.Word,
+				Start:      word.Start,
+				End:        word.End,
+				Confidence: word.Confidence,
+				Speaker:    s.Speaker,
+			})
+		}
+	}
+	return out
+}
+
+// logprob converts our geometric-mean confidence back to the log domain so the
+// field means roughly what an OpenAI client expects to find there.
+func logprob(confidence float64) float64 {
+	if confidence <= 0 {
+		return 0
+	}
+	return ln(confidence)
+}
+
+func renderSRT(res *core.Result) string {
+	var b strings.Builder
+	for i, s := range res.Segments {
+		fmt.Fprintf(&b, "%d\n%s --> %s\n%s\n\n",
+			i+1, timecode(s.Start, ','), timecode(s.End, ','), s.Text)
+	}
+	return b.String()
+}
+
+func renderVTT(res *core.Result) string {
+	var b strings.Builder
+	b.WriteString("WEBVTT\n\n")
+	for _, s := range res.Segments {
+		fmt.Fprintf(&b, "%s --> %s\n%s\n\n",
+			timecode(s.Start, '.'), timecode(s.End, '.'), s.Text)
+	}
+	return b.String()
+}
+
+// timecode formats seconds as HH:MM:SS,mmm or HH:MM:SS.mmm — SRT and WebVTT
+// differ only in that separator.
+func timecode(seconds float64, sep rune) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	total := int(seconds)
+	ms := int((seconds - float64(total)) * 1000)
+	return fmt.Sprintf("%02d:%02d:%02d%c%03d", total/3600, (total%3600)/60, total%60, sep, ms)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeText(w http.ResponseWriter, contentType, body string) {
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, body)
+}

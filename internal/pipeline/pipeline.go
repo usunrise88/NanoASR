@@ -122,9 +122,10 @@ func (p *Pipeline) Transcribe(ctx context.Context, req core.Request) (*core.Resu
 	result := p.assemble(id, lease, req, pcm, segments, recognitions)
 	result.Warnings = append(result.Warnings, p.unsupportedOptions(req, lease)...)
 
-	if req.Strict && len(result.Warnings) > 0 {
-		return nil, core.Errorf(core.CodeCapabilityUnavailable,
-			"strict mode: %s", result.Warnings[0].Message)
+	if req.Strict {
+		if w, degraded := firstCapabilityWarning(result.Warnings); degraded {
+			return nil, core.Errorf(core.CodeCapabilityUnavailable, "strict mode: %s", w.Message)
+		}
 	}
 
 	result.Stats.ProcessingMS = time.Since(started).Milliseconds()
@@ -342,6 +343,18 @@ func (p *Pipeline) unsupportedOptions(req core.Request, lease *pool.Lease) []cor
 		})
 	}
 	return out
+}
+
+// firstCapabilityWarning finds a warning that means the server could not do
+// what was asked. An empty recording is a fact about the audio, not a
+// degradation, so strict mode does not reject it.
+func firstCapabilityWarning(ws []core.Warning) (core.Warning, bool) {
+	for _, w := range ws {
+		if strings.HasSuffix(w.Code, "_unavailable") || w.Code == "language_mismatch" {
+			return w, true
+		}
+	}
+	return core.Warning{}, false
 }
 
 func resultLanguage(req core.Request, lease *pool.Lease) string {
