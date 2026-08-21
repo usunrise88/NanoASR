@@ -19,8 +19,6 @@ import (
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
 	_ "github.com/usunrise88/nanoasr/internal/api/native"
 	_ "github.com/usunrise88/nanoasr/internal/api/openai"
-	"github.com/usunrise88/nanoasr/internal/asr"
-	_ "github.com/usunrise88/nanoasr/internal/asr/families"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/config"
 	"github.com/usunrise88/nanoasr/internal/httpx"
@@ -71,7 +69,7 @@ func printVersion() {
 	fmt.Printf("nanoasr     %s\n", version)
 	fmt.Printf("sherpa-onnx %s\n", so)
 	fmt.Printf("onnxruntime %s\n", ort)
-	fmt.Printf("families    %v\n", asr.Families())
+	fmt.Printf("families    %v\n", sherpa.Families())
 	fmt.Printf("dialects    %v\n", adapter.Available())
 	fmt.Printf("ui          %v\n", ui.Enabled)
 }

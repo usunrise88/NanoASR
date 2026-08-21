@@ -359,6 +359,12 @@ func (p *Pool) List() []core.ModelInfo {
 	defer p.mu.Unlock()
 	out := make([]core.ModelInfo, 0, len(p.current))
 	for _, e := range p.current {
+		// Capabilities come from the loaded recogniser rather than the
+		// manifest, so what is reported is what the model actually does.
+		var caps core.Capabilities
+		if e.rec != nil {
+			caps = e.rec.Capabilities()
+		}
 		out = append(out, core.ModelInfo{
 			ID:           e.id,
 			Revision:     e.manifest.Revision,
@@ -371,7 +377,7 @@ func (p *Pool) List() []core.ModelInfo {
 			RefCount:     e.refs,
 			RSSMB:        e.rssMB,
 			LastUsedUnix: e.lastUsed.Unix(),
-			Capabilities: e.manifest.Capabilities,
+			Capabilities: caps,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
