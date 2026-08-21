@@ -1,0 +1,120 @@
+package config
+
+import (
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Default returns a configuration that starts a working server on any machine.
+// Sizing knobs left at zero are derived from the host in Autotune.
+func Default() Config {
+	return Config{
+		Server: Server{
+			Addr:              ":8080",
+			ReadHeaderTimeout: 10 * time.Second,
+			MaxUploadBytes:    100 << 20,
+			ShutdownGrace:     30 * time.Second,
+		},
+		Auth: Auth{Mode: "apikey"},
+		API:  API{Dialects: []string{"openai", "native"}},
+		UI:   UI{Enabled: true, Path: "/ui", RequireAuth: true},
+		Audio: Audio{
+			FFmpegPath:       "ffmpeg",
+			FFmpegTimeout:    120 * time.Second,
+			MaxDuration:      30 * time.Minute,
+			TargetSampleRate: 16000,
+			ChannelMode:      "downmix",
+		},
+		VAD: VAD{
+			Enabled:      true,
+			Model:        "silero-vad-v5",
+			Threshold:    0.5,
+			MinSilenceMS: 300,
+			MinSpeechMS:  250,
+			MaxSpeechSec: 20,
+		},
+		ASR: ASR{
+			ModelsDir:      "/var/lib/nanoasr/models",
+			IdleTTL:        15 * time.Minute,
+			AcquireTimeout: 30 * time.Second,
+			Batch:          Batch{MaxSize: 8, MaxSeconds: 60},
+		},
+		Registry: Registry{AllowDownload: true, DownloadConcurrency: 2},
+		Jobs: Jobs{
+			QueueSize:         100,
+			MaxProcessingTime: 30 * time.Minute,
+			HistoryTTL:        30 * 24 * time.Hour,
+		},
+		PostProc:    PostProc{ITN: ITN{Locale: "ru"}},
+		Diarization: Diarization{Clustering: Clustering{Threshold: 0.5}},
+		Storage:     Storage{DBPath: "/var/lib/nanoasr/nanoasr.db"},
+		Log:         Log{Level: "info", Format: "json"},
+	}
+}
+
+// Autotune fills sizing knobs that are still zero, using CPU count and total
+// RAM. Every formula here is documented in SPEC §12.3; keep them in sync.
+func (c *Config) Autotune() {
+	cpus := runtime.GOMAXPROCS(0)
+	ramMB := totalRAMMB()
+
+	if c.ASR.InferenceSlots <= 0 {
+		c.ASR.InferenceSlots = cpus
+	}
+	if c.ASR.NumThreads <= 0 {
+		c.ASR.NumThreads = clamp(cpus/2, 1, 8)
+	}
+	if c.Jobs.MaxConcurrent <= 0 {
+		c.Jobs.MaxConcurrent = clamp(cpus/c.ASR.NumThreads, 1, 8)
+	}
+	if c.ASR.MaxModelRSSMB <= 0 {
+		c.ASR.MaxModelRSSMB = clamp(ramMB/2, 1024, 16384)
+	}
+	if c.ASR.MaxResidentModels <= 0 {
+		c.ASR.MaxResidentModels = clamp(c.ASR.MaxModelRSSMB/1500, 1, 6)
+	}
+}
+
+// PeakMemoryEstimateMB is what the process is expected to need at full load:
+// resident models plus the decoded PCM of every concurrent job. 30 minutes of
+// mono float32 at 16 kHz is ~115 MB, which dominates on long files.
+func (c *Config) PeakMemoryEstimateMB() int {
+	pcmPerJob := int(c.Audio.MaxDuration.Seconds()) * c.Audio.TargetSampleRate * 4 / (1 << 20)
+	return c.ASR.MaxModelRSSMB + c.Jobs.MaxConcurrent*pcmPerJob
+}
+
+func totalRAMMB() int {
+	// MemTotal is the only field we need and it is always the first line.
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 4096
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			break
+		}
+		kb, err := strconv.Atoi(f[1])
+		if err != nil {
+			break
+		}
+		return kb / 1024
+	}
+	return 4096
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}

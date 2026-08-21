@@ -1,0 +1,23 @@
+services:
+  nanoasr:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: nanoasr:dev
+    ports:
+      - "8080:8080"
+    volumes:
+      # Models are large and are downloaded on demand; keep them out of the
+      # image and off the container's writable layer.
+      - nanoasr-data:/var/lib/nanoasr
+    environment:
+      NANOASR_ADDR: ":8080"
+      NANOASR_AUTH_KEYS: "${NANOASR_AUTH_KEYS:?set an API key, or switch auth.mode to open on loopback}"
+      NANOASR_LOG_FORMAT: json
+    restart: unless-stopped
+    # The C++ inference runs in-process, so a crash takes the server with it
+    # (SPEC §11). Restarts are the mitigation until workers are isolated.
+    stop_grace_period: 40s
+
+volumes:
+  nanoasr-data:

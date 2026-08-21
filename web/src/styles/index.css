@@ -1,0 +1,13 @@
+@import 'tailwindcss';
+@import './tokens.css';
+@import './motion.css';
+
+@theme inline {
+  --color-canvas: var(--bg-canvas);
+  --color-surface: var(--bg-surface);
+  --color-raised: var(--bg-raised);
+  --color-border: var(--border-default);
+  --color-fg: var(--text-primary);
+  --color-fg-muted: var(--text-secondary);
+  --color-accent: var(--accent-solid);
+}

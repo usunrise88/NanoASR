@@ -1,0 +1,12 @@
+# Built-in model catalog.
+#
+# Every entry needs a sha256: the downloader refuses to unpack anything it
+# cannot verify. Sizes and checksums are filled in during M2 from the actual
+# release artefacts — placeholders here would be worse than an empty catalog,
+# because they would fail verification at the least convenient moment.
+#
+# v1 families (SPEC decision #8): transducer, zipformer_ctc, nemo_ctc,
+# wenet_ctc, telespeech. Multilingual coverage comes from having many
+# monolingual models here rather than from one multilingual model (SPEC §3.1).
+version: 1
+models: []

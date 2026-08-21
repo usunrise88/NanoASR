@@ -1,0 +1,99 @@
+# NanoASR configuration.
+#
+# Every value here is a default: the server starts with no config file at all.
+# Precedence is flags > NANOASR_* env > this file > computed defaults.
+# Sizing knobs left at 0 are derived from CPU count and RAM (SPEC §12.3).
+
+server:
+  addr: "127.0.0.1:8080"
+  read_header_timeout: 10s
+  max_upload_bytes: 104857600   # 100 MB
+  shutdown_grace: 30s
+
+auth:
+  # "open" is permitted only when addr binds a loopback address.
+  mode: open
+  keys: []                      # or NANOASR_AUTH_KEYS=key1,key2
+
+api:
+  dialects: [openai, native]
+  cors:
+    enabled: false
+    origins: []
+
+ui:
+  enabled: true
+  path: /ui
+  require_auth: false
+
+audio:
+  # Leave empty to run without ffmpeg: WAV/PCM still works, everything else
+  # is answered with 415 instead of failing at startup.
+  ffmpeg_path: ffmpeg
+  ffmpeg_timeout: 120s
+  max_duration: 30m
+  target_sample_rate: 16000
+  channel_mode: downmix         # downmix | first | split
+  denoise: false
+
+vad:
+  enabled: true
+  model: silero-vad-v5
+  threshold: 0.5
+  min_silence_ms: 300
+  min_speech_ms: 250
+  # Without an upper bound a long monologue becomes one enormous segment.
+  max_speech_sec: 20
+
+asr:
+  models_dir: ./.models
+  default_model: ""
+  max_resident_models: 0        # 0 → auto
+  max_model_rss_mb: 0           # 0 → auto
+  inference_slots: 0            # 0 → GOMAXPROCS
+  num_threads: 0                # 0 → auto, per model instance
+  idle_ttl: 15m
+  acquire_timeout: 30s
+  batch:
+    max_size: 8
+    max_seconds: 60
+
+registry:
+  allow_download: true
+  catalog_url: ""               # empty → built-in catalog
+  mirrors: []
+  download_concurrency: 2
+  strict_license: false         # true → refuse non-commercial weights
+
+jobs:
+  queue_size: 100
+  max_concurrent: 0             # 0 → auto
+  max_processing_time: 30m
+  history_ttl: 720h             # 30 days of metadata and transcripts
+
+postproc:
+  punctuation:
+    enabled: false
+    model: ""
+  itn:
+    enabled: false
+    locale: ru
+
+diarization:
+  enabled: false
+  segmentation_model: ""
+  embedding_model: ""
+  clustering:
+    num_clusters: 0             # 0 → cluster by threshold
+    threshold: 0.5
+
+storage:
+  db_path: ./.nanoasr.db
+  temp_dir: ""
+  # 0 means uploaded audio never outlives the active job. The UI player uses
+  # the local file in the browser, so nothing here is needed for playback.
+  keep_audio_ttl: 0
+
+log:
+  level: debug
+  format: text

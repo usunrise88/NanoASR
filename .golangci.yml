@@ -1,0 +1,33 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - errorlint
+    - misspell
+    - nilerr
+    - noctx        # every outbound call carries a context: model downloads and
+                   # ffmpeg must be cancellable with the request
+    - rowserrcheck
+    - unconvert
+    - wastedassign
+
+  settings:
+    errcheck:
+      # Close() on a read-only handle in a defer is noise, not a finding.
+      exclude-functions:
+        - (io.Closer).Close
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck, bodyclose]
+
+formatters:
+  enable:
+    - gofmt

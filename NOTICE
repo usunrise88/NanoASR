@@ -1,0 +1,14 @@
+NanoASR bundles and links against third-party components:
+
+  sherpa-onnx            Apache-2.0   https://github.com/k2-fsa/sherpa-onnx
+  onnxruntime            MIT          https://github.com/microsoft/onnxruntime
+  sherpa-onnx-go         Apache-2.0   https://github.com/k2-fsa/sherpa-onnx-go
+
+The Docker image additionally installs ffmpeg from the distribution, which is
+licensed under LGPL-2.1+ or GPL-2+ depending on the build. NanoASR invokes it
+as a separate process and does not link against it.
+
+Model weights are NOT part of this repository and carry their own licences,
+some of which are non-commercial. Each catalog entry records its licence, the
+UI displays it, and registry.strict_license refuses to load weights that are
+not licensed for commercial use.

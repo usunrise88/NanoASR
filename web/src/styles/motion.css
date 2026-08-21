@@ -1,0 +1,61 @@
+/*
+ * Motion lives here and nowhere else (enforced by ESLint).
+ *
+ * Animation is off by default: --motion-duration is 0ms, so anything that
+ * forgets to opt in simply does not move. Surfaces that genuinely benefit from
+ * motion — dialog, sheet, popover, toast — set data-motion and get a short,
+ * quiet transition. prefers-reduced-motion zeroes all of it again.
+ */
+:root {
+  --motion-duration: 0ms;
+  --motion-duration-surface: 140ms;
+  --motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-motion='enter'] {
+  animation: surface-enter var(--motion-duration-surface) var(--motion-ease);
+}
+
+[data-motion='exit'] {
+  animation: surface-exit var(--motion-duration-surface) var(--motion-ease);
+}
+
+@keyframes surface-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@keyframes surface-exit {
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+/* Skeletons breathe rather than blink. */
+[data-skeleton] {
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-surface: 0ms;
+  }
+
+  [data-motion],
+  [data-skeleton] {
+    animation: none !important;
+  }
+}

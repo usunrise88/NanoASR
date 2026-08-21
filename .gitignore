@@ -1,0 +1,23 @@
+# Build output
+/dist/
+/nanoasr-*.tar.gz
+/web/dist/
+/web/node_modules/
+/web/node_modules/.tmp/
+
+# The SPA is staged here by `make web` and embedded at compile time. The
+# placeholder page is committed so `go build` works in a fresh checkout.
+/internal/ui/dist/*
+!/internal/ui/dist/index.html
+
+# Local state
+/.models/
+/.nanoasr.db*
+*.db-wal
+*.db-shm
+/configs/nanoasr.local.yaml
+
+# Tooling
+*.test
+*.out
+.DS_Store

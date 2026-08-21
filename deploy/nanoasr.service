@@ -1,0 +1,31 @@
+[Unit]
+Description=NanoASR speech recognition server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=nanoasr
+Group=nanoasr
+WorkingDirectory=/opt/nanoasr
+# The tarball is relocatable: the binary carries RUNPATH $ORIGIN/lib, so the
+# shared libraries next to it are found without LD_LIBRARY_PATH.
+ExecStart=/opt/nanoasr/nanoasr serve -config /opt/nanoasr/nanoasr.yaml
+Restart=on-failure
+RestartSec=5s
+# Long files take minutes; give in-flight work a chance to finish.
+TimeoutStopSec=45s
+KillSignal=SIGTERM
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nanoasr
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,90 @@
+/*
+ * Design tokens.
+ *
+ * Radix Colors Slate is the neutral scale; one accent (indigo) carries every
+ * interactive affordance. Components never reference a Radix step directly —
+ * they use the semantic tokens below, so re-theming is one file.
+ *
+ * Radix ships `:root, .light, .light-theme` and `.dark, .dark-theme`, so the
+ * theme switch toggles the `dark` class on <html>.
+ */
+@import '@radix-ui/colors/slate.css';
+@import '@radix-ui/colors/slate-dark.css';
+@import '@radix-ui/colors/slate-alpha.css';
+@import '@radix-ui/colors/slate-dark-alpha.css';
+@import '@radix-ui/colors/indigo.css';
+@import '@radix-ui/colors/indigo-dark.css';
+@import '@radix-ui/colors/red.css';
+@import '@radix-ui/colors/red-dark.css';
+@import '@radix-ui/colors/amber.css';
+@import '@radix-ui/colors/amber-dark.css';
+@import '@radix-ui/colors/green.css';
+@import '@radix-ui/colors/green-dark.css';
+
+:root {
+  /* Surfaces, from page background upward. */
+  --bg-canvas: var(--slate-1);
+  --bg-surface: var(--slate-2);
+  --bg-raised: var(--slate-3);
+  --bg-hover: var(--slate-4);
+  --bg-active: var(--slate-5);
+
+  --border-subtle: var(--slate-6);
+  --border-default: var(--slate-7);
+  --border-strong: var(--slate-8);
+
+  --text-primary: var(--slate-12);
+  --text-secondary: var(--slate-11);
+  --text-muted: var(--slate-10);
+
+  --accent-bg: var(--indigo-3);
+  --accent-border: var(--indigo-7);
+  --accent-solid: var(--indigo-9);
+  --accent-solid-hover: var(--indigo-10);
+  --accent-text: var(--indigo-11);
+
+  --danger-solid: var(--red-9);
+  --danger-text: var(--red-11);
+  --warning-text: var(--amber-11);
+  --success-text: var(--green-11);
+
+  /* A soft, non-black scrim: a black backdrop reads as an error state. */
+  --backdrop: var(--slate-a8);
+
+  /* Spacing scale. The layout primitives accept these steps and nothing else. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}

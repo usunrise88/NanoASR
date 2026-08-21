@@ -1,0 +1,22 @@
+{
+  "app": { "name": "NanoASR" },
+  "nav": { "new": "New run", "models": "Models", "jobs": "Jobs" },
+  "home": {
+    "title": "Transcribe",
+    "description": "Upload audio, pick a model, get a transcript with word-level timings.",
+    "drop": "Drop a file here, or click to choose",
+    "run": "Transcribe"
+  },
+  "models": {
+    "title": "Models",
+    "description": "Registry, residency and hot swap.",
+    "load": "Load",
+    "unload": "Unload",
+    "pin": "Pin"
+  },
+  "jobs": { "title": "Jobs", "description": "Queue and run history." },
+  "result": { "title": "Result", "description": "Player, transcript and stats." },
+  "notifications": { "title": "Notifications", "empty": "Nothing yet", "clear": "Clear" },
+  "theme": { "light": "Light", "dark": "Dark", "system": "System" },
+  "common": { "loading": "Loading", "retry": "Retry", "cancel": "Cancel" }
+}
