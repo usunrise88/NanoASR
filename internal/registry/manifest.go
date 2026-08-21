@@ -10,6 +10,15 @@ import (
 	"github.com/usunrise88/nanoasr/internal/core"
 )
 
+// Model roles. An empty kind means ASR, so existing manifests keep working.
+const (
+	KindASR          = "asr"
+	KindVAD          = "vad"
+	KindPunctuation  = "punctuation"
+	KindSegmentation = "segmentation"
+	KindEmbedding    = "embedding"
+)
+
 // idPattern also guards path construction: a model id becomes a directory name,
 // so anything outside this set is rejected before it can traverse anywhere.
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
@@ -17,8 +26,12 @@ var idPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
 // Manifest describes one model. It lives next to the weights as model.yaml and
 // is also what the embedded catalog serves.
 type Manifest struct {
-	ID          string   `yaml:"id" json:"id"`
-	Revision    string   `yaml:"revision" json:"revision"`
+	ID       string `yaml:"id" json:"id"`
+	Revision string `yaml:"revision" json:"revision"`
+	// Kind separates the model roles the server hosts. Everything except ASR
+	// is a supporting model — VAD, punctuation, diarization — and they have no
+	// acoustic front end of their own to describe.
+	Kind        string   `yaml:"kind" json:"kind"`
 	Family      string   `yaml:"family" json:"family"`
 	DisplayName string   `yaml:"display_name" json:"display_name"`
 	Languages   []string `yaml:"languages" json:"languages"`
@@ -87,13 +100,19 @@ func (m Manifest) Validate() error {
 	if m.Family == "" {
 		return core.Errorf(core.CodeInvalidRequest, "model %s: family is required", m.ID)
 	}
+	switch m.EffectiveKind() {
+	case KindASR, KindVAD, KindPunctuation, KindSegmentation, KindEmbedding:
+	default:
+		return core.Errorf(core.CodeInvalidRequest,
+			"model %s: unknown kind %q", m.ID, m.Kind)
+	}
 	if m.SampleRate == 0 {
 		return core.Errorf(core.CodeInvalidRequest, "model %s: sample_rate is required", m.ID)
 	}
 	if len(m.Files) == 0 {
 		return core.Errorf(core.CodeInvalidRequest, "model %s: files is empty", m.ID)
 	}
-	if m.Features.Dim <= 0 {
+	if m.EffectiveKind() == KindASR && m.Features.Dim <= 0 {
 		return core.Errorf(core.CodeInvalidRequest,
 			"model %s: features.dim must be stated (80 for most models, 64 for GigaAM); "+
 				"a wrong value produces wrong transcripts rather than an error", m.ID)
@@ -111,6 +130,14 @@ func (m Manifest) Validate() error {
 			"model %s: source.sha256 is required when source.url is set", m.ID)
 	}
 	return nil
+}
+
+// EffectiveKind defaults an unset kind to ASR.
+func (m Manifest) EffectiveKind() string {
+	if m.Kind == "" {
+		return KindASR
+	}
+	return m.Kind
 }
 
 // FeatureSampleRate is the rate the front end expects, defaulting to the

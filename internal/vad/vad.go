@@ -19,21 +19,59 @@ type Segment struct {
 	Samples     []float32
 }
 
-// Config mirrors the knobs of SileroVadModelConfig that matter to us.
+// EndSample is one past the last sample of the segment.
+func (s Segment) EndSample() int { return s.StartSample + len(s.Samples) }
+
+// Config describes the detector.
 //
 // MaxSpeechSec matters more than it looks: without an upper bound a long
 // monologue becomes a single enormous segment, which spikes memory and ruins
 // latency on exactly the files this server exists for.
 type Config struct {
-	Model        string
+	// Family selects the detector: silero_vad or ten_vad.
+	Family    string
+	ModelPath string
+
 	Threshold    float32
 	MinSilenceMS int
 	MinSpeechMS  int
 	MaxSpeechSec float32
 	SampleRate   int
+	NumThreads   int
+	// WindowSize is the detector's frame size in samples. 512 is what Silero
+	// v5 expects at 16 kHz; a mismatch silently degrades detection.
+	WindowSize int
 }
 
-// Segmenter finds speech. Implementations wrap sherpa_onnx.VoiceActivityDetector.
+func (c Config) withDefaults() Config {
+	if c.Family == "" {
+		c.Family = "silero_vad"
+	}
+	if c.SampleRate <= 0 {
+		c.SampleRate = 16000
+	}
+	if c.Threshold <= 0 {
+		c.Threshold = 0.5
+	}
+	if c.MinSilenceMS <= 0 {
+		c.MinSilenceMS = 300
+	}
+	if c.MinSpeechMS <= 0 {
+		c.MinSpeechMS = 250
+	}
+	if c.MaxSpeechSec <= 0 {
+		c.MaxSpeechSec = 20
+	}
+	if c.NumThreads <= 0 {
+		c.NumThreads = 1
+	}
+	if c.WindowSize <= 0 {
+		c.WindowSize = 512
+	}
+	return c
+}
+
+// Segmenter finds speech.
 type Segmenter interface {
 	Segment(ctx context.Context, pcm audio.PCM) ([]Segment, error)
 	Close() error
@@ -55,7 +93,7 @@ func Silences(segs []Segment, totalSamples, sampleRate, minSilenceMS int) []core
 		if gap := s.StartSample - cursor; gap >= minSamples {
 			out = append(out, core.Silence{Start: toSec(cursor), End: toSec(s.StartSample)})
 		}
-		if end := s.StartSample + len(s.Samples); end > cursor {
+		if end := s.EndSample(); end > cursor {
 			cursor = end
 		}
 	}
@@ -84,3 +122,14 @@ func SpeechRatio(segs []Segment, totalSamples int) float64 {
 func Whole(pcm audio.PCM) []Segment {
 	return []Segment{{StartSample: 0, Samples: pcm.Samples}}
 }
+
+// Disabled is a Segmenter that treats the whole recording as one utterance.
+type Disabled struct{}
+
+func (Disabled) Segment(_ context.Context, pcm audio.PCM) ([]Segment, error) {
+	return Whole(pcm), nil
+}
+
+func (Disabled) Close() error { return nil }
+
+var _ Segmenter = Disabled{}
