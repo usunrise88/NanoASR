@@ -33,11 +33,11 @@ type Manifest struct {
 	// acoustic front end of their own to describe.
 	Kind        string   `yaml:"kind" json:"kind"`
 	Family      string   `yaml:"family" json:"family"`
-	DisplayName string   `yaml:"display_name" json:"display_name"`
-	Languages   []string `yaml:"languages" json:"languages"`
+	DisplayName string   `yaml:"display_name,omitempty" json:"display_name"`
+	Languages   []string `yaml:"languages,omitempty" json:"languages"`
 	SampleRate  int      `yaml:"sample_rate" json:"sample_rate"`
 	// ModelingUnit drives word assembly: bpe | cjkchar | char | cjkchar+bpe.
-	ModelingUnit string `yaml:"modeling_unit" json:"modeling_unit"`
+	ModelingUnit string `yaml:"modeling_unit,omitempty" json:"modeling_unit"`
 
 	Files    map[string]string `yaml:"files" json:"files"`
 	Features Features          `yaml:"features" json:"features"`
@@ -45,42 +45,47 @@ type Manifest struct {
 	// Capabilities are deliberately absent: what a model can produce follows
 	// from its family, and a manifest that claimed otherwise would be a lie
 	// the pipeline discovers at runtime regardless.
-	Runtime   Runtime   `yaml:"runtime" json:"runtime"`
-	Resources Resources `yaml:"resources" json:"resources"`
-	Source    Source    `yaml:"source" json:"source"`
-	License   string    `yaml:"license" json:"license"`
+	Runtime   Runtime   `yaml:"runtime,omitempty" json:"runtime"`
+	Resources Resources `yaml:"resources,omitempty" json:"resources"`
+	Source    Source    `yaml:"source,omitempty" json:"source"`
+	License   string    `yaml:"license,omitempty" json:"license"`
 	Notes     string    `yaml:"notes,omitempty" json:"notes,omitempty"`
 }
 
 // Features describes the acoustic front end the model was trained with.
 //
-// It has to be stated, not guessed: sherpa-onnx defaults to 80 mel bins, GigaAM
-// uses 64, and a mismatch does not fail — it produces confident nonsense, which
-// is the one failure mode you cannot diagnose from the outside.
+// How much this matters depends on the family, and the honest answer was
+// measured rather than assumed: NeMo models carry their own front end and
+// ignore this value entirely — GigaAM v2 CTC transcribes correctly even when
+// told 13 mel bins. Families whose extractor sherpa-onnx configures externally
+// do use it, and there a mismatch does not fail, it degrades the transcript.
+//
+// Stating it is therefore required but cheap. `nanoasr models inspect --probe`
+// reports which case a given model falls into.
 type Features struct {
 	SampleRate int `yaml:"sample_rate" json:"sample_rate"`
 	Dim        int `yaml:"dim" json:"dim"`
 }
 
 type Runtime struct {
-	NumThreads int `yaml:"num_threads" json:"num_threads"`
+	NumThreads int `yaml:"num_threads,omitempty" json:"num_threads"`
 	// ModelType is passed to sherpa-onnx to skip model-type sniffing at load.
-	ModelType      string  `yaml:"model_type" json:"model_type"`
-	DecodingMethod string  `yaml:"decoding_method" json:"decoding_method"`
-	MaxActivePaths int     `yaml:"max_active_paths" json:"max_active_paths"`
-	BlankPenalty   float32 `yaml:"blank_penalty" json:"blank_penalty"`
+	ModelType      string  `yaml:"model_type,omitempty" json:"model_type"`
+	DecodingMethod string  `yaml:"decoding_method,omitempty" json:"decoding_method"`
+	MaxActivePaths int     `yaml:"max_active_paths,omitempty" json:"max_active_paths"`
+	BlankPenalty   float32 `yaml:"blank_penalty,omitempty" json:"blank_penalty"`
 }
 
 type Resources struct {
 	// ApproxRSSMB lets the pool decide whether a model fits before paying to
 	// download and load it.
-	ApproxRSSMB int `yaml:"approx_rss_mb" json:"approx_rss_mb"`
+	ApproxRSSMB int `yaml:"approx_rss_mb,omitempty" json:"approx_rss_mb"`
 }
 
 type Source struct {
-	URL       string `yaml:"url" json:"url"`
-	SHA256    string `yaml:"sha256" json:"sha256"`
-	SizeBytes int64  `yaml:"size_bytes" json:"size_bytes"`
+	URL       string `yaml:"url,omitempty" json:"url"`
+	SHA256    string `yaml:"sha256,omitempty" json:"sha256"`
+	SizeBytes int64  `yaml:"size_bytes,omitempty" json:"size_bytes"`
 }
 
 // Key is the cache identity of a specific revision of a model.
@@ -115,7 +120,7 @@ func (m Manifest) Validate() error {
 	if m.EffectiveKind() == KindASR && m.Features.Dim <= 0 {
 		return core.Errorf(core.CodeInvalidRequest,
 			"model %s: features.dim must be stated (80 for most models, 64 for GigaAM); "+
-				"a wrong value produces wrong transcripts rather than an error", m.ID)
+				"use `nanoasr models inspect --probe` to find the right value", m.ID)
 	}
 	for role, name := range m.Files {
 		if _, err := m.FilePath("/", role); err != nil {

@@ -59,7 +59,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `nanoasr — offline speech recognition server
 
   nanoasr serve   [-config FILE] [-addr ADDR]
-  nanoasr models  list | pull ID
+  nanoasr models  list | inspect DIR [--probe WAV]
   nanoasr version
 
 Configuration precedence: flags > NANOASR_* env > config file > computed defaults.
@@ -211,12 +211,10 @@ func serve(args []string) error {
 }
 
 func models(args []string) error {
-	// The subcommand is consumed before flag parsing: flag stops at the first
-	// positional argument, so "models list -config x" would otherwise ignore
-	// the flag and silently read the default configuration.
-	sub := "list"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		sub, args = args[0], args[1:]
+	sub, args := takePositional(args, "list")
+
+	if sub == "inspect" {
+		return inspectModel(args)
 	}
 
 	fs := flag.NewFlagSet("models "+sub, flag.ExitOnError)
@@ -258,6 +256,19 @@ func models(args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", p)
 	}
 	return nil
+}
+
+// takePositional pulls a leading non-flag argument off the list.
+//
+// The standard flag package stops parsing at the first positional argument, so
+// "models list -config x" would otherwise leave -config unparsed and silently
+// fall back to the default configuration. Every subcommand that takes both a
+// word and flags has to strip the word first.
+func takePositional(args []string, fallback string) (string, []string) {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return args[0], args[1:]
+	}
+	return fallback, args
 }
 
 // keySpecs adapts configured keys to what the key store takes. The two types
