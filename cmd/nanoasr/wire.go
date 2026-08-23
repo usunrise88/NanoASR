@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/audio"
@@ -20,7 +21,7 @@ import (
 type server struct {
 	service  core.Service
 	models   core.ModelService
-	registry *registry.Local
+	registry *registry.Remote
 	pool     *pool.Pool
 	vad      vad.Segmenter
 }
@@ -30,13 +31,9 @@ type server struct {
 // or an unreadable models directory would only fail on the first request, when
 // a user is waiting.
 func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, error) {
-	reg, err := registry.NewLocal(cfg.ASR.ModelsDir)
+	reg, err := buildRegistry(cfg, log)
 	if err != nil {
 		return nil, err
-	}
-	for _, p := range reg.Problems() {
-		// A model nobody can load should be visible, not silently absent.
-		log.Warn("skipping unusable model", "problem", p)
 	}
 
 	models := pool.New(reg,
@@ -81,6 +78,44 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 	}, nil
 }
 
+// buildRegistry reads the models directory and layers downloading on top.
+func buildRegistry(cfg config.Config, log *slog.Logger) (*registry.Remote, error) {
+	local, err := registry.NewLocal(cfg.ASR.ModelsDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range local.Problems() {
+		// A model nobody can load should be visible, not silently absent.
+		log.Warn("skipping unusable model", "problem", p)
+	}
+
+	var catalogYAML []byte
+	if cfg.Registry.CatalogURL != "" {
+		if catalogYAML, err = os.ReadFile(cfg.Registry.CatalogURL); err != nil {
+			return nil, fmt.Errorf("registry.catalog_url: %w", err)
+		}
+	}
+
+	downloader := registry.NewHTTPDownloader(registry.DownloadOptions{
+		Mirrors: cfg.Registry.Mirrors,
+	})
+
+	remote, err := registry.NewRemote(local, downloader, registry.RemoteOptions{
+		AllowDownload: cfg.Registry.AllowDownload,
+		StrictLicense: cfg.Registry.StrictLicense,
+		Concurrency:   cfg.Registry.DownloadConcurrency,
+		CatalogYAML:   catalogYAML,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if !cfg.Registry.AllowDownload {
+		log.Info("model downloading is disabled", "models_dir", cfg.ASR.ModelsDir)
+	}
+	return remote, nil
+}
+
 // buildDecoder wires the native path first so WAV never pays for a process,
 // and adds ffmpeg only when it is actually installed.
 func buildDecoder(cfg config.Config, log *slog.Logger) *audio.Router {
@@ -98,7 +133,7 @@ func buildDecoder(cfg config.Config, log *slog.Logger) *audio.Router {
 
 // buildVAD resolves the detector model through the same registry that serves
 // ASR models, so there is one way to find a model file rather than two.
-func buildVAD(ctx context.Context, cfg config.Config, reg *registry.Local, log *slog.Logger) (vad.Segmenter, error) {
+func buildVAD(ctx context.Context, cfg config.Config, reg *registry.Remote, log *slog.Logger) (vad.Segmenter, error) {
 	if !cfg.VAD.Enabled {
 		log.Warn("VAD is disabled: long recordings are decoded as one segment, " +
 			"which costs accuracy and memory on exactly the files this server targets")
@@ -153,6 +188,9 @@ func (s *server) preload(ctx context.Context, id string, log *slog.Logger) {
 }
 
 func (s *server) Close() {
+	if s.registry != nil {
+		_ = s.registry.Close()
+	}
 	if s.vad != nil {
 		_ = s.vad.Close()
 	}

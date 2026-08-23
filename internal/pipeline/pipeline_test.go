@@ -96,8 +96,9 @@ func (r fakeRegistry) Resolve(_ context.Context, id string) (registry.Manifest, 
 }
 func (fakeRegistry) Local(context.Context) ([]registry.Manifest, error)   { return nil, nil }
 func (fakeRegistry) Catalog(context.Context) ([]registry.Manifest, error) { return nil, nil }
-func (fakeRegistry) Ensure(context.Context, string) (string, <-chan core.DownloadProgress, error) {
-	return "/models", nil, nil
+func (fakeRegistry) Ensure(context.Context, string) (string, error)       { return "/models", nil }
+func (fakeRegistry) Fetch(context.Context, string) (<-chan core.DownloadProgress, error) {
+	return nil, nil
 }
 func (fakeRegistry) Dir(string) (string, error) { return "/models", nil }
 

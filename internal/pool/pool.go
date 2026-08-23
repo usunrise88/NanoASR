@@ -170,14 +170,11 @@ func (p *Pool) materialise(ctx context.Context, id string) (asr.Recognizer, regi
 	if err != nil {
 		return nil, registry.Manifest{}, err
 	}
-	dir, progress, err := p.reg.Ensure(ctx, id)
+	// Ensure blocks until the model is on disk, so a download failure arrives
+	// here as an error rather than as a missing file two lines later.
+	dir, err := p.reg.Ensure(ctx, id)
 	if err != nil {
 		return nil, man, err
-	}
-	// Drain progress so the registry is never blocked on an unread channel.
-	if progress != nil {
-		for range progress {
-		}
 	}
 	rec, err := p.load(ctx, man, dir)
 	if err != nil {

@@ -11,6 +11,13 @@ import (
 )
 
 // Model roles. An empty kind means ASR, so existing manifests keep working.
+// Commercial-use states a catalog entry can declare.
+const (
+	CommercialYes     = "yes"
+	CommercialNo      = "no"
+	CommercialUnknown = "unknown"
+)
+
 const (
 	KindASR          = "asr"
 	KindVAD          = "vad"
@@ -49,7 +56,12 @@ type Manifest struct {
 	Resources Resources `yaml:"resources,omitempty" json:"resources"`
 	Source    Source    `yaml:"source,omitempty" json:"source"`
 	License   string    `yaml:"license,omitempty" json:"license"`
-	Notes     string    `yaml:"notes,omitempty" json:"notes,omitempty"`
+	// CommercialUse is stated by whoever added the entry, after reading the
+	// licence — not inferred from its name. Matching strings against "nc" or
+	// "research" would give an assurance the catalog has not earned, and
+	// registry.strict_license is only meaningful if this field is honest.
+	CommercialUse string `yaml:"commercial_use,omitempty" json:"commercial_use"`
+	Notes         string `yaml:"notes,omitempty" json:"notes,omitempty"`
 }
 
 // Features describes the acoustic front end the model was trained with.
@@ -135,6 +147,13 @@ func (m Manifest) Validate() error {
 			"model %s: source.sha256 is required when source.url is set", m.ID)
 	}
 	return nil
+}
+
+// AllowsCommercialUse reports whether the entry may be loaded when
+// registry.strict_license is on. An unstated licence counts as no: the flag
+// exists for deployments that must be able to answer the question.
+func (m Manifest) AllowsCommercialUse() bool {
+	return m.CommercialUse == CommercialYes
 }
 
 // EffectiveKind defaults an unset kind to ASR.

@@ -15,9 +15,18 @@ type Registry interface {
 	Local(ctx context.Context) ([]Manifest, error)
 	// Catalog lists models available for download.
 	Catalog(ctx context.Context) ([]Manifest, error)
-	// Ensure makes the model present locally, downloading if allowed, and
-	// returns its directory. Progress is nil when nothing needs downloading.
-	Ensure(ctx context.Context, id string) (dir string, progress <-chan core.DownloadProgress, err error)
+	// Ensure blocks until the model is on disk and returns its directory,
+	// downloading it if that is allowed.
+	//
+	// It blocks rather than handing back a channel to drain: a caller that
+	// only wants the model has no use for progress, and the earlier shape let
+	// the one message reporting a failed download be discarded silently.
+	Ensure(ctx context.Context, id string) (dir string, err error)
+
+	// Fetch starts a download, or joins one already running, and streams its
+	// progress. The channel is always closed; its last message carries the
+	// outcome.
+	Fetch(ctx context.Context, id string) (<-chan core.DownloadProgress, error)
 	// Dir returns the directory of an already-present model.
 	Dir(id string) (string, error)
 }

@@ -131,14 +131,26 @@ func (l *Local) Catalog(_ context.Context) ([]Manifest, error) {
 	return Builtin()
 }
 
-// Ensure returns the model's directory. It never downloads, so the progress
-// channel is always nil and a missing model is an error naming what to do.
-func (l *Local) Ensure(_ context.Context, id string) (string, <-chan core.DownloadProgress, error) {
+// Ensure returns the model's directory. It never downloads; a missing model is
+// an error naming what is available.
+func (l *Local) Ensure(_ context.Context, id string) (string, error) {
 	e, err := l.lookup(id)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	return e.dir, nil, nil
+	return e.dir, nil
+}
+
+// Fetch cannot download, so it reports what is already present and nothing
+// else. Remote is the type that fetches.
+func (l *Local) Fetch(_ context.Context, id string) (<-chan core.DownloadProgress, error) {
+	if _, err := l.lookup(id); err != nil {
+		return nil, err
+	}
+	ch := make(chan core.DownloadProgress, 1)
+	ch <- core.DownloadProgress{ModelID: id, Percent: 100, Done: true}
+	close(ch)
+	return ch, nil
 }
 
 func (l *Local) Dir(id string) (string, error) {

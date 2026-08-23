@@ -219,20 +219,26 @@ func models(args []string) error {
 
 	fs := flag.NewFlagSet("models "+sub, flag.ExitOnError)
 	cfgPath := fs.String("config", os.Getenv("NANOASR_CONFIG"), "path to nanoasr.yaml")
-	if err := fs.Parse(args); err != nil {
+	ids, err := parseFlags(fs, args)
+	if err != nil {
 		return err
-	}
-
-	if sub != "list" {
-		// Downloading needs the registry's fetch half, which is a later
-		// milestone; saying so beats a confusing failure.
-		return fmt.Errorf("models %s: not implemented; place models in the models directory", sub)
 	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return err
 	}
+
+	switch sub {
+	case "list":
+	case "pull":
+		return pullModels(cfg, ids)
+	case "catalog":
+		return showCatalog(cfg)
+	default:
+		return fmt.Errorf("models %s: unknown subcommand; use list, pull, catalog or inspect", sub)
+	}
+
 	reg, err := registry.NewLocal(cfg.ASR.ModelsDir)
 	if err != nil {
 		return err
@@ -259,16 +265,65 @@ func models(args []string) error {
 }
 
 // takePositional pulls a leading non-flag argument off the list.
-//
-// The standard flag package stops parsing at the first positional argument, so
-// "models list -config x" would otherwise leave -config unparsed and silently
-// fall back to the default configuration. Every subcommand that takes both a
-// word and flags has to strip the word first.
 func takePositional(args []string, fallback string) (string, []string) {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		return args[0], args[1:]
 	}
 	return fallback, args
+}
+
+// parseFlags parses fs from args given in any order and returns the positional
+// arguments.
+//
+// The standard flag package stops at the first positional argument, so
+// "models pull some-model -config x" leaves -config unparsed and silently uses
+// the default configuration. Nothing warns; the command just does the wrong
+// thing. Rather than teach every user that flags come first, the arguments are
+// partitioned before parsing.
+//
+// Whether a flag consumes the next token is asked of the flag set itself, so a
+// boolean flag does not swallow a positional argument that follows it.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var flags, positional []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positional = append(positional, arg)
+			continue
+		}
+
+		flags = append(flags, arg)
+		name := strings.TrimLeft(arg, "-")
+		if before, _, found := strings.Cut(name, "="); found {
+			_ = before
+			continue // the value travels with the flag
+		}
+		if takesValue(fs, name) && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+
+	if err := fs.Parse(flags); err != nil {
+		return nil, err
+	}
+	return positional, nil
+}
+
+// takesValue reports whether a flag needs the following token. Boolean flags
+// do not, and treating one as if it did would eat a positional argument.
+func takesValue(fs *flag.FlagSet, name string) bool {
+	f := fs.Lookup(name)
+	if f == nil {
+		return false // unknown: let flag.Parse produce the real complaint
+	}
+	boolFlag, ok := f.Value.(interface{ IsBoolFlag() bool })
+	return !ok || !boolFlag.IsBoolFlag()
 }
 
 // keySpecs adapts configured keys to what the key store takes. The two types

@@ -72,11 +72,10 @@ func (m *Models) Catalog(ctx context.Context) ([]core.ModelInfo, error) {
 	return out, nil
 }
 
-// Download is the one operation that needs the network, which is a separate
-// milestone. Until then a model has to be placed in the models directory.
-func (m *Models) Download(context.Context, string) (<-chan core.DownloadProgress, error) {
-	return nil, core.Errorf(core.CodeNotImplemented,
-		"downloading is not available in this build; place the model in the models directory")
+// Download starts a fetch, or joins one already running, and streams progress.
+// Whether downloading is permitted at all is the registry's decision.
+func (m *Models) Download(ctx context.Context, id string) (<-chan core.DownloadProgress, error) {
+	return m.registry.Fetch(ctx, id)
 }
 
 // Load makes a model resident by taking and immediately releasing a lease: the

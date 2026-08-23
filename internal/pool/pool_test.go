@@ -44,8 +44,9 @@ func (r fakeReg) Resolve(_ context.Context, id string) (registry.Manifest, error
 }
 func (r fakeReg) Local(context.Context) ([]registry.Manifest, error)   { return nil, nil }
 func (r fakeReg) Catalog(context.Context) ([]registry.Manifest, error) { return nil, nil }
-func (r fakeReg) Ensure(context.Context, string) (string, <-chan core.DownloadProgress, error) {
-	return "/tmp/models", nil, nil
+func (r fakeReg) Ensure(context.Context, string) (string, error)       { return "/tmp/models", nil }
+func (r fakeReg) Fetch(context.Context, string) (<-chan core.DownloadProgress, error) {
+	return nil, nil
 }
 func (r fakeReg) Dir(string) (string, error) { return "/tmp/models", nil }
 

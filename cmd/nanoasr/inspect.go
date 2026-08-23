@@ -29,19 +29,17 @@ import (
 var probeDims = []int{80, 64}
 
 func inspectModel(args []string) error {
-	dir, args := takePositional(args, "")
-
 	fs := flag.NewFlagSet("models inspect", flag.ExitOnError)
 	probe := fs.String("probe", "", "audio file to transcribe with each candidate features.dim")
-	if err := fs.Parse(args); err != nil {
+
+	dirs, err := parseFlags(fs, args)
+	if err != nil {
 		return err
 	}
-	if dir == "" && fs.NArg() == 1 {
-		dir = fs.Arg(0)
-	}
-	if dir == "" {
+	if len(dirs) != 1 {
 		return fmt.Errorf("usage: nanoasr models inspect <model-dir> [--probe file.wav]")
 	}
+	dir := dirs[0]
 
 	draft, err := registry.Inspect(dir)
 	if err != nil {
