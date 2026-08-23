@@ -63,7 +63,15 @@ func applyEnv(c *Config) {
 	bl("NANOASR_ALLOW_DOWNLOAD", &c.Registry.AllowDownload)
 
 	if v := os.Getenv("NANOASR_AUTH_KEYS"); v != "" {
-		c.Auth.Keys = strings.Split(v, ",")
+		// Environment-supplied keys are unnamed and non-administrative:
+		// granting admin rights should take a deliberate edit to a file, not
+		// an environment variable someone copied between deployments.
+		c.Auth.Keys = nil
+		for _, secret := range strings.Split(v, ",") {
+			if s := strings.TrimSpace(secret); s != "" {
+				c.Auth.Keys = append(c.Auth.Keys, APIKey{Key: s})
+			}
+		}
 	}
 	if v := os.Getenv("NANOASR_API_DIALECTS"); v != "" {
 		c.API.Dialects = strings.Split(v, ",")
@@ -101,6 +109,18 @@ func bl(key string, dst *bool) {
 func (c *Config) Validate() error {
 	switch c.Auth.Mode {
 	case "apikey":
+		// A server in apikey mode with no keys answers 401 to everything: it
+		// is running, it looks configured, and it is useless. Say so at
+		// startup rather than at the first request.
+		if len(c.Auth.Keys) == 0 {
+			return fmt.Errorf("auth.mode=apikey but no keys are configured; " +
+				"set auth.keys or NANOASR_AUTH_KEYS, or use auth.mode=open on a loopback address")
+		}
+		for i, k := range c.Auth.Keys {
+			if strings.TrimSpace(k.Key) == "" {
+				return fmt.Errorf("auth.keys[%d] (%q) has no key value", i, k.Name)
+			}
+		}
 	case "open":
 		// An unauthenticated listener on a routable address is not a
 		// configuration mistake we are willing to boot with.

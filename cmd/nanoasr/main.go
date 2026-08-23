@@ -155,6 +155,8 @@ func serve(args []string) error {
 		}
 	}
 
+	// Auth goes last so that a 401 is still logged and still carries the
+	// security headers, and so the request id is available to report.
 	mw := []httpx.Middleware{
 		httpx.WithRequestID(),
 		httpx.Recover(log),
@@ -162,10 +164,25 @@ func serve(args []string) error {
 		httpx.SecurityHeaders(),
 		httpx.LimitBody(cfg.Server.MaxUploadBytes),
 	}
-	// TODO(M3): insert httpx.Auth(keyStore) when cfg.Auth.Mode == "apikey".
+
 	if cfg.Auth.Mode == "open" {
 		log.Warn("authentication disabled", "addr", cfg.Server.Addr,
 			"note", "open mode is only permitted on a loopback address")
+	} else {
+		keys, err := httpx.NewStaticKeyStore(keySpecs(cfg.Auth.Keys))
+		if err != nil {
+			return err
+		}
+		// Health probes cannot present a credential, and a browser does not
+		// send a bearer token when loading a script tag. Everything else is
+		// authenticated.
+		mw = append(mw, httpx.Auth(keys, "/healthz", "/readyz", cfg.UI.Path))
+
+		// The key store now holds the digests, so drop the plaintext from the
+		// configuration that /api/v1/config will eventually serve.
+		cfg.Auth.Redact()
+		log.Info("authentication enabled", "keys", keys.Names(),
+			"public", []string{"/healthz", "/readyz", cfg.UI.Path})
 	}
 
 	httpSrv := &http.Server{
@@ -241,6 +258,16 @@ func models(args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", p)
 	}
 	return nil
+}
+
+// keySpecs adapts configured keys to what the key store takes. The two types
+// stay separate so internal/httpx does not depend on the configuration schema.
+func keySpecs(keys []config.APIKey) []httpx.KeySpec {
+	out := make([]httpx.KeySpec, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, httpx.KeySpec{Name: k.Name, Secret: k.Key, Admin: k.Admin})
+	}
+	return out
 }
 
 func newLogger(c config.Log) *slog.Logger {

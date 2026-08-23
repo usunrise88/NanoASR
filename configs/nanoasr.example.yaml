@@ -11,9 +11,21 @@ server:
   shutdown_grace: 30s
 
 auth:
-  # "open" is permitted only when addr binds a loopback address.
+  # "open" is permitted only when addr binds a loopback address. In apikey
+  # mode at least one key is required: a server with none answers 401 to
+  # everything, so it refuses to start rather than pretend to be configured.
   mode: apikey
-  keys: []                      # or NANOASR_AUTH_KEYS=key1,key2
+  keys: []
+  # A key may be a bare string, or a mapping when it needs a name or the right
+  # to administer models. "sha256:<hex>" keeps the plaintext out of this file.
+  #
+  # keys:
+  #   - sk-a-long-random-string-at-least-16-chars
+  #   - name: ci
+  #     key: sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+  #     admin: true
+  #
+  # Or supply them from the environment: NANOASR_AUTH_KEYS=key1,key2
 
 api:
   dialects: [openai, native]

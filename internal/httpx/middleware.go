@@ -21,6 +21,7 @@ type ctxKey int
 const (
 	ctxRequestID ctxKey = iota
 	ctxAPIKeyID
+	ctxAPIKeyAdmin
 )
 
 // RequestID returns the id assigned to this request.
@@ -33,6 +34,15 @@ func RequestID(ctx context.Context) string {
 func APIKeyID(ctx context.Context) string {
 	s, _ := ctx.Value(ctxAPIKeyID).(string)
 	return s
+}
+
+// IsAdmin reports whether the authenticated key may perform administrative
+// operations. Open mode has no keys and therefore no restrictions.
+func IsAdmin(ctx context.Context) bool {
+	if v, ok := ctx.Value(ctxAPIKeyAdmin).(bool); ok {
+		return v
+	}
+	return ctx.Value(ctxAPIKeyID) == nil
 }
 
 // Middleware is the standard decorator shape.
@@ -100,11 +110,30 @@ type KeyStore interface {
 	Verify(ctx context.Context, token string) (keyID string, ok bool)
 }
 
-// Auth enforces bearer authentication. In open mode it is not installed at all,
-// and config.Validate refuses to start open mode on a non-loopback address.
-func Auth(keys KeyStore) Middleware {
+// adminLookup is an optional KeyStore capability: a store that can say whether
+// a verified key is administrative.
+type adminLookup interface {
+	Lookup(id string) (Key, bool)
+}
+
+// Auth enforces bearer authentication on everything except publicPrefixes.
+//
+// The exemptions are passed in rather than hard-coded, and they are one list in
+// one call so a reviewer sees the whole unauthenticated surface at once. Health
+// probes must be on it — a readiness check that needs a credential is a
+// readiness check Kubernetes cannot make — and so must the UI assets, because a
+// browser does not send a bearer token when loading a script tag.
+//
+// Open mode does not install this middleware at all, and config.Validate
+// refuses open mode on a non-loopback address.
+func Auth(keys KeyStore, publicPrefixes ...string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isPublicPath(r.URL.Path, publicPrefixes) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			token := bearer(r.Header.Get("Authorization"))
 			if token == "" {
 				unauthorized(w)
@@ -115,9 +144,51 @@ func Auth(keys KeyStore) Middleware {
 				unauthorized(w)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxAPIKeyID, id)))
+
+			ctx := context.WithValue(r.Context(), ctxAPIKeyID, id)
+			admin := false
+			if l, ok := keys.(adminLookup); ok {
+				if k, found := l.Lookup(id); found {
+					admin = k.Admin
+				}
+			}
+			ctx = context.WithValue(ctx, ctxAPIKeyAdmin, admin)
+
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// RequireAdmin guards operations that change server state rather than just
+// reading it: loading, unloading and downloading models.
+func RequireAdmin() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !IsAdmin(r.Context()) {
+				w.Header().Set("Content-Type", "application/json")
+				http.Error(w,
+					`{"error":{"code":"model_forbidden","message":"this API key is not permitted to administer models"}}`,
+					http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// isPublicPath matches a prefix exactly, or as a path segment boundary, so
+// "/ui" exempts "/ui" and "/ui/app.js" but never "/uisecret".
+func isPublicPath(path string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if p == "" {
+			continue
+		}
+		p = strings.TrimSuffix(p, "/")
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func bearer(h string) string {

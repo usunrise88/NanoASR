@@ -32,7 +32,24 @@ type Server struct {
 // address; otherwise the server refuses to start.
 type Auth struct {
 	Mode string   `yaml:"mode"` // apikey | open
-	Keys []string `yaml:"keys"`
+	Keys []APIKey `yaml:"keys"`
+}
+
+// APIKey is one credential. It can be written as a bare string when nothing
+// but the secret matters, or as a mapping when the key needs a name or
+// administrative rights:
+//
+//	keys:
+//	  - sk-readonly-abcdef0123456789
+//	  - name: ci
+//	    key: sha256:9f86d0818...
+//	    admin: true
+type APIKey struct {
+	Name string `yaml:"name"`
+	// Key is the secret itself, or "sha256:<hex>" to keep the plaintext out
+	// of the configuration file.
+	Key   string `yaml:"key"`
+	Admin bool   `yaml:"admin"`
 }
 
 type API struct {
