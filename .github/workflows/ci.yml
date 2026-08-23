@@ -68,12 +68,13 @@ jobs:
           cache-dependency-path: go.sum
       - name: install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      # The weights are ~160 MB and immutable; the cache key is the fetch
-      # script, so it invalidates exactly when the pinned model changes.
+      # The catalog is ~600 MB and every entry is pinned by checksum, so the
+      # cache key is the catalog itself: it invalidates exactly when a model
+      # changes and never otherwise.
       - uses: actions/cache@v4
         with:
           path: .models
-          key: models-${{ hashFiles('scripts/fetch-dev-models.sh') }}
+          key: models-${{ hashFiles('internal/registry/catalog.yaml') }}
       - run: ./scripts/fetch-dev-models.sh
       - run: ./scripts/fetch-testdata.sh
       - name: transcribe for real

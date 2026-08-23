@@ -1,12 +1,139 @@
 # Built-in model catalog.
 #
-# Every entry needs a sha256: the downloader refuses to unpack anything it
-# cannot verify. Sizes and checksums are filled in during M2 from the actual
-# release artefacts — placeholders here would be worse than an empty catalog,
-# because they would fail verification at the least convenient moment.
+# Every entry is verified before it lands here: downloaded, run through
+# `nanoasr models inspect --probe`, and transcribed once to confirm the result
+# is language rather than noise. Nothing in this file is inferred from a model
+# name, and every checksum is the one measured from the artefact.
+#
+# commercial_use is stated by whoever added the entry after reading the licence.
+# It is never guessed from a licence string: registry.strict_license refuses
+# anything that is not a positive "yes", so an honest "unknown" is the point of
+# the field rather than a gap in it.
 #
 # v1 families (SPEC decision #8): transducer, zipformer_ctc, nemo_ctc,
-# wenet_ctc, telespeech. Multilingual coverage comes from having many
-# monolingual models here rather than from one multilingual model (SPEC §3.1).
+# wenet_ctc, telespeech. Multilingual coverage comes from many monolingual
+# models here rather than from one multilingual model (SPEC §3.1).
 version: 1
-models: []
+
+models:
+  # ---------------------------------------------------------------------------
+  # Russian, CTC. The reference model for the telephony workload: cheapest on
+  # CPU of the three, character vocabulary, token timestamps but no log
+  # probabilities — so words carry no confidence.
+  - id: gigaam-v2-ctc-ru
+    revision: "2025-04-19"
+    kind: asr
+    family: nemo_ctc
+    display_name: GigaAM v2 CTC (Russian)
+    languages: [ru]
+    sample_rate: 16000
+    modeling_unit: char
+    files:
+      model: model.int8.onnx
+      tokens: tokens.txt
+    features:
+      sample_rate: 16000
+      dim: 64
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      approx_rss_mb: 900
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-ctc-giga-am-v2-russian-2025-04-19.tar.bz2
+      sha256: 777be8717d8aaf04861823671290f7687f7579fd9ac63a2124955573f920caf5
+      size_bytes: 166917722
+    license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
+    # The LICENSE file shipped inside the archive is a saved GitHub HTML page,
+    # not a licence text — the release script fetched the blob URL instead of
+    # the raw one. The terms therefore cannot be established from the download,
+    # and this stays "unknown" until someone reads the real licence.
+    commercial_use: unknown
+    notes: >-
+      Character-level Russian CTC, trained at 16 kHz. Measured: this model
+      derives its own feature dimension and ignores features.dim entirely.
+
+  # ---------------------------------------------------------------------------
+  # Russian, transducer. The same acoustic model as the CTC entry above, which
+  # makes the two directly comparable on identical audio.
+  - id: gigaam-v2-rnnt-ru
+    revision: "2025-04-19"
+    kind: asr
+    family: transducer
+    display_name: GigaAM v2 RNNT (Russian)
+    languages: [ru]
+    sample_rate: 16000
+    modeling_unit: char
+    files:
+      encoder: encoder.int8.onnx
+      decoder: decoder.onnx
+      joiner: joiner.onnx
+      tokens: tokens.txt
+    features:
+      sample_rate: 16000
+      dim: 64
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      approx_rss_mb: 1100
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-transducer-giga-am-v2-russian-2025-04-19.tar.bz2
+      sha256: 6c4bec4c4a70961fc4ec583bf5506089480a9a649c1816ef96b6e4fb8338cd71
+      size_bytes: 172422327
+    license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
+    commercial_use: unknown
+    notes: >-
+      Same acoustics as gigaam-v2-ctc-ru, exported as a transducer.
+
+  # ---------------------------------------------------------------------------
+  # English, transducer, SentencePiece. Small enough for CI, and the only entry
+  # with a BPE vocabulary — the branch of word assembly the Russian models never
+  # exercise.
+  - id: zipformer-small-en
+    revision: "2023-06-26"
+    kind: asr
+    family: transducer
+    display_name: Zipformer small (English)
+    languages: [en]
+    sample_rate: 16000
+    modeling_unit: bpe
+    files:
+      encoder: encoder-epoch-99-avg-1.int8.onnx
+      decoder: decoder-epoch-99-avg-1.int8.onnx
+      joiner: joiner-epoch-99-avg-1.int8.onnx
+      tokens: tokens.txt
+    features:
+      sample_rate: 16000
+      # Measured, and not optional here: this model declares a fixed input
+      # shape, and onnxruntime answers a mismatch by throwing a C++ exception
+      # that terminates the process. 64 does not transcribe badly, it aborts.
+      dim: 80
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      approx_rss_mb: 600
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-small-en-2023-06-26.tar.bz2
+      sha256: c8bff1091c26c49731cddbcd60ef18061142ea11523df1b73bf1b14451b9c15e
+      size_bytes: 112232184
+    license: apache-2.0
+    commercial_use: "yes"
+
+  # ---------------------------------------------------------------------------
+  # Voice activity detection. Not an archive: one .onnx file.
+  - id: silero-vad-v5
+    revision: "5"
+    kind: vad
+    family: silero_vad
+    display_name: Silero VAD v5
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      model: silero_vad.onnx
+    resources:
+      approx_rss_mb: 16
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+      sha256: 9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6
+      size_bytes: 643854
+    license: mit
+    commercial_use: "yes"

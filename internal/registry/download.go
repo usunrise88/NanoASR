@@ -133,8 +133,14 @@ func (d *HTTPDownloader) Download(ctx context.Context, m Manifest, destDir strin
 }
 
 func (d *HTTPDownloader) run(ctx context.Context, m Manifest, destDir string, progress chan<- core.DownloadProgress) error {
-	// Everything happens beside the destination and moves into place at the
-	// end, so an interrupted download never leaves a directory the registry
+	// A fresh installation has no models directory yet, and the first download
+	// is exactly when it should appear.
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return core.Errorf(core.CodeInternal, "cannot create the models directory").WithCause(err)
+	}
+
+	// Everything else happens beside the destination and moves into place at
+	// the end, so an interrupted download never leaves a directory the registry
 	// would happily load a broken model from.
 	work, err := os.MkdirTemp(destDir, ".download-"+m.ID+"-*")
 	if err != nil {
@@ -148,14 +154,18 @@ func (d *HTTPDownloader) run(ctx context.Context, m Manifest, destDir string, pr
 	}
 
 	unpacked := filepath.Join(work, "unpacked")
-	if err := Unpack(archive, unpacked, d.limits); err != nil {
-		return err
-	}
-	// Release the archive before the rename: on a small disk, holding 160 MB
-	// we no longer need while writing the model out is avoidable.
-	_ = os.Remove(archive)
+	if IsArchive(archive) {
+		if err := Unpack(archive, unpacked, d.limits); err != nil {
+			return err
+		}
+		// Release the archive before the rename: on a small disk, holding
+		// 160 MB we no longer need while writing the model out is avoidable.
+		_ = os.Remove(archive)
 
-	if err := flattenSingleDirectory(unpacked); err != nil {
+		if err := flattenSingleDirectory(unpacked); err != nil {
+			return err
+		}
+	} else if err := installBareFile(archive, unpacked, m); err != nil {
 		return err
 	}
 
@@ -350,6 +360,34 @@ func copyWithProgress(ctx context.Context, dst io.Writer, src io.Reader, modelID
 			return done, err
 		}
 	}
+}
+
+// installBareFile handles a model distributed as a single file rather than an
+// archive — a VAD is one .onnx, and so are several supporting models.
+//
+// The manifest has to name exactly one file, because otherwise there is no way
+// to know which of several roles the download is supposed to fill.
+func installBareFile(src, dest string, m Manifest) error {
+	if len(m.Files) != 1 {
+		return permanentf(
+			"model %s is not an archive, so its manifest must name exactly one file; it names %d",
+			m.ID, len(m.Files))
+	}
+
+	var name string
+	for role, file := range m.Files {
+		// Validate the name through the same containment check the loader
+		// uses, then keep the relative form for the join below.
+		if _, err := m.FilePath(dest, role); err != nil {
+			return err
+		}
+		name = file
+	}
+
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	return os.Rename(src, filepath.Join(dest, name))
 }
 
 // flattenSingleDirectory lifts the contents of a lone top-level directory.

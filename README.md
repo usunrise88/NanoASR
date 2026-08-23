@@ -4,11 +4,12 @@
 Go, CPU, длинные файлы, **word-level тайминги**, OpenAI-совместимый API и встроенный
 тестовый интерфейс.
 
-> **Статус: M1 закрыта.** Сквозной путь работает: файл → декод → 16 кГц → VAD →
-> распознавание → пословные тайминги → `/v1/audio/transcriptions`. Очередь задач,
-> реестр со скачиванием, UI и постобработка — вехи M2–M5, каждая заглушка помечена
-> `TODO(Mn)`. Источник правды — [docs/SPEC.md](docs/SPEC.md), включая открытые
-> вопросы (§19).
+> **Статус: M1 и M2 закрыты.** Работает сквозной путь и модельный слой: файл →
+> декод → 16 кГц → VAD → распознавание → пословные тайминги →
+> `/v1/audio/transcriptions`, плюс каталог моделей со скачиванием, проверкой
+> sha256 и горячей заменой. Очередь задач, UI и постобработка — вехи M3–M5,
+> каждая заглушка помечена `TODO(Mn)`. Источник правды —
+> [docs/SPEC.md](docs/SPEC.md), включая открытые вопросы (§19).
 
 ## Что это
 
@@ -24,19 +25,33 @@ Go, CPU, длинные файлы, **word-level тайминги**, OpenAI-со
 ## Быстрый старт
 
 ```bash
-make models               # GigaAM v2 CTC (ru) + Silero VAD в ./.models
-make web build            # собрать SPA и сервер
-./dist/nanoasr models list -config configs/nanoasr.dev.yaml
+make web build                                  # собрать SPA и сервер
+./dist/nanoasr models catalog                   # что доступно
+./dist/nanoasr models pull gigaam-v2-ctc-ru silero-vad-v5
 ./dist/nanoasr serve -config configs/nanoasr.dev.yaml
 ```
 
-Распознать файл:
+Или одной командой: `make models` — скачает весь каталог (~600 МБ).
+
+В боевом конфиге нужен ключ: `auth.mode: apikey` без ключей — это ошибка старта,
+а не сервер, отвечающий 401 на всё.
 
 ```bash
 curl -s localhost:8080/v1/audio/transcriptions \
-  -F file=@call.wav -F response_format=verbose_json \
-  | jq '.text, .timestamp_source, .words[:3]'
+  -H 'Authorization: Bearer sk-...' \
+  -F file=@call.wav -F response_format=verbose_json | jq '.text, .words[:3]'
 ```
+
+### Добавить свою модель в каталог
+
+```bash
+nanoasr models inspect ./my-model --probe sample.wav
+```
+
+Определит семейство и словарь, вытащит метаданные из `.onnx` и напечатает
+черновик манифеста. Флаг `--probe` распознаёт клип с каждым кандидатом
+`features.dim` в отдельном процессе — потому что у некоторых моделей неверное
+значение не портит текст, а **аварийно завершает процесс**.
 
 Dev-конфиг слушает `127.0.0.1:8080` без аутентификации — открытый режим разрешён
 **только** на loopback, на любом другом адресе сервер откажется стартовать.

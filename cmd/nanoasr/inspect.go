@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,12 +25,19 @@ import (
 // probeDims are the feature dimensions worth trying: 80 is sherpa-onnx's
 // default and the common value, 64 is GigaAM's.
 //
-// Measured on GigaAM v2 CTC: every candidate — including an absurd 13 —
-// produces the same transcript, because sherpa-onnx derives the dimension from
-// NeMo models and ignores the configured one. Whether that holds for other
-// families is exactly what this probe is for, so it also reports when the
-// setting turns out to have no effect.
+// Measured, and the two families behave completely differently. NeMo models
+// carry their own front end and ignore the setting: GigaAM v2 CTC transcribes
+// correctly even when told 13. Zipformer models declare a fixed input shape,
+// and onnxruntime answers a mismatch by throwing a C++ exception that
+// terminates the process — not a bad transcript, a SIGABRT.
+//
+// That is why each candidate runs in a child process. A tool that dies while
+// answering the question it was built to answer is not much of a tool, and the
+// crash itself is the most useful result it can report.
 var probeDims = []int{80, 64}
+
+// probeChildCommand is the hidden subcommand a probe child runs as.
+const probeChildCommand = "probe-one"
 
 func inspectModel(args []string) error {
 	fs := flag.NewFlagSet("models inspect", flag.ExitOnError)
@@ -83,34 +94,23 @@ func inspectModel(args []string) error {
 func runProbe(dir string, m registry.Manifest, wavPath string) error {
 	fmt.Fprintf(os.Stderr, "\nprobing %s with each candidate features.dim:\n", wavPath)
 
-	pcm, err := decodeProbeAudio(wavPath)
-	if err != nil {
-		return err
-	}
-
 	ctx := context.Background()
-	load := sherpa.NewLoader(sherpa.LoaderOptions{NumThreads: 2, SkipWarmup: true})
-
 	results := make(map[int]string, len(probeDims))
 	for _, dim := range probeDims {
-		candidate := m
-		candidate.Features.Dim = dim
-		if candidate.Features.SampleRate == 0 {
-			candidate.Features.SampleRate = 16000
-		}
-		if candidate.ModelingUnit == "" {
-			candidate.ModelingUnit = words.UnitBPE
-		}
-
-		text, err := transcribeWith(ctx, load, candidate, dir, pcm)
+		text, err := probeInChild(ctx, dir, wavPath, dim)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n  dim %d: failed to load — %v\n", dim, err)
+			fmt.Fprintf(os.Stderr, "\n  dim %2d: %v\n", dim, err)
 			continue
 		}
 		results[dim] = strings.TrimSpace(text)
 		fmt.Fprintf(os.Stderr, "\n  dim %2d: %s\n", dim, truncate(text, 300))
 	}
 
+	if len(results) < 2 {
+		fmt.Fprintln(os.Stderr, "\nfewer than two candidates loaded, so the probe settled nothing.")
+		fmt.Fprintln(os.Stderr, "Fix the errors above and run it again.")
+		return nil
+	}
 	if identical(results) {
 		fmt.Fprintln(os.Stderr, "\nevery candidate produced the same transcript: this model derives its")
 		fmt.Fprintln(os.Stderr, "feature dimension itself and ignores the manifest value. Record the")
@@ -139,6 +139,82 @@ func identical(results map[int]string) bool {
 		}
 	}
 	return true
+}
+
+// probeInChild runs one candidate in a separate process, so a model that
+// aborts on a dimension mismatch takes the child down rather than the tool.
+func probeInChild(ctx context.Context, dir, wavPath string, dim int) (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+
+	cmd := exec.CommandContext(ctx, self, "models", probeChildCommand,
+		dir, wavPath, strconv.Itoa(dim))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return "", fmt.Errorf("the model rejected this dimension (%s): %s",
+				exit.ProcessState.String(), firstLine(stderr.String()))
+		}
+		return "", err
+	}
+	return stdout.String(), nil
+}
+
+// probeChild is the child half: transcribe once under one dimension and print
+// the result. Failures are the exit status; the parent interprets them.
+func probeChild(args []string) error {
+	if len(args) != 3 {
+		return fmt.Errorf("usage: nanoasr models %s <dir> <wav> <dim>", probeChildCommand)
+	}
+	dir, wavPath := args[0], args[1]
+	dim, err := strconv.Atoi(args[2])
+	if err != nil {
+		return err
+	}
+
+	draft, err := registry.Inspect(dir)
+	if err != nil {
+		return err
+	}
+	m := draft.Manifest
+	m.Features.Dim = dim
+	if m.Features.SampleRate == 0 {
+		m.Features.SampleRate = 16000
+	}
+	if m.ModelingUnit == "" {
+		m.ModelingUnit = words.UnitBPE
+	}
+
+	pcm, err := decodeProbeAudio(wavPath)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	load := sherpa.NewLoader(sherpa.LoaderOptions{NumThreads: 2, SkipWarmup: true})
+	text, err := transcribeWith(ctx, load, m, dir, pcm)
+	if err != nil {
+		return err
+	}
+	fmt.Print(text)
+	return nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	if s == "" {
+		return "no diagnostic output"
+	}
+	return s
 }
 
 func decodeProbeAudio(path string) (audio.PCM, error) {

@@ -189,7 +189,7 @@ func (r *Remote) run(m Manifest, dl *download) {
 		delete(r.inflight, m.ID)
 		r.mu.Unlock()
 
-		dl.finish()
+		dl.finish(m.ID)
 	}()
 
 	select {
@@ -206,17 +206,24 @@ func (r *Remote) run(m Manifest, dl *download) {
 		return
 	}
 
+	// The downloader's terminal message is swallowed and re-emitted after the
+	// registry has caught up. "Done" has to mean the model is usable, not
+	// merely that its bytes are on disk: a subscriber that acted on the
+	// downloader's own last message would look for a model the registry had
+	// not seen yet.
 	for p := range progress {
-		dl.broadcast(p)
-		if p.Done && p.Err != "" {
-			dl.err = core.Errorf(core.CodeInternal, "downloading %s: %s", m.ID, p.Err)
+		if p.Done {
+			if p.Err != "" {
+				dl.err = core.Errorf(core.CodeInternal, "downloading %s: %s", m.ID, p.Err)
+			}
+			continue
 		}
+		dl.broadcast(p)
 	}
 	if dl.err != nil {
 		return
 	}
 
-	// The model is on disk but the registry has not looked since it started.
 	if err := r.local.Refresh(r.baseCtx); err != nil {
 		dl.err = err
 		return
@@ -224,7 +231,7 @@ func (r *Remote) run(m Manifest, dl *download) {
 	dir, err := r.local.Dir(m.ID)
 	if err != nil {
 		dl.err = core.Errorf(core.CodeInternal,
-			"model %s downloaded but is not loadable: %v", m.ID, err).WithCause(err)
+			"model %s downloaded but is not loadable", m.ID).WithCause(err)
 		return
 	}
 	dl.dir = dir
@@ -286,7 +293,15 @@ func (d *download) broadcast(p core.DownloadProgress) {
 	}
 }
 
-func (d *download) finish() {
+// finish emits the terminal message and closes every subscriber. It runs after
+// the registry has been refreshed, so a subscriber acting on Done finds the
+// model where the message says it is.
+func (d *download) finish(modelID string) {
+	final := core.DownloadProgress{ModelID: modelID, Percent: 100, Done: true}
+	if d.err != nil {
+		final = core.DownloadProgress{ModelID: modelID, Done: true, Err: d.err.Error()}
+	}
+
 	d.mu.Lock()
 	subs := d.subscribers
 	d.subscribers = nil
@@ -294,6 +309,10 @@ func (d *download) finish() {
 	d.mu.Unlock()
 
 	for _, ch := range subs {
+		select {
+		case ch <- final:
+		default:
+		}
 		close(ch)
 	}
 	close(d.done)

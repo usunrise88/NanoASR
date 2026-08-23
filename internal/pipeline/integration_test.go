@@ -64,23 +64,31 @@ func (f fileSource) Close() error { return nil }
 
 // newStack builds the real pipeline: real registry, real weights, real VAD,
 // real decoders. Only the transport is missing.
+// newRegistryFor opens the development models directory.
+func newRegistryFor(t *testing.T) *registry.Local {
+	t.Helper()
+	reg, err := registry.NewLocal(filepath.Join(repoRoot(t), ".models"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
 func newStack(t *testing.T) *Pipeline {
 	t.Helper()
 	root := repoRoot(t)
 
-	modelsDir := filepath.Join(root, ".models")
-	if _, err := os.Stat(filepath.Join(modelsDir, testModel)); err != nil {
+	// Models install as id@revision directories, so presence is a registry
+	// question rather than a path one.
+	reg := newRegistryFor(t)
+	_ = root
+	if _, err := reg.Resolve(t.Context(), testModel); err != nil {
 		t.Skipf("models are absent; run ./scripts/fetch-dev-models.sh (%v)", err)
-	}
-
-	reg, err := registry.NewLocal(modelsDir)
-	if err != nil {
-		t.Fatal(err)
 	}
 
 	models := pool.New(reg,
 		sherpa.NewLoader(sherpa.LoaderOptions{Provider: "cpu", NumThreads: 2}),
-		pool.Options{MaxResidentModels: 2, MaxModelRSSMB: 4096, AcquireTimeout: 2 * time.Minute})
+		pool.Options{MaxResidentModels: 3, MaxModelRSSMB: 8192, AcquireTimeout: 2 * time.Minute})
 	t.Cleanup(func() { _ = models.Close() })
 
 	vadManifest, err := reg.Resolve(t.Context(), testVADModel)
@@ -130,6 +138,22 @@ func transcribe(t *testing.T, p *Pipeline, name string) *core.Result {
 	res, err := p.Transcribe(t.Context(), core.Request{Audio: fileSource{path: audioPath(t, name)}})
 	if err != nil {
 		t.Fatalf("transcribing %s: %v", name, err)
+	}
+	return res
+}
+
+// transcribeWithModel runs a specific model over an absolute path, for the
+// cross-family comparisons.
+func transcribeWithModel(t *testing.T, p *Pipeline, model, path string) *core.Result {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("audio is absent: %v", err)
+	}
+	res, err := p.Transcribe(t.Context(), core.Request{
+		Audio: fileSource{path: path}, ModelID: model,
+	})
+	if err != nil {
+		t.Fatalf("transcribing %s with %s: %v", path, model, err)
 	}
 	return res
 }
@@ -282,10 +306,53 @@ func TestM1Report(t *testing.T) {
 			percentile(d, 0.95)*1000, percentile(d, 1.0)*1000)
 	}
 
+	reportFamilies(t, p)
+
 	t.Log("")
 	t.Log("Absolute timing accuracy is not measured here: the reference clip has")
 	t.Log("no hand-aligned word boundaries. These numbers are the narrowband")
 	t.Log("penalty, which is the part that does not depend on ground truth.")
+}
+
+// reportFamilies compares the two Russian models, which share acoustics and
+// differ only in decoder. This is the evidence behind choosing a default model
+// (SPEC §19.2 #5): the same audio, the same front end, two decoders.
+func reportFamilies(t *testing.T, p *Pipeline) {
+	const rnnt = "gigaam-v2-rnnt-ru"
+	if _, err := newRegistryFor(t).Resolve(t.Context(), rnnt); err != nil {
+		t.Logf("\n%s is not installed; skipping the family comparison", rnnt)
+		return
+	}
+
+	wav := audioPath(t, "ru-16k.wav")
+	ctcResult := transcribeWithModel(t, p, testModel, wav)
+	rnntResult := transcribeWithModel(t, p, rnnt, wav)
+
+	t.Log("")
+	t.Log("CTC against RNNT on identical audio")
+	t.Logf("%-20s %8s %7s %6s %11s", "model", "rtf", "asr", "words", "confidence")
+	for _, r := range []struct {
+		name string
+		res  *core.Result
+	}{{testModel, ctcResult}, {rnnt, rnntResult}} {
+		conf := "absent"
+		if hasAnyConfidence(r.res.Words()) {
+			conf = "present"
+		}
+		t.Logf("%-20s %8.3f %5dms %6d %11s",
+			r.name, r.res.Stats.RTF, r.res.Stats.StagesMS["asr"], len(r.res.Words()), conf)
+	}
+	t.Logf("word error rate between them: %.1f%%",
+		wordErrorRate(ctcResult.Text, rnntResult.Text)*100)
+}
+
+func hasAnyConfidence(ws []core.Word) bool {
+	for _, w := range ws {
+		if w.Confidence > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // --- helpers ----------------------------------------------------------------

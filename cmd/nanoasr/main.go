@@ -213,8 +213,13 @@ func serve(args []string) error {
 func models(args []string) error {
 	sub, args := takePositional(args, "list")
 
-	if sub == "inspect" {
+	switch sub {
+	case "inspect":
 		return inspectModel(args)
+	case probeChildCommand:
+		// Hidden: one candidate of `models inspect --probe`, run in its own
+		// process so a dimension mismatch cannot abort the parent.
+		return probeChild(args)
 	}
 
 	fs := flag.NewFlagSet("models "+sub, flag.ExitOnError)

@@ -38,10 +38,17 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+	out := fmt.Sprintf("%s: %s", e.Code, e.Message)
 	if e.Param != "" {
-		return fmt.Sprintf("%s: %s (param %s)", e.Code, e.Message, e.Param)
+		out += fmt.Sprintf(" (param %s)", e.Param)
 	}
-	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+	// The cause appears in the Go error string, which the CLI prints and the
+	// logger records. API responses render Message on its own, so nothing
+	// internal reaches a client through this.
+	if e.cause != nil {
+		out += ": " + e.cause.Error()
+	}
+	return out
 }
 
 func (e *Error) Unwrap() error { return e.cause }

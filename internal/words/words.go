@@ -18,6 +18,11 @@ import (
 )
 
 // wordBoundary is the SentencePiece marker that opens a new word.
+//
+// It is not the only form it arrives in: sherpa-onnx hands back tokens with the
+// marker already rendered as a leading space, so English zipformer output looks
+// like " AFTER", " E", "AR", "LY". Matching only the marker merged an entire
+// sentence into one word — measured, not hypothetical.
 const wordBoundary = "▁" // ▁
 
 // ModelingUnit values, taken from the model manifest.
@@ -106,13 +111,19 @@ func startsWord(tok, unit string) bool {
 	case UnitCJKChar:
 		return true
 	case UnitCJKCharBPE:
-		return strings.HasPrefix(tok, wordBoundary) || isCJK(tok)
+		return opensWord(tok) || isCJK(tok)
 	case UnitChar:
 		// Characters accumulate; separators do the splitting.
 		return false
 	default: // UnitBPE and anything unrecognised: SentencePiece semantics
-		return strings.HasPrefix(tok, wordBoundary)
+		return opensWord(tok)
 	}
+}
+
+// opensWord reports a SentencePiece word-initial token in either form the
+// binding produces: the marker itself, or the space it is rendered as.
+func opensWord(tok string) bool {
+	return strings.HasPrefix(tok, wordBoundary) || strings.HasPrefix(tok, " ")
 }
 
 // isSeparator reports a token that delimits words but is not part of one.

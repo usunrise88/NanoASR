@@ -22,6 +22,34 @@ import (
 // anything that would exceed the size limits. Sanitising a hostile path is how
 // traversal bugs get written; refusing it is not.
 
+// IsArchive reports whether a downloaded file is a container we can unpack.
+//
+// Not every model is an archive: a VAD is one .onnx file, and treating it as a
+// malformed tar would be a confusing way to refuse something perfectly valid.
+func IsArchive(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	head := make([]byte, 512)
+	n, _ := io.ReadFull(f, head)
+	head = head[:n]
+
+	switch {
+	case bytes.HasPrefix(head, []byte("BZh")),
+		bytes.HasPrefix(head, []byte{0x1F, 0x8B}),
+		bytes.HasPrefix(head, []byte("PK\x03\x04")):
+		return true
+	case len(head) >= 262 && bytes.HasPrefix(head[257:], []byte("ustar")):
+		// Uncompressed tar keeps its magic 257 bytes in.
+		return true
+	default:
+		return false
+	}
+}
+
 // Unpack extracts archive into dest, which must not already exist.
 func Unpack(archive, dest string, limits UnpackLimits) error {
 	f, err := os.Open(archive)

@@ -169,3 +169,59 @@ func TestAssembleCharUnitWithoutLeadingSeparator(t *testing.T) {
 		t.Fatalf("got %+v, want one word starting at 0", got)
 	}
 }
+
+// Real tokens from sherpa-onnx, captured rather than imagined.
+//
+// The binding renders the SentencePiece marker as a leading space, so an
+// English zipformer produces " AFTER", " E", "AR", "LY". Matching only "▁"
+// merged the whole sentence into a single word with a six-second span.
+func TestAssembleRealZipformerTokens(t *testing.T) {
+	r := rec(
+		[]string{" AFTER", " E", "AR", "LY", " NIGHT", "F", "A", "LL", " THE"},
+		[]float32{0.36, 0.64, 0.72, 0.80, 0.96, 1.16, 1.20, 1.28, 1.48},
+		nil, // transducer output carries no durations
+		nil,
+	)
+	got := Assemble(r, Options{ModelingUnit: UnitBPE, SegmentEnd: 2})
+
+	want := []string{"AFTER", "EARLY", "NIGHTFALL", "THE"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d words %+v, want %v", len(got), got, want)
+	}
+	for i, w := range want {
+		if got[i].Word != w {
+			t.Errorf("word %d = %q, want %q", i, got[i].Word, w)
+		}
+	}
+	if !near(got[0].Start, 0.36) {
+		t.Errorf("first word starts at %.3f, want 0.36", got[0].Start)
+	}
+	// No durations: each word ends where the next begins.
+	if !near(got[0].End, 0.64) {
+		t.Errorf("first word ends at %.3f, want the next onset 0.64", got[0].End)
+	}
+}
+
+// GigaAM's CTC output, likewise captured: single characters with a literal
+// space between words and no durations at all.
+func TestAssembleRealGigaAMTokens(t *testing.T) {
+	r := rec(
+		[]string{"н", "и", "ч", "ь", "и", "х", " ", "н", "е"},
+		[]float32{0.18, 0.22, 0.26, 0.30, 0.34, 0.38, 0.50, 0.66, 0.70},
+		nil,
+		nil,
+	)
+	got := Assemble(r, Options{ModelingUnit: UnitChar, SegmentEnd: 1})
+
+	if len(got) != 2 || got[0].Word != "ничьих" || got[1].Word != "не" {
+		t.Fatalf("got %+v, want [ничьих не]", got)
+	}
+	if !near(got[0].Start, 0.18) {
+		t.Errorf("first word starts at %.3f, want 0.18", got[0].Start)
+	}
+	// The separator's frame belongs to neither word: "ничьих" ends where the
+	// space begins, not where the next letter does.
+	if !near(got[0].End, 0.50) {
+		t.Errorf("first word ends at %.3f, want the separator onset 0.50", got[0].End)
+	}
+}

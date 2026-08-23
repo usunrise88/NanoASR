@@ -47,13 +47,17 @@ func pullOne(ctx context.Context, reg *registry.Remote, id string) error {
 	interactive := isTerminal(os.Stderr)
 	shown := -1
 
+	// Drained to the close, not stopped at Done: the channel closes only once
+	// the registry can see the model, and leaving early would ask for a
+	// directory it has not noticed yet.
+	var failure string
 	for p := range progress {
 		if p.Err != "" {
-			fmt.Fprintln(os.Stderr)
-			return fmt.Errorf("%s", p.Err)
+			failure = p.Err
+			continue
 		}
 		if p.Done {
-			break
+			continue
 		}
 		// Without a terminal, one line per ten percent keeps a CI log readable
 		// instead of filling it with carriage returns.
@@ -69,6 +73,9 @@ func pullOne(ctx context.Context, reg *registry.Remote, id string) error {
 
 	if interactive {
 		fmt.Fprintf(os.Stderr, "\r%-60s\r", "")
+	}
+	if failure != "" {
+		return fmt.Errorf("%s", failure)
 	}
 
 	dir, err := reg.Dir(id)

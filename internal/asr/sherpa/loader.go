@@ -64,17 +64,26 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 				FeatureDim: m.Features.Dim,
 			},
 			ModelConfig: sonnx.OfflineModelConfig{
-				Tokens:       tokens,
-				NumThreads:   numThreads(m, opt),
-				Provider:     opt.Provider,
-				ModelType:    m.Runtime.ModelType,
-				ModelingUnit: m.ModelingUnit,
-				BpeVocab:     m.OptionalFilePath(dir, "bpe_vocab"),
-				Debug:        boolToInt(opt.Debug),
+				Tokens:     tokens,
+				NumThreads: numThreads(m, opt),
+				Provider:   opt.Provider,
+				ModelType:  m.Runtime.ModelType,
+				Debug:      boolToInt(opt.Debug),
 			},
 			DecodingMethod: decodingMethod(m),
 			MaxActivePaths: maxActivePaths(m),
 			BlankPenalty:   m.Runtime.BlankPenalty,
+		}
+
+		// modeling_unit means two different things to two different readers.
+		// Our word assembler always needs it, and gets it from the manifest.
+		// sherpa-onnx only uses it to tokenise hotwords, and refuses to start
+		// when told "bpe" without a vocabulary file to go with it — which is
+		// most transducer releases. So it is passed down only when the pair is
+		// complete.
+		if vocab := m.OptionalFilePath(dir, "bpe_vocab"); vocab != "" {
+			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
+			cfg.ModelConfig.BpeVocab = vocab
 		}
 
 		if err := fam.Configure(m, dir, &cfg.ModelConfig); err != nil {
