@@ -40,11 +40,11 @@ func (f *fakeService) Submit(context.Context, core.Request) (*core.Job, error) {
 func (f *fakeService) Job(context.Context, string) (*core.Job, error) {
 	return nil, core.ErrNotImplemented
 }
-func (f *fakeService) ListJobs(context.Context, core.JobFilter) ([]core.Job, error) {
+func (f *fakeService) ListJobs(context.Context, core.JobFilter) (*core.JobPage, error) {
 	return nil, core.ErrNotImplemented
 }
 func (f *fakeService) Cancel(context.Context, string) error { return core.ErrNotImplemented }
-func (f *fakeService) Watch(context.Context, string) (<-chan core.Job, error) {
+func (f *fakeService) Watch(context.Context, string, int64) (<-chan core.JobEvent, error) {
 	return nil, core.ErrNotImplemented
 }
 
@@ -424,24 +424,6 @@ func TestTranslationsIsHonestlyUnsupported(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501", resp.StatusCode)
-	}
-}
-
-func TestTimecodeFormatting(t *testing.T) {
-	cases := []struct {
-		seconds float64
-		want    string
-	}{
-		{0, "00:00:00,000"},
-		{0.5, "00:00:00,500"},
-		{61.25, "00:01:01,250"},
-		{3661.007, "01:01:01,007"},
-		{-1, "00:00:00,000"},
-	}
-	for _, c := range cases {
-		if got := timecode(c.seconds, ','); got != c.want {
-			t.Errorf("timecode(%.3f) = %q, want %q", c.seconds, got, c.want)
-		}
 	}
 }
 

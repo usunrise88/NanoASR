@@ -206,3 +206,17 @@ type JobFilter struct {
 	APIKeyID string
 	Admin    bool
 }
+
+// JobPage is one page of history plus the cursor that continues it. The cursor
+// is empty at the end.
+type JobPage struct {
+	Jobs       []Job  `json:"data"`
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+// JobEvent is a numbered job transition. Seq is per job and starts at 1; it is
+// what an SSE client echoes back through Last-Event-ID.
+type JobEvent struct {
+	Seq int64 `json:"seq"`
+	Job Job   `json:"job"`
+}

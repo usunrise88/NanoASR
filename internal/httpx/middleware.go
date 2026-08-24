@@ -14,15 +14,13 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/usunrise88/nanoasr/internal/core"
 )
 
 type ctxKey int
 
-const (
-	ctxRequestID ctxKey = iota
-	ctxAPIKeyID
-	ctxAPIKeyAdmin
-)
+const ctxRequestID ctxKey = iota
 
 // RequestID returns the id assigned to this request.
 func RequestID(ctx context.Context) string {
@@ -31,19 +29,11 @@ func RequestID(ctx context.Context) string {
 }
 
 // APIKeyID returns the authenticated key id, empty in open mode.
-func APIKeyID(ctx context.Context) string {
-	s, _ := ctx.Value(ctxAPIKeyID).(string)
-	return s
-}
+func APIKeyID(ctx context.Context) string { return core.CallerOf(ctx).KeyID }
 
 // IsAdmin reports whether the authenticated key may perform administrative
 // operations. Open mode has no keys and therefore no restrictions.
-func IsAdmin(ctx context.Context) bool {
-	if v, ok := ctx.Value(ctxAPIKeyAdmin).(bool); ok {
-		return v
-	}
-	return ctx.Value(ctxAPIKeyID) == nil
-}
+func IsAdmin(ctx context.Context) bool { return core.CallerOf(ctx).Admin }
 
 // Middleware is the standard decorator shape.
 type Middleware func(http.Handler) http.Handler
@@ -145,14 +135,13 @@ func Auth(keys KeyStore, publicPrefixes ...string) Middleware {
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), ctxAPIKeyID, id)
 			admin := false
 			if l, ok := keys.(adminLookup); ok {
 				if k, found := l.Lookup(id); found {
 					admin = k.Admin
 				}
 			}
-			ctx = context.WithValue(ctx, ctxAPIKeyAdmin, admin)
+			ctx := core.WithCaller(r.Context(), core.Caller{KeyID: id, Admin: admin})
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -161,19 +150,31 @@ func Auth(keys KeyStore, publicPrefixes ...string) Middleware {
 
 // RequireAdmin guards operations that change server state rather than just
 // reading it: loading, unloading and downloading models.
-func RequireAdmin() Middleware {
+//
+// deny renders the refusal. It is a parameter because the error shape belongs to
+// the dialect — problem+json for native, OpenAI's envelope for openai — and a
+// 403 in the wrong shape is a 403 the client's error handling does not
+// recognise. Passing nil takes the plain JSON default.
+func RequireAdmin(deny http.HandlerFunc) Middleware {
+	if deny == nil {
+		deny = denyAdmin
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !IsAdmin(r.Context()) {
-				w.Header().Set("Content-Type", "application/json")
-				http.Error(w,
-					`{"error":{"code":"model_forbidden","message":"this API key is not permitted to administer models"}}`,
-					http.StatusForbidden)
+				deny(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func denyAdmin(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	http.Error(w,
+		`{"error":{"code":"model_forbidden","message":"this API key is not permitted to administer models"}}`,
+		http.StatusForbidden)
 }
 
 // isPublicPath matches a prefix exactly, or as a path segment boundary, so

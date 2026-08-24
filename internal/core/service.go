@@ -14,12 +14,17 @@ type Service interface {
 	Submit(ctx context.Context, req Request) (*Job, error)
 
 	Job(ctx context.Context, id string) (*Job, error)
-	ListJobs(ctx context.Context, f JobFilter) ([]Job, error)
+	ListJobs(ctx context.Context, f JobFilter) (*JobPage, error)
 	Cancel(ctx context.Context, id string) error
 
 	// Watch streams job state transitions until the job is terminal or ctx is
 	// done. The channel is closed on return.
-	Watch(ctx context.Context, id string) (<-chan Job, error)
+	//
+	// after is the sequence number the client last saw, so a reconnect resumes
+	// rather than replays. Zero means "from the beginning". A job that has
+	// already finished yields one catch-up event and then closes: keeping a
+	// replay buffer alive for work that will never change again buys nothing.
+	Watch(ctx context.Context, id string, after int64) (<-chan JobEvent, error)
 }
 
 // ModelState is where a model sits in the download → load → ready lifecycle.

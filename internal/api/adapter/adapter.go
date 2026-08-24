@@ -24,6 +24,13 @@ type Deps struct {
 	// MaxUploadBytes is enforced by middleware too; dialects need it to report
 	// the limit in their own error shape.
 	MaxUploadBytes int64
+	// TempDir is where uploads are spooled, reported by the config endpoint.
+	TempDir string
+	// ConfigSnapshot returns the effective configuration with secrets already
+	// redacted. It is a function rather than a value so a dialect cannot be
+	// handed the live struct and reach into it: what comes back is whatever the
+	// server decided is safe to show.
+	ConfigSnapshot func() any
 }
 
 // Adapter is one API dialect.

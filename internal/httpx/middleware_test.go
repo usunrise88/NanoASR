@@ -25,7 +25,7 @@ func authedServer(t *testing.T, public ...string) http.Handler {
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(APIKeyID(r.Context())))
 	})
-	mux.Handle("/v1/admin", RequireAdmin()(http.HandlerFunc(
+	mux.Handle("/v1/admin", RequireAdmin(nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })))
 
 	return Chain(mux, Auth(store, public...))
@@ -114,7 +114,7 @@ func TestRequireAdminSeparatesReadFromAdminister(t *testing.T) {
 // Open mode installs no Auth middleware at all, so nothing restricts a request
 // that never passed through it.
 func TestIsAdminDefaultsToTrueWithoutAuthentication(t *testing.T) {
-	handler := RequireAdmin()(http.HandlerFunc(
+	handler := RequireAdmin(nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 
 	w := httptest.NewRecorder()

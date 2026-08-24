@@ -17,6 +17,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/asr"
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/core"
+	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pool"
 	"github.com/usunrise88/nanoasr/internal/vad"
 	"github.com/usunrise88/nanoasr/internal/words"
@@ -72,6 +73,10 @@ type Pipeline struct {
 	models    *pool.Pool
 	governor  *pool.Governor
 	opt       Options
+
+	// Supplied by Attach; nil on a server built without a queue.
+	queue *job.Queue
+	store job.Store
 }
 
 func New(decoder *audio.Router, segmenter vad.Segmenter, models *pool.Pool, governor *pool.Governor, opt Options) *Pipeline {
@@ -85,8 +90,20 @@ func New(decoder *audio.Router, segmenter vad.Segmenter, models *pool.Pool, gove
 }
 
 func (p *Pipeline) Transcribe(ctx context.Context, req core.Request) (*core.Result, error) {
+	return p.transcribe(ctx, newID("txn"), req)
+}
+
+// Run is job.Runner: the same pipeline, told which id to report under.
+//
+// A queued job was given its id when it was accepted, and progress events,
+// stage reports and the final result all have to carry that id rather than a
+// fresh one, or an SSE client watching job_abc never hears about its own work.
+func (p *Pipeline) Run(ctx context.Context, id string, req core.Request) (*core.Result, error) {
+	return p.transcribe(ctx, id, req)
+}
+
+func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) (*core.Result, error) {
 	started := time.Now()
-	id := newID("txn")
 	stages := stageTimer{observer: p.opt.Observer, ctx: ctx, jobID: id}
 
 	modelID, err := p.resolveModel(req)
@@ -381,28 +398,138 @@ func averageConfidence(ws []core.Word) float64 {
 	return sum / float64(n)
 }
 
-// The asynchronous surface belongs to the queue, which is a later milestone.
-// Returning a clear not_implemented is better than a half-working queue that
-// loses jobs on restart.
-
-func (p *Pipeline) Submit(context.Context, core.Request) (*core.Job, error) {
-	return nil, core.ErrNotImplemented
+// The asynchronous surface. The pipeline owns core.Service, so it is what a
+// dialect talks to; the queue and the store do the work behind it.
+//
+// Attach supplies them after construction, because the queue needs the pipeline
+// as its Runner and the pipeline needs the queue to submit — a cycle no pair of
+// constructors can express. Doing it in one place in wire.go is clearer than
+// inventing an interface whose only purpose is to break the knot.
+func (p *Pipeline) Attach(q *job.Queue, store job.Store) {
+	p.queue = q
+	p.store = store
 }
 
-func (p *Pipeline) Job(context.Context, string) (*core.Job, error) {
-	return nil, core.ErrNotImplemented
+func (p *Pipeline) Submit(ctx context.Context, req core.Request) (*core.Job, error) {
+	if p.queue == nil {
+		return nil, core.Errorf(core.CodeNotImplemented, "this server has no job queue")
+	}
+	caller := core.CallerOf(ctx)
+	req.APIKeyID = caller.KeyID
+
+	// Interactive work jumps the batch backlog: someone waiting in a browser
+	// should not queue behind a nightly bulk run.
+	priority := job.PriorityBatch
+	if req.Source == core.SourceUI {
+		priority = job.PriorityInteractive
+	}
+	return p.queue.Submit(ctx, req, priority)
 }
 
-func (p *Pipeline) ListJobs(context.Context, core.JobFilter) ([]core.Job, error) {
-	return nil, core.ErrNotImplemented
+func (p *Pipeline) Job(ctx context.Context, id string) (*core.Job, error) {
+	rec, err := p.record(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	j := rec.Job
+	if j.Status == core.JobQueued && p.queue != nil {
+		j.Position = p.queue.Position(id)
+	}
+	return &j, nil
 }
 
-func (p *Pipeline) Cancel(context.Context, string) error {
-	return core.ErrNotImplemented
+func (p *Pipeline) ListJobs(ctx context.Context, f core.JobFilter) (*core.JobPage, error) {
+	if p.store == nil {
+		return nil, core.Errorf(core.CodeNotImplemented, "this server has no job history")
+	}
+	// The ownership rule is applied here rather than in a handler, so a dialect
+	// cannot leave it out by omission.
+	caller := core.CallerOf(ctx)
+	f.APIKeyID = caller.KeyID
+	f.Admin = caller.Admin
+
+	jobs, next, err := p.store.List(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	if p.queue != nil {
+		for i := range jobs {
+			if jobs[i].Status == core.JobQueued {
+				jobs[i].Position = p.queue.Position(jobs[i].ID)
+			}
+		}
+	}
+	return &core.JobPage{Jobs: jobs, NextCursor: next}, nil
 }
 
-func (p *Pipeline) Watch(context.Context, string) (<-chan core.Job, error) {
-	return nil, core.ErrNotImplemented
+func (p *Pipeline) Cancel(ctx context.Context, id string) error {
+	rec, err := p.record(ctx, id)
+	if err != nil {
+		return err
+	}
+	if job.Terminal(rec.Job.Status) {
+		return nil // already over; cancelling it again changes nothing
+	}
+	return p.queue.Cancel(ctx, id)
+}
+
+func (p *Pipeline) Watch(ctx context.Context, id string, after int64) (<-chan core.JobEvent, error) {
+	rec, err := p.record(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	events, cancel, live := p.queue.Hub().Subscribe(id, after)
+	if !live {
+		// Finished, or finished between the read above and here. One catch-up
+		// event carrying the stored state, then the stream is over.
+		out := make(chan core.JobEvent, 1)
+		out <- core.JobEvent{Seq: after + 1, Job: rec.Job}
+		close(out)
+		return out, nil
+	}
+
+	out := make(chan core.JobEvent)
+	go func() {
+		defer close(out)
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				select {
+				case out <- core.JobEvent{Seq: ev.Seq, Job: ev.Job}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+// record reads a job and enforces the ownership rule.
+//
+// Someone else's job answers job_not_found rather than 403: a 403 confirms that
+// a job with that id exists, which turns id guessing into a census of other
+// people's activity.
+func (p *Pipeline) record(ctx context.Context, id string) (job.Record, error) {
+	if p.store == nil || p.queue == nil {
+		return job.Record{}, core.Errorf(core.CodeNotImplemented, "this server has no job queue")
+	}
+	rec, err := p.store.Get(ctx, id)
+	if err != nil {
+		return job.Record{}, err
+	}
+	caller := core.CallerOf(ctx)
+	if !caller.Admin && rec.APIKeyID != caller.KeyID {
+		return job.Record{}, core.Errorf(core.CodeJobNotFound, "no such job: %s", id)
+	}
+	return rec, nil
 }
 
 var _ core.Service = (*Pipeline)(nil)

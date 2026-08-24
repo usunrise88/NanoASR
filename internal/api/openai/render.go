@@ -2,11 +2,10 @@ package openai
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
+	"github.com/usunrise88/nanoasr/internal/api/subtitle"
 	"github.com/usunrise88/nanoasr/internal/core"
 )
 
@@ -80,9 +79,9 @@ func render(w http.ResponseWriter, res *core.Result, format string, wantWords bo
 	case formatText:
 		writeText(w, "text/plain; charset=utf-8", res.Text+"\n")
 	case formatSRT:
-		writeText(w, "application/x-subrip; charset=utf-8", renderSRT(res))
+		writeText(w, subtitle.SRTContentType, subtitle.SRT(res))
 	case formatVTT:
-		writeText(w, "text/vtt; charset=utf-8", renderVTT(res))
+		writeText(w, subtitle.VTTContentType, subtitle.VTT(res))
 	case formatVerboseJSON:
 		writeJSON(w, http.StatusOK, buildVerbose(res, wantWords))
 	default:
@@ -135,36 +134,6 @@ func logprob(confidence float64) float64 {
 		return 0
 	}
 	return ln(confidence)
-}
-
-func renderSRT(res *core.Result) string {
-	var b strings.Builder
-	for i, s := range res.Segments {
-		fmt.Fprintf(&b, "%d\n%s --> %s\n%s\n\n",
-			i+1, timecode(s.Start, ','), timecode(s.End, ','), s.Text)
-	}
-	return b.String()
-}
-
-func renderVTT(res *core.Result) string {
-	var b strings.Builder
-	b.WriteString("WEBVTT\n\n")
-	for _, s := range res.Segments {
-		fmt.Fprintf(&b, "%s --> %s\n%s\n\n",
-			timecode(s.Start, '.'), timecode(s.End, '.'), s.Text)
-	}
-	return b.String()
-}
-
-// timecode formats seconds as HH:MM:SS,mmm or HH:MM:SS.mmm — SRT and WebVTT
-// differ only in that separator.
-func timecode(seconds float64, sep rune) string {
-	if seconds < 0 {
-		seconds = 0
-	}
-	total := int(seconds)
-	ms := int((seconds - float64(total)) * 1000)
-	return fmt.Sprintf("%02d:%02d:%02d%c%03d", total/3600, (total%3600)/60, total%60, sep, ms)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
