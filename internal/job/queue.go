@@ -5,6 +5,11 @@
 // work it cannot start. An unbounded queue on a CPU-bound service converts a
 // throughput problem into a timeout problem, and an unbounded spool converts it
 // into a full disk.
+//
+// Admission is a reservation, not a check. Deciding "there is room" and then
+// taking that room are separated by a file copy and a database write, so a bare
+// check lets every caller in the window pass a test only one of them should
+// have. Reserve first, convert the reservation into a queued item afterwards.
 package job
 
 import (
@@ -74,15 +79,15 @@ type Notifier interface {
 
 // Queue dispatches items to a fixed number of workers.
 type Queue struct {
-	mu      sync.Mutex
+	mu   sync.Mutex
+	cond *sync.Cond
+
 	items   []*Item
 	running map[string]*Item
 	stopped bool
-
-	// tokens carries one entry per queued item, so a worker never has to poll.
-	// Its capacity is the queue size, which is also the maximum number of
-	// outstanding tokens.
-	tokens chan struct{}
+	// admitted counts accepted work that is not in items yet, so that the
+	// window between accepting a job and queueing it cannot be used twice.
+	admitted int
 
 	store    Store
 	runner   Runner
@@ -96,8 +101,7 @@ type Queue struct {
 	workers    int
 	maxRunTime time.Duration
 
-	wg   sync.WaitGroup
-	stop chan struct{}
+	wg sync.WaitGroup
 }
 
 // Options configures the queue.
@@ -128,7 +132,7 @@ func New(store Store, runner Runner, opt Options) *Queue {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	return &Queue{
+	q := &Queue{
 		store:      store,
 		runner:     runner,
 		obs:        opt.Observer,
@@ -140,9 +144,9 @@ func New(store Store, runner Runner, opt Options) *Queue {
 		workers:    opt.Workers,
 		maxRunTime: opt.MaxRunTime,
 		running:    map[string]*Item{},
-		tokens:     make(chan struct{}, opt.Size),
-		stop:       make(chan struct{}),
 	}
+	q.cond = sync.NewCond(&q.mu)
+	return q
 }
 
 // Depth is the number of queued items.
@@ -162,32 +166,27 @@ func (q *Queue) Hub() *Hub { return q.hub }
 func (q *Queue) Submit(ctx context.Context, req core.Request, priority Priority) (*core.Job, error) {
 	id := NewID()
 
-	q.mu.Lock()
-	if q.stopped {
-		q.mu.Unlock()
-		return nil, core.Errorf(core.CodeDraining, "the server is shutting down")
+	if err := q.reserve(); err != nil {
+		return nil, err
 	}
-	if len(q.items) >= q.size {
-		q.mu.Unlock()
-		return nil, core.Errorf(core.CodeQueueFull,
-			"the queue is full (%d waiting); retry shortly", q.size)
-	}
-	q.mu.Unlock()
-
 	if q.spool == nil {
+		q.unreserve()
 		return nil, core.Errorf(core.CodeInternal, "the queue has no spool directory")
 	}
+
 	var size int64
 	if req.Audio != nil {
 		size = req.Audio.Size()
 	}
 	if err := q.spool.Reserve(id, size); err != nil {
+		q.unreserve()
 		return nil, err
 	}
 
 	audio, err := q.spool.Adopt(id, req.Audio)
 	if err != nil {
 		q.spool.Release(id)
+		q.unreserve()
 		return nil, err
 	}
 	req.Audio = audio
@@ -195,6 +194,7 @@ func (q *Queue) Submit(ctx context.Context, req core.Request, priority Priority)
 	rec := NewRecord(id, req, priority, time.Now())
 	if err := q.store.Create(ctx, rec); err != nil {
 		q.spool.Remove(id)
+		q.unreserve()
 		return nil, core.Errorf(core.CodeInternal, "cannot record the job").WithCause(err)
 	}
 
@@ -207,22 +207,59 @@ func (q *Queue) Submit(ctx context.Context, req core.Request, priority Priority)
 	return &job, nil
 }
 
-// enqueue inserts an item and wakes one worker.
+// reserve claims one of the queue's slots for work that is being accepted.
+//
+// Both the waiting items and the reservations count against the size: a caller
+// whose audio is still being spooled has already been told yes.
+func (q *Queue) reserve() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.stopped {
+		return core.Errorf(core.CodeDraining, "the server is shutting down")
+	}
+	if len(q.items)+q.admitted >= q.size {
+		return core.Errorf(core.CodeQueueFull,
+			"the queue is full (%d waiting); retry shortly", q.size)
+	}
+	q.admitted++
+	return nil
+}
+
+// resume claims a slot for work a previous process already accepted.
+//
+// It cannot be refused, and that is the point: queue_size limits how much new
+// work is taken on, not how much already-accepted work is carried forward. A
+// job dropped here would have its audio swept away while the database still
+// called it queued.
+func (q *Queue) resume() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.admitted++
+}
+
+// unreserve gives a slot back when accepting the job failed.
+func (q *Queue) unreserve() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.admitted > 0 {
+		q.admitted--
+	}
+}
+
+// enqueue turns a reservation into a queued item and wakes a worker.
 func (q *Queue) enqueue(item *Item) {
 	q.mu.Lock()
+	if q.admitted > 0 {
+		q.admitted--
+	}
 	q.items = append(q.items, item)
 	q.sortLocked()
 	depth := len(q.items)
+	q.cond.Broadcast()
 	q.mu.Unlock()
 
 	q.obs.QueueDepth(depth)
-	select {
-	case q.tokens <- struct{}{}:
-	default:
-		// Cannot happen while len(items) <= size, and if it ever did the item
-		// would still be picked up by the next worker wake-up.
-		q.log.Warn("queue token buffer is full", "depth", depth)
-	}
 }
 
 // sortLocked keeps the highest priority first and, within a priority, the oldest
@@ -260,27 +297,32 @@ func (q *Queue) Start() {
 func (q *Queue) work() {
 	defer q.wg.Done()
 	for {
-		select {
-		case <-q.stop:
+		item, ok := q.next()
+		if !ok {
 			return
-		case <-q.tokens:
-			item, ok := q.pop()
-			if !ok {
-				// The token belonged to an item that was cancelled while it
-				// waited. Nothing to do.
-				continue
-			}
-			q.run(item)
 		}
+		q.run(item)
 	}
 }
 
-func (q *Queue) pop() (*Item, bool) {
+// next blocks until there is work or the queue is shutting down.
+//
+// Waiting on the condition rather than on a channel of wake-up tokens is what
+// keeps the queue and the wake-ups from disagreeing: the items are the only
+// state, so an item cannot exist with nothing to wake a worker for it.
+func (q *Queue) next() (*Item, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.items) == 0 {
+
+	for len(q.items) == 0 && !q.stopped {
+		q.cond.Wait()
+	}
+	if q.stopped {
+		// Whatever is still queued stays queued, in memory and in the
+		// database; the next process resumes it.
 		return nil, false
 	}
+
 	item := q.items[0]
 	q.items = q.items[1:]
 	q.running[item.ID] = item
@@ -410,7 +452,11 @@ func (q *Queue) Cancel(ctx context.Context, id string) error {
 	}
 	if item == nil {
 		q.mu.Unlock()
-		return nil // not ours to cancel; the caller decides what that means
+		// Not in memory does not mean not cancellable: a job this process
+		// never enqueued still has a row and a spooled file, and answering
+		// "done" without touching either would leave it queued forever while
+		// the client was told otherwise.
+		return q.cancelStored(ctx, id)
 	}
 	item.canceled = true
 	cancel := item.cancel
@@ -447,31 +493,38 @@ func (q *Queue) Recover(ctx context.Context) (map[string]int64, error) {
 		return nil, err
 	}
 
+	// Every queued job is carried forward, including any beyond queue_size:
+	// that limit governs what new work is accepted, not what a previous process
+	// already accepted. Dropping one here would leave its row queued while
+	// Sweep, reading this map as the whole truth, deleted its audio.
 	live := make(map[string]int64, len(pending))
 	for _, rec := range pending {
-		if len(live) >= q.size {
-			q.log.Warn("more queued jobs than the queue holds; the rest stay queued until there is room",
-				"recovered", len(live), "size", q.size)
-			break
-		}
 		audio := q.spool.Source(rec.Job.ID, rec.Job.Filename, rec.AudioBytes)
-		if _, err := audio.Open(); err != nil {
+		f, err := audio.Open()
+		if err != nil {
 			// The audio is gone, so the job cannot run. Say so instead of
 			// leaving it queued forever.
 			q.failRecovered(ctx, rec, "the audio of this job did not survive the restart")
 			continue
 		}
-		req := rec.Params.Request(audio, rec.APIKeyID)
+		_ = f.Close()
+
+		live[rec.Job.ID] = rec.AudioBytes
+		q.resume()
 		q.enqueue(&Item{
 			ID:       rec.Job.ID,
-			Request:  req,
+			Request:  rec.Params.Request(audio, rec.APIKeyID),
 			Priority: rec.Priority,
 			Enqueued: rec.Job.CreatedAt,
 		})
-		live[rec.Job.ID] = rec.AudioBytes
 	}
 	if len(live) > 0 {
 		q.log.Info("resumed queued jobs", "count", len(live))
+	}
+	if len(live) > q.size {
+		q.log.Warn("more queued jobs were resumed than queue_size allows",
+			"resumed", len(live), "queue_size", q.size,
+			"note", "they will run, but no new work is accepted until the backlog drains")
 	}
 	return live, nil
 }
@@ -498,7 +551,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	q.stopped = true
-	close(q.stop)
+	q.cond.Broadcast()
 	q.mu.Unlock()
 
 	done := make(chan struct{})
@@ -515,6 +568,27 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 		<-done
 		return ctx.Err()
 	}
+}
+
+// cancelStored cancels a job the queue does not hold, straight in the store.
+func (q *Queue) cancelStored(ctx context.Context, id string) error {
+	rec, err := q.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if Terminal(rec.Job.Status) {
+		return nil // already over; cancelling it again changes nothing
+	}
+
+	finished := time.Now()
+	rec.Job.Status = core.JobCanceled
+	rec.Job.FinishedAt = &finished
+	if err := q.store.Update(ctx, rec); err != nil {
+		return core.Errorf(core.CodeInternal, "cannot cancel the job").WithCause(err)
+	}
+	q.hub.Publish(rec.Job)
+	q.spool.Remove(id)
+	return nil
 }
 
 // draining reports whether Shutdown has been called.

@@ -53,22 +53,34 @@ type APIKey struct {
 	// RPS caps this key's request rate. Zero means unlimited, which is the
 	// right default for a key an operator issued to themselves.
 	RPS float64 `yaml:"rps"`
+	// Priority is "interactive" or "batch" (the default). Interactive work
+	// overtakes a batch backlog.
+	//
+	// It belongs to the key rather than to the request because a request
+	// parameter would let every client call itself urgent. The key the test UI
+	// uses is the one to mark interactive.
+	Priority string `yaml:"priority"`
 }
+
+// Interactive reports whether this key's jobs overtake the batch backlog.
+func (k APIKey) Interactive() bool { return k.Priority == PriorityInteractive }
+
+// Job priorities a key may be given.
+const (
+	PriorityBatch       = "batch"
+	PriorityInteractive = "interactive"
+)
 
 type API struct {
 	Dialects []string `yaml:"dialects"`
-	CORS     CORS     `yaml:"cors"`
 }
 
-type CORS struct {
-	Enabled bool     `yaml:"enabled"`
-	Origins []string `yaml:"origins"`
-}
-
+// UI has no require_auth knob. Whether a key is needed is not a UI setting: the
+// SPA finds out by getting 401 from the first API call it makes, which is the
+// same answer the server would have had to publish anyway, arriving sooner.
 type UI struct {
-	Enabled     bool   `yaml:"enabled"`
-	Path        string `yaml:"path"`
-	RequireAuth bool   `yaml:"require_auth"`
+	Enabled bool   `yaml:"enabled"`
+	Path    string `yaml:"path"`
 }
 
 type Audio struct {
@@ -79,7 +91,6 @@ type Audio struct {
 	MaxDuration      Duration `yaml:"max_duration"`
 	TargetSampleRate int      `yaml:"target_sample_rate"`
 	ChannelMode      string   `yaml:"channel_mode"`
-	Denoise          bool     `yaml:"denoise"`
 }
 
 type VAD struct {
@@ -165,13 +176,15 @@ type Clustering struct {
 	Threshold   float32 `yaml:"threshold"`
 }
 
+// Storage has no keep_audio_ttl knob, and that is the point.
+//
+// Uploaded audio outlives its job by exactly nothing: internal/spool deletes it
+// when the job reaches a terminal state, and startup cleanup deletes whatever a
+// crash left behind. Zero was the only supported value of that setting, so
+// removing it turns decision §15 from a default into a property (SPEC §2.1).
 type Storage struct {
 	DBPath  string `yaml:"db_path"`
 	TempDir string `yaml:"temp_dir"`
-	// KeepAudioTTL of 0 means uploaded audio never outlives the active job.
-	// This is the default and the reason the UI plays the local File instead
-	// of asking the server for audio (SPEC §2.1).
-	KeepAudioTTL Duration `yaml:"keep_audio_ttl"`
 }
 
 type Log struct {

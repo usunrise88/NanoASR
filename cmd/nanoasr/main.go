@@ -170,7 +170,6 @@ func serve(args []string) error {
 	if err := adapter.MountAll(mux, cfg.API.Dialects, srv.service, adapter.Deps{
 		Models:         srv.models,
 		MaxUploadBytes: cfg.Server.MaxUploadBytes,
-		TempDir:        cfg.Storage.TempDir,
 		ConfigSnapshot: snapshot,
 	}); err != nil {
 		return err
@@ -182,7 +181,7 @@ func serve(args []string) error {
 			log.Warn("ui not mounted", "err", err)
 		} else {
 			mux.Handle(cfg.UI.Path+"/", h)
-			log.Info("ui mounted", "path", cfg.UI.Path, "auth_required", cfg.UI.RequireAuth)
+			log.Info("ui mounted", "path", cfg.UI.Path)
 		}
 	}
 
@@ -389,6 +388,7 @@ func keySpecs(keys []config.APIKey) []httpx.KeySpec {
 	for _, k := range keys {
 		out = append(out, httpx.KeySpec{
 			Name: k.Name, Secret: k.Key, Admin: k.Admin, RPS: k.RPS,
+			Interactive: k.Interactive(),
 		})
 	}
 	return out

@@ -52,8 +52,8 @@ server:
   shutdown_grace: 45s
 audio:
   max_duration: 2h
-storage:
-  keep_audio_ttl: 0
+asr:
+  idle_ttl: 0
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +65,10 @@ storage:
 	if cfg.Audio.MaxDuration.Duration != 2*time.Hour {
 		t.Errorf("max_duration = %v", cfg.Audio.MaxDuration)
 	}
-	if cfg.Storage.KeepAudioTTL.Duration != 0 {
-		t.Errorf("keep_audio_ttl = %v, want 0 from a bare number", cfg.Storage.KeepAudioTTL)
+	// A bare number is a duration too: "0" is how an operator naturally writes
+	// "off", and refusing it would be pedantry.
+	if cfg.ASR.IdleTTL.Duration != 0 {
+		t.Errorf("idle_ttl = %v, want 0 from a bare number", cfg.ASR.IdleTTL)
 	}
 }
 

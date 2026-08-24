@@ -135,13 +135,14 @@ func Auth(keys KeyStore, publicPrefixes ...string) Middleware {
 				return
 			}
 
-			admin := false
+			caller := core.Caller{KeyID: id}
 			if l, ok := keys.(adminLookup); ok {
 				if k, found := l.Lookup(id); found {
-					admin = k.Admin
+					caller.Admin = k.Admin
+					caller.Interactive = k.Interactive
 				}
 			}
-			ctx := core.WithCaller(r.Context(), core.Caller{KeyID: id, Admin: admin})
+			ctx := core.WithCaller(r.Context(), caller)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

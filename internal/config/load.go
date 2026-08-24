@@ -131,6 +131,16 @@ func (c *Config) Validate() error {
 			if strings.TrimSpace(k.Key) == "" {
 				return fmt.Errorf("auth.keys[%d] (%q) has no key value", i, k.Name)
 			}
+			switch k.Priority {
+			case "", PriorityBatch, PriorityInteractive:
+			default:
+				return fmt.Errorf(
+					"auth.keys[%d] (%q): priority must be %q or %q, got %q",
+					i, k.Name, PriorityInteractive, PriorityBatch, k.Priority)
+			}
+			if k.RPS < 0 {
+				return fmt.Errorf("auth.keys[%d] (%q): rps must not be negative", i, k.Name)
+			}
 		}
 	case "open":
 		// An unauthenticated listener on a routable address is not a

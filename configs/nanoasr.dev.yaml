@@ -17,14 +17,10 @@ auth:
 
 api:
   dialects: [openai, native]
-  cors:
-    enabled: false
-    origins: []
 
 ui:
   enabled: true
   path: /ui
-  require_auth: false
 
 audio:
   # Leave empty to run without ffmpeg: WAV/PCM still works, everything else
@@ -34,7 +30,6 @@ audio:
   max_duration: 30m
   target_sample_rate: 16000
   channel_mode: downmix         # downmix | first | split
-  denoise: false
 
 vad:
   enabled: true
@@ -98,10 +93,9 @@ diarization:
 
 storage:
   db_path: ./.nanoasr.db
+  # Empty picks a nanoasr-spool directory under the system temp dir. Queued
+  # audio lives here and nowhere else, and only until its job finishes.
   temp_dir: ""
-  # 0 means uploaded audio never outlives the active job. The UI player uses
-  # the local file in the browser, so nothing here is needed for playback.
-  keep_audio_ttl: 0
 
 log:
   level: debug

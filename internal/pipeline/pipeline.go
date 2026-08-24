@@ -136,7 +136,12 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 		return nil, err
 	}
 
-	result := p.assemble(id, lease, req, pcm, segments, recognitions)
+	// Timed like the others: assembling words from tokens is measurable work on
+	// a long file, and a stage missing from stages_ms reads as time nobody can
+	// account for.
+	result, _ := runStage(&stages, "assemble", func() (*core.Result, error) {
+		return p.assemble(id, lease, req, pcm, segments, recognitions), nil
+	})
 	result.Warnings = append(result.Warnings, p.unsupportedOptions(req, lease)...)
 
 	if req.Strict {
@@ -424,10 +429,11 @@ func (p *Pipeline) Submit(ctx context.Context, req core.Request) (*core.Job, err
 	caller := core.CallerOf(ctx)
 	req.APIKeyID = caller.KeyID
 
-	// Interactive work jumps the batch backlog: someone waiting in a browser
-	// should not queue behind a nightly bulk run.
+	// Interactive work jumps the batch backlog: someone waiting at a screen
+	// should not queue behind a nightly bulk run. Which keys count as a person
+	// is the operator's call, not the client's — see core.Caller.
 	priority := job.PriorityBatch
-	if req.Source == core.SourceUI {
+	if caller.Interactive {
 		priority = job.PriorityInteractive
 	}
 	return p.queue.Submit(ctx, req, priority)

@@ -338,12 +338,38 @@ func TestCancelStopsARunningJob(t *testing.T) {
 	}
 }
 
-func TestCancelOfAnUnknownJobIsNotAnError(t *testing.T) {
+// Cancel resolves the job through the store rather than only through memory, so
+// an id that exists nowhere is reported as such instead of answered "done".
+// Callers reach this through pipeline.Cancel, which has already checked
+// existence and ownership, so in practice this is a purge racing a request.
+func TestCancelOfAnUnknownJobSaysSo(t *testing.T) {
 	f := newFixture(t, runnerFunc(func(context.Context, string, core.Request) (*core.Result, error) {
 		return &core.Result{}, nil
 	}), func(o *Options) { o.Workers = 0 })
-	if err := f.q.Cancel(context.Background(), "job_missing"); err != nil {
+
+	err := f.q.Cancel(context.Background(), "job_missing")
+	if core.AsError(err).Code != core.CodeJobNotFound {
+		t.Fatalf("Cancel = %v, want job_not_found", err)
+	}
+}
+
+// A finished job is not cancellable, and saying so is not an error: the client
+// asked for it to stop, and it has.
+func TestCancelOfAFinishedJobIsANoOp(t *testing.T) {
+	f := newFixture(t, runnerFunc(func(context.Context, string, core.Request) (*core.Result, error) {
+		return &core.Result{}, nil
+	}), func(o *Options) { o.Workers = 0 })
+
+	rec := NewRecord("job_done", request(8), PriorityBatch, time.Now())
+	rec.Job.Status = core.JobSucceeded
+	if err := f.store.Create(context.Background(), rec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := f.q.Cancel(context.Background(), "job_done"); err != nil {
 		t.Fatalf("Cancel: %v", err)
+	}
+	if got := f.store.status("job_done"); got != core.JobSucceeded {
+		t.Errorf("status = %q; cancelling rewrote a finished job", got)
 	}
 }
 
@@ -567,5 +593,155 @@ func TestPositionReflectsPriorityOrder(t *testing.T) {
 	}
 	if got := f.q.Position("job_missing"); got != 0 {
 		t.Errorf("unknown position = %d, want 0", got)
+	}
+}
+
+// --- regressions ------------------------------------------------------------
+
+// Submit checked the queue's length under the mutex and appended after
+// releasing it, so concurrent submissions could both pass a check that only one
+// of them should have. Overshooting by one was not itself the damage: the
+// wake-up channel held exactly Size tokens, so the surplus token was dropped and
+// the job it belonged to waited for a wake-up that only somebody else's
+// submission could deliver. With no further traffic it waited forever, holding
+// its audio and its share of the byte budget.
+func TestConcurrentSubmitsNeitherOvershootNorStrand(t *testing.T) {
+	const size = 4
+
+	release := make(chan struct{})
+	ran := make(chan string, 32)
+	f := newFixture(t, runnerFunc(func(_ context.Context, id string, _ core.Request) (*core.Result, error) {
+		<-release
+		ran <- id
+		return &core.Result{}, nil
+	}), func(o *Options) { o.Size = size; o.Workers = 1 })
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		accepted []string
+		refused  int
+	)
+	for range size * 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			j, err := f.q.Submit(context.Background(), request(8), PriorityBatch)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				accepted = append(accepted, j.ID)
+			case core.AsError(err).Code == core.CodeQueueFull:
+				refused++
+			default:
+				t.Errorf("Submit: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if len(accepted) > size {
+		t.Errorf("accepted %d jobs into a queue of %d", len(accepted), size)
+	}
+	if refused == 0 {
+		t.Fatal("nothing was refused; the test did not create contention")
+	}
+
+	// Every accepted job must actually run. This is the part that used to fail:
+	// the surplus job stayed in the queue with no token to wake a worker for it.
+	f.q.Start()
+	close(release)
+
+	seen := map[string]bool{}
+	deadline := time.After(5 * time.Second)
+	for len(seen) < len(accepted) {
+		select {
+		case id := <-ran:
+			seen[id] = true
+		case <-deadline:
+			t.Fatalf("only %d of %d accepted jobs ran; the rest were stranded",
+				len(seen), len(accepted))
+		}
+	}
+}
+
+// Recover stopped at the queue's capacity and left the remaining queued jobs out
+// of the live set it returns. Sweep then read that set as the whole truth and
+// deleted their audio, while the database still called them queued — so the next
+// start failed them for audio that the previous start had removed. Owning the
+// audio is not conditional on fitting in memory right now.
+func TestRecoverKeepsTheAudioOfEveryQueuedJob(t *testing.T) {
+	const size = 2
+
+	f := newFixture(t, runnerFunc(func(context.Context, string, core.Request) (*core.Result, error) {
+		return &core.Result{}, nil
+	}), func(o *Options) { o.Size = size; o.Workers = 0 })
+
+	var ids []string
+	for range size {
+		j, err := f.q.Submit(context.Background(), request(16), PriorityBatch)
+		if err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+		ids = append(ids, j.ID)
+	}
+	// A third queued job, as a previous process with a larger queue_size would
+	// have left behind.
+	extra := NewRecord("job_extra", request(16), PriorityBatch, time.Now())
+	if err := f.store.Create(context.Background(), extra); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := os.WriteFile(f.sp.Path("job_extra"), make([]byte, 16), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ids = append(ids, "job_extra")
+
+	next := New(f.store, f.q.runner, Options{
+		Size: size, Spool: spool.New(f.dir, 0), Hub: NewHub(16),
+	})
+	live, err := next.Recover(context.Background())
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if _, err := next.spool.Sweep(live); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	for _, id := range ids {
+		if _, err := os.Stat(next.spool.Path(id)); err != nil {
+			t.Errorf("the audio of queued job %s was swept away: %v", id, err)
+		}
+		if f.store.status(id) != core.JobQueued {
+			t.Errorf("job %s became %q during recovery", id, f.store.status(id))
+		}
+	}
+}
+
+// Cancel only looked in memory. A job the queue does not hold — recovered by a
+// process that has since restarted, or simply never enqueued — answered nil,
+// which the handler reported as a successful cancellation of a job that stayed
+// queued. Cancelling must not depend on what the queue happens to remember.
+func TestCancelWritesTheTerminalStateForAJobTheQueueDoesNotHold(t *testing.T) {
+	f := newFixture(t, runnerFunc(func(context.Context, string, core.Request) (*core.Result, error) {
+		return &core.Result{}, nil
+	}), func(o *Options) { o.Workers = 0 })
+
+	rec := NewRecord("job_orphaned", request(32), PriorityBatch, time.Now())
+	if err := f.store.Create(context.Background(), rec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := os.WriteFile(f.sp.Path("job_orphaned"), make([]byte, 32), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := f.q.Cancel(context.Background(), "job_orphaned"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if got := f.store.status("job_orphaned"); got != core.JobCanceled {
+		t.Errorf("status = %q, want canceled", got)
+	}
+	if _, err := os.Stat(f.sp.Path("job_orphaned")); !os.IsNotExist(err) {
+		t.Error("cancelling left the audio behind")
 	}
 }

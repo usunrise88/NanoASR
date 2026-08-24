@@ -19,13 +19,10 @@ import (
 // pool, the registry and the queue: a dialect that needs them is a sign the
 // capability belongs in core.Service instead.
 type Deps struct {
-	Models   core.ModelService
-	Observer core.Observer
+	Models core.ModelService
 	// MaxUploadBytes is enforced by middleware too; dialects need it to report
 	// the limit in their own error shape.
 	MaxUploadBytes int64
-	// TempDir is where uploads are spooled, reported by the config endpoint.
-	TempDir string
 	// ConfigSnapshot returns the effective configuration with secrets already
 	// redacted. It is a function rather than a value so a dialect cannot be
 	// handed the live struct and reach into it: what comes back is whatever the

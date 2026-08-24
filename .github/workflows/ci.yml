@@ -78,7 +78,10 @@ jobs:
       - run: ./scripts/fetch-dev-models.sh
       - run: ./scripts/fetch-testdata.sh
       - name: transcribe for real
-        run: go test -tags integration ./... -v -run "Integration|M1Report"
+        # No -run filter: the build tag already selects the integration tests,
+        # and a name filter silently excluded every test added after it was
+        # written — the whole M3 job suite never ran here.
+        run: go test -tags integration ./... -v
 
   docker:
     runs-on: ubuntu-latest

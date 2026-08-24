@@ -32,8 +32,8 @@ func (*Adapter) Name() string { return "native" }
 
 func (a *Adapter) Mount(mux *http.ServeMux, svc core.Service, deps adapter.Deps) {
 	// Transcription: synchronous and queued.
-	mux.HandleFunc("POST /api/v1/transcribe", a.transcribe(svc, deps))
-	mux.HandleFunc("POST /api/v1/jobs", a.submit(svc, deps))
+	mux.HandleFunc("POST /api/v1/transcribe", a.transcribe(svc))
+	mux.HandleFunc("POST /api/v1/jobs", a.submit(svc))
 	mux.HandleFunc("GET /api/v1/jobs", a.listJobs(svc))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", a.job(svc))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/events", a.jobEvents(svc)) // SSE
@@ -62,7 +62,7 @@ func (a *Adapter) Mount(mux *http.ServeMux, svc core.Service, deps adapter.Deps)
 
 // --- transcription ----------------------------------------------------------
 
-func (*Adapter) transcribe(svc core.Service, deps adapter.Deps) http.HandlerFunc {
+func (*Adapter) transcribe(svc core.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		source, err := adapter.NewUploadSource(r, "file", uploadMemory)
 		if err != nil {
@@ -85,11 +85,10 @@ func (*Adapter) transcribe(svc core.Service, deps adapter.Deps) http.HandlerFunc
 			return
 		}
 		render(w, result, p.format)
-		_ = deps
 	}
 }
 
-func (*Adapter) submit(svc core.Service, deps adapter.Deps) http.HandlerFunc {
+func (*Adapter) submit(svc core.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		source, err := adapter.NewUploadSource(r, "file", uploadMemory)
 		if err != nil {
@@ -113,7 +112,6 @@ func (*Adapter) submit(svc core.Service, deps adapter.Deps) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, job)
-		_ = deps
 	}
 }
 

@@ -27,20 +27,24 @@ auth:
   #   - name: partner
   #     key: sk-another-long-random-string
   #     rps: 10          # requests per second for this key; 0 or absent = no limit
-  #     admin: true
+  #   - name: ui
+  #     key: sk-the-key-the-test-ui-uses
+  #     priority: interactive   # this key's jobs overtake the batch backlog
+  #
+  # priority is a property of the key, not of the request: a request parameter
+  # would let every client call itself urgent, which is the same as having no
+  # priorities at all. Default is batch.
   #
   # Or supply them from the environment: NANOASR_AUTH_KEYS=key1,key2
 
 api:
   dialects: [openai, native]
-  cors:
-    enabled: false
-    origins: []
 
 ui:
   enabled: true
   path: /ui
-  require_auth: true
+  # There is no require_auth: whether the UI needs a key is not a UI setting.
+  # The SPA finds out from the first 401 the API gives it.
 
 audio:
   # Leave empty to run without ffmpeg: WAV/PCM still works, everything else
@@ -50,7 +54,6 @@ audio:
   max_duration: 30m
   target_sample_rate: 16000
   channel_mode: downmix         # downmix | first | split
-  denoise: false
 
 vad:
   enabled: true
@@ -118,10 +121,10 @@ diarization:
 
 storage:
   db_path: /var/lib/nanoasr/nanoasr.db
+  # Empty picks a nanoasr-spool directory under the system temp dir. Queued
+  # audio lives here and nowhere else, and only until its job reaches a
+  # terminal state; there is no setting that makes it stay (SPEC §2.1).
   temp_dir: ""
-  # 0 means uploaded audio never outlives the active job. The UI player uses
-  # the local file in the browser, so nothing here is needed for playback.
-  keep_audio_ttl: 0
 
 log:
   level: info

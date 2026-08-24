@@ -21,7 +21,7 @@ func Default() Config {
 		},
 		Auth: Auth{Mode: "apikey"},
 		API:  API{Dialects: []string{"openai", "native"}},
-		UI:   UI{Enabled: true, Path: "/ui", RequireAuth: true},
+		UI:   UI{Enabled: true, Path: "/ui"},
 		Audio: Audio{
 			FFmpegPath:       "ffmpeg",
 			FFmpegTimeout:    Dur(120 * time.Second),

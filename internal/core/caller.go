@@ -14,6 +14,13 @@ type Caller struct {
 	KeyID string
 	// Admin permits administering models and seeing every job.
 	Admin bool
+	// Interactive lets this caller's work overtake a batch backlog.
+	//
+	// It is a property of the key rather than of the request because a request
+	// parameter would let any client declare itself urgent, which is the same
+	// as having no priorities at all. The operator decides which key is a
+	// person waiting at a screen.
+	Interactive bool
 }
 
 type callerKey struct{}
@@ -24,10 +31,11 @@ func WithCaller(ctx context.Context, c Caller) context.Context {
 }
 
 // CallerOf returns the identity behind a request. Open mode has no keys and no
-// restrictions, so the zero value is an unnamed administrator.
+// restrictions, so the default is an unnamed administrator whose work is
+// interactive — that mode only runs on loopback, where the caller is a person.
 func CallerOf(ctx context.Context) Caller {
 	if c, ok := ctx.Value(callerKey{}).(Caller); ok {
 		return c
 	}
-	return Caller{Admin: true}
+	return Caller{Admin: true, Interactive: true}
 }

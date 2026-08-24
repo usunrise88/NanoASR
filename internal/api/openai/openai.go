@@ -33,13 +33,13 @@ type Adapter struct{}
 func (*Adapter) Name() string { return "openai" }
 
 func (a *Adapter) Mount(mux *http.ServeMux, svc core.Service, deps adapter.Deps) {
-	mux.HandleFunc("POST /v1/audio/transcriptions", a.transcriptions(svc, deps))
+	mux.HandleFunc("POST /v1/audio/transcriptions", a.transcriptions(svc))
 	mux.HandleFunc("POST /v1/audio/translations", a.translations())
 	mux.HandleFunc("GET /v1/models", a.models(deps))
 	mux.HandleFunc("GET /v1/models/{id}", a.model(deps))
 }
 
-func (*Adapter) transcriptions(svc core.Service, deps adapter.Deps) http.HandlerFunc {
+func (*Adapter) transcriptions(svc core.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		source, err := adapter.NewUploadSource(r, "file", uploadMemory)
 		if err != nil {
@@ -67,7 +67,6 @@ func (*Adapter) transcriptions(svc core.Service, deps adapter.Deps) http.Handler
 
 		result.Warnings = append(result.Warnings, params.warnings()...)
 		render(w, result, params.format, params.wantWords)
-		_ = deps
 	}
 }
 

@@ -28,14 +28,17 @@ type KeySpec struct {
 	Admin  bool
 	// RPS is this key's request rate limit, 0 meaning unlimited.
 	RPS float64
+	// Interactive lets this key's jobs overtake a batch backlog.
+	Interactive bool
 }
 
 // Key is a verified credential. The secret is not retained.
 type Key struct {
-	ID    string
-	Name  string
-	Admin bool
-	RPS   float64
+	ID          string
+	Name        string
+	Admin       bool
+	RPS         float64
+	Interactive bool
 
 	digest [sha256.Size]byte
 }
@@ -75,7 +78,8 @@ func NewStaticKeyStore(specs []KeySpec) (*StaticKeyStore, error) {
 			name = "key-" + id
 		}
 		s.keys = append(s.keys, Key{
-			ID: id, Name: name, Admin: spec.Admin, RPS: spec.RPS, digest: digest,
+			ID: id, Name: name, Admin: spec.Admin, RPS: spec.RPS,
+			Interactive: spec.Interactive, digest: digest,
 		})
 	}
 	return s, nil
