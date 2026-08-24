@@ -53,7 +53,15 @@ export default tseslint.config(
           ],
           patterns: [
             {
-              group: ['@base-ui/react/*', '@base-ui-components/react/*'],
+              // Both the bare specifier and every subpath: Base UI is normally
+              // imported as @base-ui/react/dialog, but the bare form works too
+              // and would have walked straight through a subpath-only pattern.
+              group: [
+                '@base-ui/react',
+                '@base-ui/react/*',
+                '@base-ui-components/react',
+                '@base-ui-components/react/*',
+              ],
               message:
                 'Wrap Base UI once in @/components/ui and import that. Direct usage forks ' +
                 'motion, focus handling and backdrop styling.',
@@ -72,11 +80,23 @@ export default tseslint.config(
             'canvas geometry in components/player is the only exception (see overrides).',
         },
         {
+          // Matches the string wherever it sits inside the attribute, not just
+          // when the attribute is a bare literal. className={cn('animate-spin')}
+          // is a JSXExpressionContainer with no .value, so a
+          // [value.value=/…/] test could never fire — and cn() is how every
+          // component in this codebase writes its classes.
           selector:
-            'JSXAttribute[name.name="className"][value.value=/\\b(animate-|transition|duration-)/]',
+            'JSXAttribute[name.name="className"] Literal[value=/\\b(animate-|transition-|duration-)/]',
           message:
             'Animations are off by default. Declare motion in src/styles/motion.css and opt in ' +
-            'with data-motion so prefers-reduced-motion keeps working.',
+            'with a data- attribute so prefers-reduced-motion keeps working.',
+        },
+        {
+          selector:
+            'JSXAttribute[name.name="className"][value.value=/\\b(animate-|transition-|duration-)/]',
+          message:
+            'Animations are off by default. Declare motion in src/styles/motion.css and opt in ' +
+            'with a data- attribute so prefers-reduced-motion keeps working.',
         },
       ],
 

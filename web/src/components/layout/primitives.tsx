@@ -86,18 +86,30 @@ export function Inline({
   )
 }
 
+/**
+ * Track widths a Grid may use.
+ *
+ * A closed set for the same reason Space is one: an arbitrary string would have
+ * to reach the DOM as a computed style or a data attribute nothing reads, and
+ * the earlier version did exactly that — `min` was accepted and silently
+ * dropped. These are literal class names, so Tailwind can see them.
+ */
+export type Track = 'sm' | 'md' | 'lg'
+
+const trackClass: Record<Track, string> = {
+  sm: 'grid-cols-[repeat(auto-fill,minmax(12rem,1fr))]',
+  md: 'grid-cols-[repeat(auto-fill,minmax(18rem,1fr))]',
+  lg: 'grid-cols-[repeat(auto-fill,minmax(26rem,1fr))]',
+}
+
 /** Grid is a responsive equal-column grid. */
-export function Grid({ children, gap = 4, min = '18rem', className }: WithChildren & { gap?: Space; min?: string }) {
-  return (
-    <div
-      className={cn('grid', gapClass[gap], className)}
-      // Tailwind cannot express an arbitrary minmax track from a prop; this is
-      // the single place in the app where a computed grid template is set.
-      data-grid-min={min}
-    >
-      {children}
-    </div>
-  )
+export function Grid({
+  children,
+  gap = 4,
+  track = 'md',
+  className,
+}: WithChildren & { gap?: Space; track?: Track }) {
+  return <div className={cn('grid', gapClass[gap], trackClass[track], className)}>{children}</div>
 }
 
 /** Card is the standard raised container. */

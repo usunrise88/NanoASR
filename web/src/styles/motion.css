@@ -34,6 +34,17 @@
   }
 }
 
+/* The one spinner, rotating. Motion lives here, including this. */
+[data-spinner] {
+  animation: spinner-rotate 700ms linear infinite;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Skeletons breathe rather than blink. */
 [data-skeleton] {
   animation: skeleton-pulse 1.6s ease-in-out infinite;
@@ -57,5 +68,12 @@
   [data-motion],
   [data-skeleton] {
     animation: none !important;
+  }
+
+  /* The spinner keeps turning, slowly: it is the only signal that an action is
+     still running, and freezing it would read as a hung interface rather than
+     as calm. Reduced motion means less movement, not none at any cost. */
+  [data-spinner] {
+    animation-duration: 1.6s;
   }
 }

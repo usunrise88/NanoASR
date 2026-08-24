@@ -17,6 +17,26 @@ type Leaves<T, Prefix extends string = ''> = {
 
 export type TKey = Leaves<typeof ru>
 
+/**
+ * The two catalogues must have the same keys.
+ *
+ * TKey is derived from ru alone — one of them has to be the reference — so
+ * without this a key missing from en.json is caught by nobody: i18next falls
+ * back at runtime and the reader gets Russian in an English interface. This
+ * makes the omission a type error at the point where it happens.
+ */
+type SameShape<A, B> = {
+  [K in keyof A]: K extends keyof B
+    ? A[K] extends string
+      ? string
+      : SameShape<A[K], B[K]>
+    : never
+}
+const _enCoversRu = en satisfies SameShape<typeof ru, typeof en>
+const _ruCoversEn = ru satisfies SameShape<typeof en, typeof ru>
+void _enCoversRu
+void _ruCoversEn
+
 export const languages = ['ru', 'en'] as const
 export type Language = (typeof languages)[number]
 
@@ -50,8 +70,11 @@ export function currentLanguage(): Language {
   return (i18n.language.startsWith('ru') ? 'ru' : 'en') as Language
 }
 
+/** Values interpolated into a translation, as `{{name}}` in the resource. */
+export type TVars = Record<string, string | number>
+
 /** Typed translator. Every component gets its strings through this. */
-export function useT(): (key: TKey) => string {
+export function useT(): (key: TKey, vars?: TVars) => string {
   const { t } = useTranslation()
-  return (key: TKey) => t(key)
+  return (key: TKey, vars?: TVars) => (vars ? t(key, vars) : t(key))
 }

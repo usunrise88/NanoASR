@@ -3,12 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "_comment_typecheck": "typecheck forces a full pass: with the incremental build info, a change to a locale JSON did not invalidate the project and tsc reported clean on stale input — the one class of edit this project type-checks specifically to catch.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --force --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
