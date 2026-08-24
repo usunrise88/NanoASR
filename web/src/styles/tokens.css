@@ -43,9 +43,21 @@
   --accent-solid-hover: var(--indigo-10);
   --accent-text: var(--indigo-11);
 
+  /* Status colours come in threes — surface, border, text — because a badge,
+     an inline error and an alert all need the same tone and would otherwise
+     each pick their own. Step 3 for surfaces and 11 for text is the Radix
+     pairing that holds its contrast in both themes. */
+  --danger-bg: var(--red-3);
+  --danger-border: var(--red-7);
   --danger-solid: var(--red-9);
   --danger-text: var(--red-11);
+
+  --warning-bg: var(--amber-3);
+  --warning-border: var(--amber-7);
   --warning-text: var(--amber-11);
+
+  --success-bg: var(--green-3);
+  --success-border: var(--green-7);
   --success-text: var(--green-11);
 
   /* A soft, non-black scrim: a black backdrop reads as an error state. */

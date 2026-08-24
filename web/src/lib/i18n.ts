@@ -59,12 +59,26 @@ function detectLanguage(): Language {
 
 export function setLanguage(lang: Language): void {
   void i18n.changeLanguage(lang)
+  applyDocumentLanguage(lang)
   try {
     localStorage.setItem('nanoasr.lang', lang)
   } catch {
     // Persisting the preference is a nicety, not a requirement.
   }
 }
+
+/**
+ * Keeps <html lang> in step with the chosen language.
+ *
+ * index.html cannot state it: the language is a runtime choice, and a fixed
+ * attribute tells a screen reader to pronounce English with Russian phonetics —
+ * or the reverse — for as long as the user leaves the switch alone.
+ */
+function applyDocumentLanguage(lang: Language): void {
+  document.documentElement.lang = lang
+}
+
+applyDocumentLanguage(detectLanguage())
 
 export function currentLanguage(): Language {
   return (i18n.language.startsWith('ru') ? 'ru' : 'en') as Language

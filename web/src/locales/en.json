@@ -1,6 +1,12 @@
 {
-  "app": { "name": "NanoASR" },
-  "nav": { "new": "New run", "models": "Models", "jobs": "Jobs" },
+  "app": {
+    "name": "NanoASR"
+  },
+  "nav": {
+    "new": "New run",
+    "models": "Models",
+    "jobs": "Jobs"
+  },
   "home": {
     "title": "Transcribe",
     "description": "Upload audio, pick a model, get a transcript with word-level timings.",
@@ -14,9 +20,31 @@
     "unload": "Unload",
     "pin": "Pin"
   },
-  "jobs": { "title": "Jobs", "description": "Queue and run history." },
-  "result": { "title": "Result", "description": "Player, transcript and stats." },
-  "notifications": { "title": "Notifications", "empty": "Nothing yet", "clear": "Clear" },
-  "theme": { "light": "Light", "dark": "Dark", "system": "System" },
-  "common": { "loading": "Loading", "retry": "Retry", "cancel": "Cancel" }
+  "jobs": {
+    "title": "Jobs",
+    "description": "Queue and run history."
+  },
+  "result": {
+    "title": "Result",
+    "description": "Player, transcript and stats."
+  },
+  "notifications": {
+    "title": "Notifications",
+    "empty": "Nothing yet",
+    "clear": "Clear"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "common": {
+    "loading": "Loading",
+    "retry": "Retry",
+    "cancel": "Cancel"
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "Language, theme, API key and display thresholds."
+  }
 }
