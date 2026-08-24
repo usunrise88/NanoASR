@@ -408,6 +408,13 @@ func averageConfidence(ws []core.Word) float64 {
 func (p *Pipeline) Attach(q *job.Queue, store job.Store) {
 	p.queue = q
 	p.store = store
+
+	// Stage reports become job events here rather than in the caller, so the
+	// queue's hub and the pipeline's observer are the same object by
+	// construction. Wired by hand they can drift apart, and the failure is
+	// silent: every stage is reported to a hub nobody is watching, and clients
+	// see a job go from queued to succeeded with nothing in between.
+	p.opt.Observer = job.NewProgress(q.Hub(), p.opt.Observer)
 }
 
 func (p *Pipeline) Submit(ctx context.Context, req core.Request) (*core.Job, error) {
@@ -483,8 +490,12 @@ func (p *Pipeline) Watch(ctx context.Context, id string, after int64) (<-chan co
 	if !live {
 		// Finished, or finished between the read above and here. One catch-up
 		// event carrying the stored state, then the stream is over.
+		//
+		// Seq 0 means "no sequence": the transition this state came from is no
+		// longer known, and inventing a number would give an unchanging job a
+		// different event id on every reconnect.
 		out := make(chan core.JobEvent, 1)
-		out <- core.JobEvent{Seq: after + 1, Job: rec.Job}
+		out <- core.JobEvent{Job: rec.Job}
 		close(out)
 		return out, nil
 	}

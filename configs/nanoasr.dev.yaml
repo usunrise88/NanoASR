@@ -68,8 +68,17 @@ registry:
 jobs:
   queue_size: 100
   max_concurrent: 0             # 0 → auto
+  # A queued job owns its audio until it finishes, so the queue is bounded by
+  # bytes as well as by item count. Must be at least max_upload_bytes.
+  max_queued_bytes: 4294967296  # 4 GiB
   max_processing_time: 30m
   history_ttl: 720h             # 30 days of metadata and transcripts
+  # Signs webhook deliveries as X-NanoASR-Signature: sha256=<hmac>. Empty
+  # means unsigned, and the server says so at startup.
+  webhook_secret: ""
+  # Permits webhook_url pointing at loopback and private ranges. Only for a
+  # receiver on your own machine; refused unless addr is loopback too.
+  webhook_allow_private: true
 
 postproc:
   punctuation:

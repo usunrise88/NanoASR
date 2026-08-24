@@ -5,16 +5,21 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/config"
 	"github.com/usunrise88/nanoasr/internal/core"
+	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pipeline"
 	"github.com/usunrise88/nanoasr/internal/pool"
 	"github.com/usunrise88/nanoasr/internal/registry"
 	"github.com/usunrise88/nanoasr/internal/service"
+	"github.com/usunrise88/nanoasr/internal/spool"
+	"github.com/usunrise88/nanoasr/internal/store/sqlite"
 	"github.com/usunrise88/nanoasr/internal/vad"
+	"github.com/usunrise88/nanoasr/internal/webhook"
 )
 
 // server is everything the HTTP layer needs, plus what has to be shut down.
@@ -24,6 +29,11 @@ type server struct {
 	registry *registry.Remote
 	pool     *pool.Pool
 	vad      vad.Segmenter
+
+	queue   *job.Queue
+	store   *sqlite.Store
+	spool   *spool.Spool
+	webhook *webhook.Sender
 }
 
 // build assembles the server from configuration. Every failure here is a
@@ -57,6 +67,13 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		return nil, err
 	}
 
+	store, err := sqlite.Open(cfg.Storage.DBPath)
+	if err != nil {
+		models.Close()
+		_ = segmenter.Close()
+		return nil, err
+	}
+
 	svc := pipeline.New(decoder, segmenter, models, pool.NewGovernor(cfg.ASR.InferenceSlots),
 		pipeline.Options{
 			DefaultModel:     cfg.ASR.DefaultModel,
@@ -69,13 +86,102 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 			NumThreads:       cfg.ASR.NumThreads,
 		})
 
+	hooks := webhook.New(webhook.Options{
+		Secret:       cfg.Jobs.WebhookSecret,
+		AllowPrivate: cfg.Jobs.WebhookAllowPrivate,
+		Logger:       log,
+	})
+
+	sp := spool.New(cfg.Storage.TempDir, cfg.Jobs.MaxQueuedBytes)
+	queue := job.New(store, svc, job.Options{
+		Size:       cfg.Jobs.QueueSize,
+		Workers:    cfg.Jobs.MaxConcurrent,
+		MaxRunTime: cfg.Jobs.MaxProcessingTime.Duration,
+		Hub:        job.NewHub(32),
+		Spool:      sp,
+		Notifier:   hooks,
+		Logger:     log,
+	})
+	// The knot: the queue needs the pipeline as its Runner, the pipeline needs
+	// the queue to submit. Tying it here keeps it visible instead of hiding it
+	// behind an interface that exists only for this. Attach also routes stage
+	// reports into the queue's hub, so there is no second hub to get wrong.
+	svc.Attach(queue, store)
+
 	return &server{
 		service:  svc,
 		models:   service.NewModels(reg, models),
 		registry: reg,
 		pool:     models,
 		vad:      segmenter,
+		queue:    queue,
+		store:    store,
+		spool:    sp,
+		webhook:  hooks,
 	}, nil
+}
+
+// resume brings the previous process's work forward.
+//
+// The order is load-bearing. Recover reports which jobs are live, and Sweep
+// deletes every spool file that is not; running it the other way round deletes
+// exactly the audio the resumed jobs are waiting for. FailStale comes after
+// both, because it turns interrupted running jobs into failures whose files
+// Sweep has already collected.
+func (s *server) resume(ctx context.Context, log *slog.Logger) error {
+	live, err := s.queue.Recover(ctx)
+	if err != nil {
+		return fmt.Errorf("resuming queued jobs: %w", err)
+	}
+
+	removed, err := s.spool.Sweep(live)
+	if err != nil {
+		return fmt.Errorf("cleaning the spool directory: %w", err)
+	}
+	if removed > 0 {
+		log.Info("removed orphaned audio", "files", removed, "dir", s.spool.Dir())
+	}
+
+	failed, err := s.store.FailStale(ctx,
+		"the server restarted while this job was running; resubmit it")
+	if err != nil {
+		return fmt.Errorf("failing interrupted jobs: %w", err)
+	}
+	if failed > 0 {
+		log.Warn("jobs were interrupted by a restart", "count", failed)
+	}
+
+	s.queue.Start()
+	return nil
+}
+
+// purgeHistory deletes finished jobs past their TTL, hourly.
+//
+// Not a cron and not a separate binary: history is the only thing that grows
+// without bound here, and a goroutine that wakes up once an hour is the whole
+// requirement.
+func (s *server) purgeHistory(ctx context.Context, ttl time.Duration, log *slog.Logger) {
+	if ttl <= 0 {
+		return
+	}
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := s.store.Purge(ctx, ttl)
+			if err != nil {
+				log.Warn("could not purge job history", "err", err)
+				continue
+			}
+			if n > 0 {
+				log.Info("purged job history", "jobs", n, "older_than", ttl)
+			}
+		}
+	}
 }
 
 // buildRegistry reads the models directory and layers downloading on top.
@@ -187,7 +293,12 @@ func (s *server) preload(ctx context.Context, id string, log *slog.Logger) {
 	log.Info("default model loaded", "model", id)
 }
 
+// Close releases everything build acquired. The queue is stopped by the caller
+// before this, while there is still a grace period to spend on it.
 func (s *server) Close() {
+	if s.store != nil {
+		_ = s.store.Close()
+	}
 	if s.registry != nil {
 		_ = s.registry.Close()
 	}

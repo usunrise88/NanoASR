@@ -26,6 +26,8 @@ type KeySpec struct {
 	// prefers not to keep the plaintext in a config file.
 	Secret string
 	Admin  bool
+	// RPS is this key's request rate limit, 0 meaning unlimited.
+	RPS float64
 }
 
 // Key is a verified credential. The secret is not retained.
@@ -33,6 +35,7 @@ type Key struct {
 	ID    string
 	Name  string
 	Admin bool
+	RPS   float64
 
 	digest [sha256.Size]byte
 }
@@ -71,7 +74,9 @@ func NewStaticKeyStore(specs []KeySpec) (*StaticKeyStore, error) {
 		if name == "" {
 			name = "key-" + id
 		}
-		s.keys = append(s.keys, Key{ID: id, Name: name, Admin: spec.Admin, digest: digest})
+		s.keys = append(s.keys, Key{
+			ID: id, Name: name, Admin: spec.Admin, RPS: spec.RPS, digest: digest,
+		})
 	}
 	return s, nil
 }

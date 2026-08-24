@@ -761,3 +761,23 @@ func TestModelEndpointsReportAMissingModelService(t *testing.T) {
 		t.Fatalf("status = %d, want 500", resp.StatusCode)
 	}
 }
+
+// A finished job's catch-up snapshot is not a transition: giving it an invented
+// sequence number would hand an unchanging job a different event id on every
+// reconnect, and a client deduplicating by id would see each one as new.
+func TestACatchUpSnapshotCarriesNoEventID(t *testing.T) {
+	events := make(chan core.JobEvent, 1)
+	events <- core.JobEvent{Seq: 0, Job: core.Job{ID: "job_1", Status: core.JobSucceeded}}
+	close(events)
+
+	svc := &fakeService{events: events}
+	resp := do(t, newServer(t, svc, adapter.Deps{}), http.MethodGet, "/api/v1/jobs/job_1/events")
+
+	joined := strings.Join(readEvents(t, resp.Body), "\n")
+	if strings.Contains(joined, "id: ") {
+		t.Errorf("catch-up carried an event id:\n%s", joined)
+	}
+	if !strings.Contains(joined, "event: succeeded") {
+		t.Errorf("catch-up did not carry the final state:\n%s", joined)
+	}
+}

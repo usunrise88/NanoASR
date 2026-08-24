@@ -50,6 +50,9 @@ type APIKey struct {
 	// of the configuration file.
 	Key   string `yaml:"key"`
 	Admin bool   `yaml:"admin"`
+	// RPS caps this key's request rate. Zero means unlimited, which is the
+	// right default for a key an operator issued to themselves.
+	RPS float64 `yaml:"rps"`
 }
 
 type API struct {
@@ -114,10 +117,25 @@ type Registry struct {
 }
 
 type Jobs struct {
-	QueueSize         int      `yaml:"queue_size"`
-	MaxConcurrent     int      `yaml:"max_concurrent"`
+	QueueSize     int `yaml:"queue_size"`
+	MaxConcurrent int `yaml:"max_concurrent"`
+	// MaxQueuedBytes caps the audio the queue holds on disk at once.
+	//
+	// It is a second limit beside QueueSize because the two bound different
+	// things: a hundred queued slots at the hundred-megabyte upload limit is
+	// ten gigabytes of disk, and a server that accepts work it has nowhere to
+	// put fails later and worse than one that answers 429 now.
+	MaxQueuedBytes    int64    `yaml:"max_queued_bytes"`
 	MaxProcessingTime Duration `yaml:"max_processing_time"`
 	HistoryTTL        Duration `yaml:"history_ttl"`
+	// WebhookSecret signs deliveries. Empty means unsigned, which is logged
+	// at startup rather than passed over in silence.
+	WebhookSecret string `yaml:"webhook_secret"`
+	// WebhookAllowPrivate turns off the address check that keeps webhook_url
+	// from reaching into the network the server sits in. It exists for a
+	// developer whose receiver is on localhost; Validate refuses it anywhere
+	// a loopback bind would not also be refused.
+	WebhookAllowPrivate bool `yaml:"webhook_allow_private"`
 }
 
 type PostProc struct {

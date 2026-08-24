@@ -24,6 +24,10 @@ auth:
   #   - name: ci
   #     key: sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
   #     admin: true
+  #   - name: partner
+  #     key: sk-another-long-random-string
+  #     rps: 10          # requests per second for this key; 0 or absent = no limit
+  #     admin: true
   #
   # Or supply them from the environment: NANOASR_AUTH_KEYS=key1,key2
 
@@ -80,8 +84,21 @@ registry:
 jobs:
   queue_size: 100
   max_concurrent: 0             # 0 → auto
+  # A queued job owns its audio from the moment it is accepted until it
+  # finishes, so the queue is bounded by bytes as well as by item count:
+  # 100 slots at the 100 MB upload limit would otherwise be 10 GB of disk.
+  # Exceeding it answers 429 with Retry-After; the synchronous path is
+  # unaffected and keeps working.
+  max_queued_bytes: 4294967296  # 4 GiB, must be at least max_upload_bytes
   max_processing_time: 30m
   history_ttl: 720h             # 30 days of metadata and transcripts
+  # Signs webhook deliveries as X-NanoASR-Signature: sha256=<hmac> over
+  # "<timestamp>.<body>". Empty means unsigned, and the server logs a warning.
+  webhook_secret: ""
+  # webhook_url is only ever dialled over https to a public address; a name
+  # resolving to a private range is refused before any connection is made.
+  # This turns that off, and is itself refused off loopback.
+  webhook_allow_private: false
 
 postproc:
   punctuation:

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -44,7 +45,11 @@ func Default() Config {
 		},
 		Registry: Registry{AllowDownload: true, DownloadConcurrency: 2},
 		Jobs: Jobs{
-			QueueSize:         100,
+			QueueSize: 100,
+			// Four gigabytes: enough for a realistic backlog of hour-long
+			// recordings, small enough to fit beside a database and a model
+			// cache on the modest disk this server usually gets.
+			MaxQueuedBytes:    4 << 30,
 			MaxProcessingTime: Dur(30 * time.Minute),
 			HistoryTTL:        Dur(30 * 24 * time.Hour),
 		},
@@ -75,6 +80,16 @@ func (c *Config) Autotune() {
 	}
 	if c.ASR.MaxResidentModels <= 0 {
 		c.ASR.MaxResidentModels = clamp(c.ASR.MaxModelRSSMB/1500, 1, 6)
+	}
+	// An unset temp_dir means "choose one", and it is a documented value in the
+	// shipped configuration files — so it is resolved here rather than left as
+	// the empty path for something further down to fail on.
+	//
+	// A subdirectory of our own, not the system temp directory itself: the
+	// spool holds uploaded audio at 0700, and startup cleanup should be walking
+	// our files rather than everyone else's.
+	if c.Storage.TempDir == "" {
+		c.Storage.TempDir = filepath.Join(os.TempDir(), "nanoasr-spool")
 	}
 }
 

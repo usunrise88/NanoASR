@@ -21,8 +21,9 @@ func init() { adapter.Register(&Adapter{}) }
 // needs it there anyway.
 const uploadMemory = 1 << 20
 
-// retryAfter is what a 429 advises. Long enough that a client backing off
-// actually relieves the pressure, short enough to stay usable.
+// retryAfter is what a queue-pressure 429 advises. Long enough that a client
+// backing off actually relieves the pressure, short enough to stay usable. A
+// rate-limit 429 knows its own wait and says that instead.
 const retryAfter = 5 * time.Second
 
 type Adapter struct{}
@@ -215,8 +216,14 @@ func (*Adapter) jobEvents(svc core.Service) http.HandlerFunc {
 					_ = stream.Send("", "done", map[string]string{"reason": "terminal"})
 					return
 				}
-				name := string(ev.Job.Status)
-				if stream.Send(strconv.FormatInt(ev.Seq, 10), name, ev.Job) != nil {
+				// Seq 0 is a catch-up snapshot rather than a transition, and
+				// carries no id: the client's Last-Event-ID should stay where
+				// it was rather than advance past events that never existed.
+				id := ""
+				if ev.Seq > 0 {
+					id = strconv.FormatInt(ev.Seq, 10)
+				}
+				if stream.Send(id, string(ev.Job.Status), ev.Job) != nil {
 					return
 				}
 			}
@@ -474,14 +481,18 @@ type problem struct {
 // WriteProblem renders a domain error. Exported so a custom dialect can reuse
 // the same shape.
 func WriteProblem(w http.ResponseWriter, r *http.Request, err error) {
-	e := core.AsError(err)
-	status := e.Code.HTTPStatus()
-
 	// A 429 without Retry-After tells a client to back off without saying how
 	// far, which in practice means it retries immediately.
-	if status == http.StatusTooManyRequests {
+	if core.AsError(err).Code.HTTPStatus() == http.StatusTooManyRequests &&
+		w.Header().Get("Retry-After") == "" {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
 	}
+	writeProblemWithoutRetryAfter(w, r, err)
+}
+
+func writeProblemWithoutRetryAfter(w http.ResponseWriter, r *http.Request, err error) {
+	e := core.AsError(err)
+	status := e.Code.HTTPStatus()
 
 	p := problem{
 		Type:     "https://docs.nanoasr.dev/errors/" + string(e.Code),
@@ -495,4 +506,16 @@ func WriteProblem(w http.ResponseWriter, r *http.Request, err error) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(p)
+}
+
+// DenyRateLimit renders a rate-limit refusal as problem+json, so a client's
+// error handling recognises it as the same shape as every other refusal here.
+//
+// Exported because the middleware that produces it is mounted in main, outside
+// this package, and the alternative — a 429 in a shape this dialect never
+// otherwise emits — is a refusal clients parse by accident or not at all.
+func DenyRateLimit(w http.ResponseWriter, r *http.Request, wait time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(httpx.RetryAfterSeconds(wait)))
+	writeProblemWithoutRetryAfter(w, r, core.Errorf(core.CodeRateLimited,
+		"this API key is over its request rate; retry in %s", wait.Round(time.Millisecond)))
 }

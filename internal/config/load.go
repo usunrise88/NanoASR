@@ -49,6 +49,8 @@ func applyEnv(c *Config) {
 	str("NANOASR_DEFAULT_MODEL", &c.ASR.DefaultModel)
 	str("NANOASR_FFMPEG_PATH", &c.Audio.FFmpegPath)
 	str("NANOASR_DB_PATH", &c.Storage.DBPath)
+	str("NANOASR_TEMP_DIR", &c.Storage.TempDir)
+	str("NANOASR_WEBHOOK_SECRET", &c.Jobs.WebhookSecret)
 	str("NANOASR_LOG_LEVEL", &c.Log.Level)
 	str("NANOASR_LOG_FORMAT", &c.Log.Format)
 
@@ -58,6 +60,7 @@ func applyEnv(c *Config) {
 	num("NANOASR_MAX_MODEL_RSS_MB", &c.ASR.MaxModelRSSMB)
 	num("NANOASR_QUEUE_SIZE", &c.Jobs.QueueSize)
 	num("NANOASR_MAX_CONCURRENT", &c.Jobs.MaxConcurrent)
+	num64("NANOASR_MAX_QUEUED_BYTES", &c.Jobs.MaxQueuedBytes)
 
 	bl("NANOASR_UI_ENABLED", &c.UI.Enabled)
 	bl("NANOASR_ALLOW_DOWNLOAD", &c.Registry.AllowDownload)
@@ -92,6 +95,14 @@ func str(key string, dst *string) {
 func num(key string, dst *int) {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			*dst = n
+		}
+	}
+}
+
+func num64(key string, dst *int64) {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			*dst = n
 		}
 	}
@@ -147,6 +158,25 @@ func (c *Config) Validate() error {
 	}
 	if c.Jobs.QueueSize <= 0 {
 		return fmt.Errorf("jobs.queue_size must be positive")
+	}
+	// A budget below one upload rejects every submission the moment the queue
+	// has anything in it, which reads as an intermittent 429 rather than as a
+	// misconfiguration.
+	if c.Jobs.MaxQueuedBytes > 0 && c.Jobs.MaxQueuedBytes < c.Server.MaxUploadBytes {
+		return fmt.Errorf(
+			"jobs.max_queued_bytes (%d) is below server.max_upload_bytes (%d): "+
+				"no upload at the size limit could ever be queued",
+			c.Jobs.MaxQueuedBytes, c.Server.MaxUploadBytes)
+	}
+	if c.Storage.DBPath == "" {
+		return fmt.Errorf("storage.db_path must be set: the job queue needs somewhere to record work")
+	}
+	// The webhook address check is what keeps webhook_url from reaching into
+	// the network the server sits in, so turning it off carries the same
+	// condition as turning authentication off.
+	if c.Jobs.WebhookAllowPrivate && !isLoopback(c.Server.Addr) {
+		return fmt.Errorf(
+			"jobs.webhook_allow_private requires a loopback listen address, got %q", c.Server.Addr)
 	}
 	if len(c.API.Dialects) == 0 && !c.UI.Enabled {
 		return fmt.Errorf("no api dialects enabled and ui disabled: server would serve nothing")

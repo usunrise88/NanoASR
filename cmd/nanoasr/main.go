@@ -18,7 +18,7 @@ import (
 	"syscall"
 
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
-	_ "github.com/usunrise88/nanoasr/internal/api/native"
+	"github.com/usunrise88/nanoasr/internal/api/native"
 	_ "github.com/usunrise88/nanoasr/internal/api/openai"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/config"
@@ -123,24 +123,55 @@ func serve(args []string) error {
 	defer srv.Close()
 	srv.preload(ctx, cfg.ASR.DefaultModel, log)
 
+	if err := srv.resume(ctx, log); err != nil {
+		return err
+	}
+	go srv.purgeHistory(ctx, cfg.Jobs.HistoryTTL.Duration, log)
+
+	if cfg.Jobs.WebhookSecret == "" {
+		log.Warn("webhook deliveries are unsigned",
+			"note", "set jobs.webhook_secret so a receiver can tell a delivery from a forgery")
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","version":%q,"sherpa_onnx":%q,"onnxruntime":%q}`, version, so, ort)
 	})
-	// TODO(M3): readiness should also report queue depth once the queue exists.
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := srv.models.List(r.Context()); err != nil {
 			http.Error(w, `{"status":"degraded"}`, http.StatusServiceUnavailable)
 			return
 		}
+		// Queue depth belongs in readiness, not just in metrics: a full queue
+		// is precisely when a load balancer should stop sending work here.
+		depth := srv.queue.Depth()
+		status := "ready"
+		code := http.StatusOK
+		if depth >= cfg.Jobs.QueueSize {
+			status, code = "saturated", http.StatusServiceUnavailable
+		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"status":"ready"}`)
+		w.WriteHeader(code)
+		fmt.Fprintf(w, `{"status":%q,"queue_depth":%d,"queue_size":%d,"queued_bytes":%d}`,
+			status, depth, cfg.Jobs.QueueSize, srv.spool.Used())
 	})
 
+	// Taken lazily, and Snapshot redacts on its own, so /api/v1/config cannot
+	// hand out a secret even if the redaction below were ever reordered away.
+	snapshot := func() any {
+		out, err := cfg.Snapshot()
+		if err != nil {
+			log.Error("cannot render the configuration snapshot", "err", err)
+			return map[string]string{"error": "the configuration could not be rendered"}
+		}
+		return out
+	}
 	if err := adapter.MountAll(mux, cfg.API.Dialects, srv.service, adapter.Deps{
 		Models:         srv.models,
 		MaxUploadBytes: cfg.Server.MaxUploadBytes,
+		TempDir:        cfg.Storage.TempDir,
+		ConfigSnapshot: snapshot,
 	}); err != nil {
 		return err
 	}
@@ -178,8 +209,17 @@ func serve(args []string) error {
 		// authenticated.
 		mw = append(mw, httpx.Auth(keys, "/healthz", "/readyz", cfg.UI.Path))
 
+		// Rate limiting comes after Auth because there is nothing to attribute
+		// a rate to until the key is known, and unauthenticated traffic is
+		// already refused more cheaply than any limiter could.
+		limiter := httpx.NewRateLimiter(func(id string) (float64, bool) {
+			k, ok := keys.Lookup(id)
+			return k.RPS, ok
+		})
+		mw = append(mw, httpx.RateLimit(limiter, native.DenyRateLimit))
+
 		// The key store now holds the digests, so drop the plaintext from the
-		// configuration that /api/v1/config will eventually serve.
+		// configuration that /api/v1/config serves.
 		cfg.Auth.Redact()
 		log.Info("authentication enabled", "keys", keys.Names(),
 			"public", []string{"/healthz", "/readyz", cfg.UI.Path})
@@ -207,7 +247,18 @@ func serve(args []string) error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownGrace.Duration)
 	defer cancel()
-	return httpSrv.Shutdown(shutdownCtx)
+
+	// HTTP first, so nothing new is accepted while the queue drains. Jobs still
+	// waiting stay queued in the database with their audio on disk; the next
+	// process resumes them.
+	err = httpSrv.Shutdown(shutdownCtx)
+	if qerr := srv.queue.Shutdown(shutdownCtx); qerr != nil {
+		log.Warn("the queue did not drain within the grace period", "err", qerr)
+	}
+	if herr := srv.webhook.Close(shutdownCtx); herr != nil {
+		log.Warn("webhook deliveries were abandoned", "err", herr)
+	}
+	return err
 }
 
 func models(args []string) error {
@@ -336,7 +387,9 @@ func takesValue(fs *flag.FlagSet, name string) bool {
 func keySpecs(keys []config.APIKey) []httpx.KeySpec {
 	out := make([]httpx.KeySpec, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, httpx.KeySpec{Name: k.Name, Secret: k.Key, Admin: k.Admin})
+		out = append(out, httpx.KeySpec{
+			Name: k.Name, Secret: k.Key, Admin: k.Admin, RPS: k.RPS,
+		})
 	}
 	return out
 }
