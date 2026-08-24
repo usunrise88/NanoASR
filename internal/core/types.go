@@ -191,6 +191,10 @@ type Job struct {
 }
 
 // JobFilter narrows a history listing.
+//
+// APIKeyID and Admin are the ownership rule, and they live here rather than in
+// a handler so that a new dialect cannot forget them: a listing is scoped to the
+// calling key unless that key is an administrator.
 type JobFilter struct {
 	Status  []JobStatus
 	ModelID string
@@ -198,4 +202,7 @@ type JobFilter struct {
 	Since   *time.Time
 	Limit   int
 	Cursor  string
+
+	APIKeyID string
+	Admin    bool
 }

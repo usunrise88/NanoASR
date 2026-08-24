@@ -51,11 +51,17 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `
 
-// Pragmas are applied to every connection. WAL is what makes concurrent reads
-// from the history page coexist with the writer.
+// Pragmas are applied to every connection, and that is why they are written in
+// the driver's DSN form rather than as PRAGMA statements: database/sql keeps a
+// pool, and an Exec at open time configures exactly one connection out of it.
+// The next query could then run on a connection with neither WAL nor a busy
+// timeout, which fails as an intermittent "database is locked" rather than as
+// anything pointing back here.
+//
+// WAL is what lets the history page read while a worker writes.
 var Pragmas = []string{
-	"PRAGMA journal_mode=WAL",
-	"PRAGMA synchronous=NORMAL",
-	"PRAGMA busy_timeout=5000",
-	"PRAGMA foreign_keys=ON",
+	"journal_mode(WAL)",
+	"synchronous(NORMAL)",
+	"busy_timeout(5000)",
+	"foreign_keys(1)",
 }
