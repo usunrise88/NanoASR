@@ -22,8 +22,8 @@ const control =
 
 export interface FieldProps {
   label: string
-  description?: string
-  error?: string
+  description?: string | undefined
+  error?: string | undefined
   children: ReactNode
 }
 
@@ -47,9 +47,9 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
 export interface SelectProps {
   value: string
   onChange: (value: string) => void
-  options: { value: string; label: string; disabled?: boolean }[]
-  disabled?: boolean
-  id?: string
+  options: { value: string; label: string; disabled?: boolean | undefined }[]
+  disabled?: boolean | undefined
+  id?: string | undefined
 }
 
 /**
@@ -82,8 +82,8 @@ export interface SwitchProps {
   checked: boolean
   onChange: (checked: boolean) => void
   label: string
-  description?: string
-  disabled?: boolean
+  description?: string | undefined
+  disabled?: boolean | undefined
 }
 
 export function Switch({ checked, onChange, label, description, disabled }: SwitchProps) {

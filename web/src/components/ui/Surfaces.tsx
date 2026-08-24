@@ -28,9 +28,9 @@ export interface SurfaceProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   title: string
-  description?: string
+  description?: string | undefined
   children: ReactNode
-  footer?: ReactNode
+  footer?: ReactNode | undefined
 }
 
 /**
@@ -134,8 +134,8 @@ export interface PopoverProps {
   trigger: ReactNode
   children: ReactNode
   /** Width in rem; popovers are small by definition, so the set is small. */
-  width?: 'sm' | 'md'
-  align?: 'start' | 'center' | 'end'
+  width?: 'sm' | 'md' | undefined
+  align?: 'start' | 'center' | 'end' | undefined
 }
 
 /** A popover — the least blocking surface that can still hold real content. */

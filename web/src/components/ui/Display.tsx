@@ -19,9 +19,9 @@ export function Badge({
   children,
   className,
 }: {
-  tone?: Tone
+  tone?: Tone | undefined
   children: ReactNode
-  className?: string
+  className?: string | undefined
 }) {
   return (
     <span
@@ -44,7 +44,7 @@ export function Badge({
  * download, a job's stages — and inventing one would be worse than not
  * showing a bar.
  */
-export function Progress({ percent, label }: { percent: number; label?: string }) {
+export function Progress({ percent, label }: { percent: number; label?: string | undefined }) {
   const clamped = Math.max(0, Math.min(100, Math.round(percent)))
   return (
     <div className="flex items-center gap-2">
@@ -79,8 +79,8 @@ export function EmptyState({
   action,
 }: {
   title: string
-  description?: string
-  action?: ReactNode
+  description?: string | undefined
+  action?: ReactNode | undefined
 }) {
   return (
     <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
@@ -99,8 +99,8 @@ export function ErrorState({
   action,
 }: {
   title: string
-  detail?: string
-  action?: ReactNode
+  detail?: string | undefined
+  action?: ReactNode | undefined
 }) {
   return (
     <div

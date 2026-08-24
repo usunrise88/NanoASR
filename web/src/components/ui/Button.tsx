@@ -37,11 +37,11 @@ const sizeClass: Record<ButtonSize, string> = {
 }
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: ButtonVariant
-  size?: ButtonSize
+  variant?: ButtonVariant | undefined
+  size?: ButtonSize | undefined
   /** Replaces the leading icon with a spinner and disables the button. */
-  busy?: boolean
-  icon?: ReactNode
+  busy?: boolean | undefined
+  icon?: ReactNode | undefined
 }
 
 export function Button({
@@ -73,8 +73,8 @@ export function Button({
 export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Required: an icon alone tells a screen reader nothing. */
   label: string
-  variant?: ButtonVariant
-  busy?: boolean
+  variant?: ButtonVariant | undefined
+  busy?: boolean | undefined
 }
 
 export function IconButton({

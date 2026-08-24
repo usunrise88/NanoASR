@@ -1,6 +1,7 @@
 import { createRootRoute, Outlet, useMatches } from '@tanstack/react-router'
 import { Toaster } from 'sonner'
 
+import { ApiKeySheet } from '@/components/ApiKeySheet'
 import { AppHeader } from '@/components/AppHeader'
 import { useT } from '@/lib/i18n'
 import type { PageMeta } from '@/lib/page'
@@ -48,6 +49,10 @@ function RootLayout() {
       {/* Stacked, auto-dismissing, quiet. Never used for critical information;
           everything raised here is also kept in the notification history. */}
       <Toaster position="bottom-right" closeButton visibleToasts={4} />
+
+      {/* Opens itself when the server first refuses an unauthenticated
+          request, which is how the SPA learns that this server wants a key. */}
+      <ApiKeySheet />
     </div>
   )
 }
