@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { Card, Page, Section, Stack } from '@/components/layout'
+import { Card, Inline, Page, Section, Stack } from '@/components/layout'
 import { Button, Field, Input, Select } from '@/components/ui'
 import { setApiKey, useAuth } from '@/lib/auth'
 import { languages, setLanguage, useT, type Language } from '@/lib/i18n'
@@ -83,11 +83,11 @@ function SettingsPage() {
                 }}
               />
             </Field>
-            <div>
+            <Inline>
               <Button variant="primary" size="sm" onClick={saveKey}>
                 {t('settings.save')}
               </Button>
-            </div>
+            </Inline>
           </Stack>
         </Card>
       </Section>

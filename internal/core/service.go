@@ -31,12 +31,15 @@ type Service interface {
 type ModelState string
 
 const (
+	// ModelAbsent means the weights are not on this machine. Only the catalog
+	// reports it; a model in the local registry is at least ModelDownloaded.
 	ModelAbsent      ModelState = "absent"
 	ModelDownloading ModelState = "downloading"
-	ModelDownloaded  ModelState = "downloaded"
-	ModelLoading     ModelState = "loading"
-	ModelReady       ModelState = "ready"
-	ModelDraining    ModelState = "draining"
+	// ModelDownloaded means the weights are on disk but not in the pool.
+	ModelDownloaded ModelState = "downloaded"
+	ModelLoading    ModelState = "loading"
+	ModelReady      ModelState = "ready"
+	ModelDraining   ModelState = "draining"
 )
 
 // Capabilities says what a model can actually deliver. The pipeline consults it

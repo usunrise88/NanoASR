@@ -45,7 +45,12 @@ func (m *Models) List(ctx context.Context) ([]core.ModelInfo, error) {
 			delete(resident, man.ID)
 			continue
 		}
-		out = append(out, describe(man, core.ModelAbsent))
+		// On disk but not in the pool is ModelDownloaded, not ModelAbsent:
+		// absent is the top of the download → load → ready ladder and means
+		// the weights are not here at all, which is what the catalog reports.
+		// Conflating the two told the UI that every installed model was
+		// missing.
+		out = append(out, describe(man, core.ModelDownloaded))
 	}
 
 	// A model can be resident without being on disk any more — someone deleted

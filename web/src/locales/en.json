@@ -56,7 +56,9 @@
     "confirmUnload": "Unload this model?",
     "confirmUnloadBody": "Requests already running finish on the old copy. The next request loads it again.",
     "downloaded": "Model downloaded",
-    "actionFailed": "The action did not go through"
+    "actionFailed": "The action did not go through",
+    "revision": "Revision",
+    "memoryEstimate": "Memory, estimated"
   },
   "jobs": {
     "title": "Jobs",
@@ -135,9 +137,9 @@
     "failed": "Failed",
     "canceled": "Cancelled",
     "expired": "Expired",
-    "absent": "Not on disk",
+    "absent": "Not downloaded",
     "downloading": "Downloading",
-    "downloaded": "Downloaded",
+    "downloaded": "On disk",
     "loading": "Loading",
     "ready": "Resident",
     "draining": "Draining"

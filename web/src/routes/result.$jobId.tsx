@@ -129,12 +129,12 @@ function ResultPage() {
                   />
                 ) : (
                   <Stack gap={2}>
-                    <div>
+                    <Stack gap={1}>
                       <p className="text-[13px] font-medium">{t('result.noAudio')}</p>
                       <p className="text-[12px] text-[var(--text-secondary)]">
                         {t('result.noAudioHint')}
                       </p>
-                    </div>
+                    </Stack>
                     <Dropzone file={undefined} onFile={attach} limitBytes={100 * 1024 * 1024} />
                   </Stack>
                 )}
