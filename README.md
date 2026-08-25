@@ -98,6 +98,165 @@ RUNPATH, указывающий в кэш Go-модулей. «Скопиров�
   `.so` рядом с бинарём. Проверено: `$ORIGIN/lib` резолвится первым, архив переносим,
   ~33 МБ.
 
+## Развёртывание на Linux
+
+Пошагово, для Ubuntu Server 22.04/24.04 и любого systemd-дистрибутива. Всё, кроме
+весов моделей, лежит в одном архиве.
+
+### 1. Собрать архив
+
+```bash
+make web dist          # nanoasr-<version>-linux-amd64.tar.gz, ~21 МБ
+```
+
+Собирать нужно на машине с Go 1.24+ и gcc — на целевом сервере компилятор не нужен.
+Архив переносим: `RUNPATH` бинаря начинается с `$ORIGIN/lib`, поэтому библиотеки
+берутся из самого архива, а не с машины сборки.
+
+### 2. Разложить
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin nanoasr
+sudo mkdir -p /opt/nanoasr /var/lib/nanoasr
+sudo tar -xzf nanoasr-*-linux-amd64.tar.gz -C /opt/nanoasr
+sudo chown -R nanoasr:nanoasr /opt/nanoasr /var/lib/nanoasr
+```
+
+`/var/lib/nanoasr` — единственный каталог, в который сервису разрешено писать
+(юнит ставит `ProtectSystem=strict`): туда лягут веса моделей, база задач и спул.
+
+### 3. Поставить ffmpeg — опционально, но обычно нужен
+
+```bash
+sudo apt install -y ffmpeg
+```
+
+Без него работают WAV/PCM, включая телефонийные a-law и µ-law; mp3, opus, m4a и
+прочее ответят `415`. В архив ffmpeg не входит намеренно — это внешняя зависимость
+с собственным циклом обновлений.
+
+### 4. Задать ключ
+
+`/opt/nanoasr/nanoasr.yaml` приезжает с `auth.mode: apikey` и пустым списком ключей.
+**Сервер откажется стартовать, пока ключа нет** — это не баг: сервер, отвечающий 401
+на всё, хуже, чем сервер, который честно не поднялся.
+
+```bash
+KEY="sk-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
+echo "$KEY"                        # запишите, второй раз он не покажется
+printf '%s' "$KEY" | sha256sum     # хеш для конфига
+```
+
+В `auth.keys` кладите **хеш**, а не сам ключ — тогда секрет не лежит в конфиге:
+
+```yaml
+auth:
+  mode: apikey
+  keys:
+    - name: app
+      key: "sha256:<хеш из команды выше>"
+      rps: 10          # 0 — без ограничения
+```
+
+Ключ должен быть не короче 16 символов. Открытый режим (`auth.mode: open`)
+разрешён **только** на loopback: на любом другом адресе сервер откажется стартовать.
+
+### 5. Скачать модели
+
+Веса в архив не входят (~1 ГБ на весь каталог) и качаются на сервере:
+
+```bash
+sudo -u nanoasr /opt/nanoasr/nanoasr models pull \
+  -config /opt/nanoasr/nanoasr.yaml \
+  gigaam-v3-ctc-punct-ru silero-vad-v5
+```
+
+Минимум — модель распознавания и VAD. Пропишите её в конфиге, иначе каждый запрос
+должен будет называть модель сам:
+
+```yaml
+asr:
+  default_model: gigaam-v3-ctc-punct-ru
+```
+
+Для диаризации нужны ещё две модели и включённый блок:
+
+```bash
+sudo -u nanoasr /opt/nanoasr/nanoasr models pull \
+  -config /opt/nanoasr/nanoasr.yaml \
+  pyannote-segmentation-3 campplus-sv-zh-en
+```
+
+```yaml
+diarization:
+  enabled: true
+  segmentation_model: pyannote-segmentation-3
+  embedding_model: campplus-sv-zh-en
+```
+
+### 6. Запустить как сервис
+
+```bash
+sudo cp /opt/nanoasr/nanoasr.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nanoasr
+sudo systemctl status nanoasr
+```
+
+### 7. Проверить
+
+```bash
+curl -s localhost:8080/healthz                       # без ключа
+curl -s localhost:8080/readyz                        # + глубина очереди
+curl -s localhost:8080/api/v1/models -H "Authorization: Bearer $KEY"
+curl -s localhost:8080/v1/audio/transcriptions -H "Authorization: Bearer $KEY" \
+  -F file=@call.wav -F response_format=verbose_json
+```
+
+Готовность проверяйте по `/readyz`, а не по факту запуска процесса: старт занимает
+секунды на загрузку весов, и `/readyz` отдаёт `503 saturated` при полной очереди —
+именно тогда балансировщику и следует перестать сюда слать.
+
+UI — на `http://<адрес>:8080/ui/`. Ключ он спросит сам, поймав первый `401`.
+
+### Обновление
+
+```bash
+sudo systemctl stop nanoasr
+sudo tar -xzf nanoasr-<new>-linux-amd64.tar.gz -C /opt/nanoasr
+sudo chown -R nanoasr:nanoasr /opt/nanoasr
+sudo systemctl start nanoasr
+```
+
+Конфиг архив не перезаписывает вслепую — файл называется `nanoasr.yaml` и приезжает
+как есть, так что свой держите в стороне или сравнивайте перед распаковкой. Веса в
+`/var/lib/nanoasr` переживают обновление.
+
+### Если не поднимается
+
+Сервер объясняет отказ и выходит, а не стартует в нерабочем виде — так что первым
+делом читайте причину:
+
+```bash
+sudo journalctl -u nanoasr -n 50 --no-pager
+```
+
+| Сообщение | Что делать |
+|---|---|
+| `auth.mode=apikey but no keys are configured` | шаг 4 |
+| `key must be at least 16 characters` | ключ короче 16 символов |
+| `auth.mode=open requires a loopback listen address` | либо `addr: "127.0.0.1:8080"`, либо `mode: apikey` |
+| `model ... is not present in ...` | шаг 5 |
+| `error while loading shared libraries` | `lib/` не рядом с бинарём — распакуйте архив целиком |
+| `diarization.enabled is true but ... is empty` | назовите обе модели диаризации |
+
+### Слушать не только localhost
+
+`addr: ":8080"` в конфиге слушает все интерфейсы. Перед тем как открывать наружу:
+ключ обязателен (шаг 4), а `jobs.webhook_allow_private` должен остаться `false` —
+иначе `webhook_url` с приватным адресом превращает сервер в SSRF-прокси внутрь вашей
+сети. TLS у сервера своего нет: ставьте его за nginx/Caddy или за туннелем.
+
 ## Требования
 
 - Go 1.24+, gcc/g++ (cgo обязателен — sherpa-onnx это C++)
