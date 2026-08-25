@@ -2,8 +2,8 @@
 #
 # Only the settings a deployment usually changes are here. Every other knob has
 # a default that is derived from this machine at startup; the full annotated
-# reference is configs/nanoasr.example.yaml in the source tree and the
-# "Развёртывание на Linux" section of the README.
+# reference ships as nanoasr.yaml in the release archive and lives at
+# configs/nanoasr.example.yaml in the source tree.
 #
 # Precedence: flags > NANOASR_* env > this file > computed defaults.
 
