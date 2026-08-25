@@ -71,7 +71,7 @@ vad:
 
 asr:
   models_dir: /var/lib/nanoasr/models
-  default_model: ""
+  default_model: gigaam-v3-ctc-punct-ru
   max_resident_models: 0        # 0 → auto
   max_model_rss_mb: 0           # 0 → auto
   inference_slots: 0            # 0 → GOMAXPROCS

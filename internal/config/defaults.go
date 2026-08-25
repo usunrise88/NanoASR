@@ -40,7 +40,13 @@ func Default() Config {
 			MaxSpeechSec: 20,
 		},
 		ASR: ASR{
-			ModelsDir:      "/var/lib/nanoasr/models",
+			ModelsDir: "/var/lib/nanoasr/models",
+			// Russian punctuation and casing come from the recognition model
+			// itself, because no Russian CT-Transformer exists to add them in a
+			// second pass (SPEC §5.6). Naming the punctuating model as the
+			// default is therefore what makes punctuate=true a no-op rather
+			// than a warning on the workload this server is for.
+			DefaultModel:   "gigaam-v3-ctc-punct-ru",
 			IdleTTL:        Dur(15 * time.Minute),
 			AcquireTimeout: Dur(30 * time.Second),
 			Batch:          Batch{MaxSize: 8, MaxSeconds: 60},
