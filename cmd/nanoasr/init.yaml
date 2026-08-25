@@ -25,7 +25,9 @@ auth:
       admin: false
 
 api:
-  dialects: [openai, native]
+  # openai — /v1/audio/transcriptions; native — /api/v1; era — the
+  # whisper-asr-webservice contract (/asr, /detect-language, /asr_task).
+  dialects: [openai, native, era]
 
 ui:
   enabled: true

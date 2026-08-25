@@ -16,7 +16,10 @@ auth:
   keys: []                      # or NANOASR_AUTH_KEYS=key1,key2
 
 api:
-  dialects: [openai, native]
+  # openai — /v1/audio/transcriptions; native — /api/v1; era — the
+  # whisper-asr-webservice contract (/asr, /detect-language, /asr_task).
+  # era mounts at the root, so add it deliberately rather than by default.
+  dialects: [openai, native, era]
 
 ui:
   enabled: true

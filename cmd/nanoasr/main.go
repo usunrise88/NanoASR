@@ -20,6 +20,7 @@ import (
 	"syscall"
 
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
+	_ "github.com/usunrise88/nanoasr/internal/api/era"
 	"github.com/usunrise88/nanoasr/internal/api/native"
 	_ "github.com/usunrise88/nanoasr/internal/api/openai"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
