@@ -121,6 +121,13 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
 		}
 
+		// Last line of defence. What is being prevented here is not a bad
+		// transcript but a dead server: sherpa-onnx calls exit() on a CTC
+		// recogniser asked for modified_beam_search.
+		if err := asr.DecodingSupport(m.Family, cfg.DecodingMethod); err != nil {
+			return nil, err
+		}
+
 		if err := fam.Configure(m, dir, &cfg.ModelConfig); err != nil {
 			return nil, err
 		}

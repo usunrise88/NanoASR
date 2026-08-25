@@ -218,3 +218,29 @@ func findWarning(ws []core.Warning, code string) (core.Warning, bool) {
 	}
 	return core.Warning{}, false
 }
+
+// A CTC model asked for beam search keeps its own decoding and says so, rather
+// than reaching a loader that would kill the process.
+func TestDecodingMethodDroppedWhenTheFamilyCannotRunIt(t *testing.T) {
+	h := newVariantHarness(t, fakeRegistry{}, variantOptions{ // fakeRegistry is nemo_ctc
+		Options:     Options{},
+		maxVariants: 2,
+	})
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio: &fakeSource{}, DecodingMethod: "modified_beam_search",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWarning(got.Warnings, "decoding_method_unavailable") {
+		t.Errorf("warnings %+v should say the method was not applied", got.Warnings)
+	}
+	// The variant must be empty: nothing unsupported may reach the loader.
+	if len(h.loaded) != 1 {
+		t.Fatalf("loaded %d recognisers, want 1", len(h.loaded))
+	}
+	if !h.loaded[0].Zero() {
+		t.Errorf("variant %+v reached the loader with an unsupported method", h.loaded[0])
+	}
+}

@@ -63,6 +63,19 @@ func (p *Pipeline) buildVariant(req core.Request, man registry.Manifest) (asr.Va
 		MaxActivePaths: req.MaxActivePaths,
 	}
 
+	// A method this family cannot run is dropped here rather than refused,
+	// because the model still has a perfectly good answer with its own
+	// settings. It has to be dropped before the loader sees it: sherpa-onnx
+	// terminates the process rather than declining.
+	if err := asr.DecodingSupport(man.Family, v.DecodingMethod); err != nil {
+		warn = append(warn, core.Warning{
+			Code:    "decoding_method_unavailable",
+			Message: core.AsError(err).Message + "; the model's configured method was used",
+		})
+		v.DecodingMethod = ""
+		v.MaxActivePaths = 0
+	}
+
 	if len(req.Hotwords) == 0 {
 		return v, warn
 	}

@@ -107,3 +107,37 @@ func HotwordsSupport(family, modelingUnit, decodingMethod string, hasBPEVocab bo
 				"and this model's vocabulary is %q", modelingUnit)
 	}
 }
+
+// Decoding methods sherpa-onnx accepts.
+const (
+	GreedySearch       = "greedy_search"
+	ModifiedBeamSearch = "modified_beam_search"
+)
+
+// DecodingSupport reports whether a family can decode with the given method.
+//
+// Measured, and it matters more than it looks: an offline CTC recogniser told
+// to use modified_beam_search does not decline it. It prints
+//
+//	offline-recognizer-ctc-impl.h:Init:207 Only greedy_search is supported
+//
+// and terminates the process. Since decoding_method is a request parameter,
+// that turned one HTTP call into a way to kill the server, so nothing may
+// reach the loader without passing this first.
+func DecodingSupport(family, method string) error {
+	switch method {
+	case "", GreedySearch:
+		// Every family can decode greedily.
+		return nil
+	case ModifiedBeamSearch:
+		if family != "transducer" {
+			return core.Errorf(core.CodeCapabilityUnavailable,
+				"modified_beam_search works on transducer models; %s decodes greedily only",
+				family)
+		}
+		return nil
+	default:
+		return core.Errorf(core.CodeCapabilityUnavailable,
+			"unknown decoding method %q", method)
+	}
+}

@@ -131,3 +131,35 @@ func TestHotwordsSupport(t *testing.T) {
 		})
 	}
 }
+
+// The case that killed a server: sherpa-onnx does not decline
+// modified_beam_search on a CTC model, it prints a line and calls exit().
+// Since decoding_method is a request parameter, one HTTP call could take the
+// process down.
+func TestDecodingSupport(t *testing.T) {
+	cases := []struct {
+		name   string
+		family string
+		method string
+		ok     bool
+	}{
+		{"transducer decodes with a beam", "transducer", ModifiedBeamSearch, true},
+		{"transducer decodes greedily too", "transducer", GreedySearch, true},
+		{"ctc has no beam and must be refused", "nemo_ctc", ModifiedBeamSearch, false},
+		{"zipformer ctc likewise", "zipformer_ctc", ModifiedBeamSearch, false},
+		{"ctc decodes greedily", "nemo_ctc", GreedySearch, true},
+		{"an empty method is the model's own", "nemo_ctc", "", true},
+		{"an unknown method is refused for every family", "transducer", "beam_search", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := DecodingSupport(c.family, c.method)
+			if c.ok && err != nil {
+				t.Errorf("DecodingSupport = %v, want supported", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("DecodingSupport accepted a combination that terminates the process")
+			}
+		})
+	}
+}
