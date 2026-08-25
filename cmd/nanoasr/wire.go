@@ -81,6 +81,8 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 			TargetSampleRate: cfg.Audio.TargetSampleRate,
 			ChannelMode:      core.ChannelMode(cfg.Audio.ChannelMode),
 			MinSilenceMS:     cfg.VAD.MinSilenceMS,
+			MaxSplitChannels: cfg.Audio.MaxSplitChannels,
+			MaxDecodedBytes:  cfg.Audio.MaxDecodedBytes,
 			BatchMaxSize:     cfg.ASR.Batch.MaxSize,
 			BatchMaxSeconds:  cfg.ASR.Batch.MaxSeconds,
 			NumThreads:       cfg.ASR.NumThreads,

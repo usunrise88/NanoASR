@@ -50,12 +50,12 @@ type wavFormat struct {
 	blockAlign    int
 }
 
-func (d *WAVDecoder) Decode(ctx context.Context, r io.Reader, opts Options) (PCM, error) {
+func (d *WAVDecoder) Decode(ctx context.Context, r io.Reader, opts Options) ([]PCM, error) {
 	br := bufio.NewReaderSize(r, 64<<10)
 
 	f, dataSize, err := readWAVHeader(br)
 	if err != nil {
-		return PCM{}, err
+		return nil, err
 	}
 
 	target := opts.TargetSampleRate
@@ -63,15 +63,29 @@ func (d *WAVDecoder) Decode(ctx context.Context, r io.Reader, opts Options) (PCM
 		target = 16000
 	}
 
-	samples, err := d.readSamples(ctx, br, f, dataSize, opts)
+	outputs, err := opts.splitChannels(f.channels)
 	if err != nil {
-		return PCM{}, err
+		return nil, err
 	}
 
-	if f.sampleRate != target {
-		samples = Resample(samples, f.sampleRate, target)
+	tracks, err := d.readSamples(ctx, br, f, dataSize, opts, outputs)
+	if err != nil {
+		return nil, err
 	}
-	return PCM{Samples: samples, SampleRate: target, Channels: f.channels}, nil
+
+	pcm := make([]PCM, len(tracks))
+	for i, samples := range tracks {
+		if f.sampleRate != target {
+			samples = Resample(samples, f.sampleRate, target)
+		}
+		pcm[i] = PCM{
+			Samples:        samples,
+			SampleRate:     target,
+			SourceChannels: f.channels,
+			Channel:        i,
+		}
+	}
+	return pcm, nil
 }
 
 // readWAVHeader walks the chunk list to the data chunk. Chunks other than
@@ -214,12 +228,14 @@ func sampleWidth(f wavFormat) (int, error) {
 	}
 }
 
-// readSamples converts frames to mono float32 as they arrive.
+// readSamples converts frames to float32 as they arrive, producing outputs
+// tracks: one downmixed track normally, one per channel under split.
 //
 // The duration limit is enforced while reading, not after: buffering a
 // two-hour file only to reject it is how a size limit becomes a memory
-// exhaustion bug.
-func (d *WAVDecoder) readSamples(ctx context.Context, r io.Reader, f wavFormat, dataSize int64, opts Options) ([]float32, error) {
+// exhaustion bug. The memory limit is enforced the same way and for the same
+// reason, since split multiplies what a single duration can cost.
+func (d *WAVDecoder) readSamples(ctx context.Context, r io.Reader, f wavFormat, dataSize int64, opts Options, outputs int) ([][]float32, error) {
 	width, err := sampleWidth(f)
 	if err != nil {
 		return nil, err
@@ -231,10 +247,14 @@ func (d *WAVDecoder) readSamples(ctx context.Context, r io.Reader, f wavFormat, 
 	}
 
 	if dataSize > 0 {
-		if maxFrames >= 0 && dataSize/int64(f.blockAlign) > maxFrames {
+		declared := dataSize / int64(f.blockAlign)
+		if maxFrames >= 0 && declared > maxFrames {
 			return nil, core.Errorf(core.CodeDurationExceeded,
 				"audio is %.1fs, limit is %.1fs",
-				float64(dataSize/int64(f.blockAlign))/float64(f.sampleRate), opts.MaxDurationSec)
+				float64(declared)/float64(f.sampleRate), opts.MaxDurationSec)
+		}
+		if err := opts.checkDecodedBytes(declared, outputs); err != nil {
+			return nil, err
 		}
 		r = io.LimitReader(r, dataSize)
 	}
@@ -244,9 +264,13 @@ func (d *WAVDecoder) readSamples(ctx context.Context, r io.Reader, f wavFormat, 
 	const blockFrames = 8192
 	buf := make([]byte, blockFrames*f.blockAlign)
 
-	out := make([]float32, 0, preallocFrames(dataSize, int64(f.blockAlign), maxFrames))
+	prealloc := preallocFrames(dataSize, int64(f.blockAlign), maxFrames)
+	out := make([][]float32, outputs)
+	for i := range out {
+		out[i] = make([]float32, 0, prealloc)
+	}
 
-	first := opts.ChannelMode == core.ChannelFirst
+	mix := mixdown{outputs: outputs, first: opts.ChannelMode == core.ChannelFirst}
 	frames := int64(0)
 
 	for {
@@ -265,13 +289,16 @@ func (d *WAVDecoder) readSamples(ctx context.Context, r io.Reader, f wavFormat, 
 		n -= n % f.blockAlign
 
 		for off := 0; off < n; off += f.blockAlign {
-			out = append(out, frameToMono(buf[off:off+f.blockAlign], f, width, first))
+			mix.frame(out, buf[off:off+f.blockAlign], f, width)
 		}
 		frames += int64(n / f.blockAlign)
 
 		if maxFrames >= 0 && frames > maxFrames {
 			return nil, core.Errorf(core.CodeDurationExceeded,
 				"audio exceeds the %.1fs limit", opts.MaxDurationSec)
+		}
+		if err := opts.checkDecodedBytes(frames, outputs); err != nil {
+			return nil, err
 		}
 		if isEOF(err) {
 			break
@@ -281,7 +308,7 @@ func (d *WAVDecoder) readSamples(ctx context.Context, r io.Reader, f wavFormat, 
 		}
 	}
 
-	if len(out) == 0 {
+	if len(out[0]) == 0 {
 		return nil, badWAV("data chunk is empty")
 	}
 	return out, nil
@@ -303,18 +330,37 @@ func preallocFrames(dataSize, blockAlign, maxFrames int64) int {
 	return int(frames)
 }
 
-// frameToMono converts one frame, either by averaging channels or by keeping
-// the first. Averaging is the default because a downmixed conversation loses
-// less than an arbitrarily chosen leg.
-func frameToMono(frame []byte, f wavFormat, width int, firstOnly bool) float32 {
-	if firstOnly || f.channels == 1 {
-		return sampleToFloat(frame[:width], f)
+// mixdown decides what one interleaved frame contributes to each output track.
+//
+// It replaced a boolean because there are three answers, not two, and the
+// missing third was the bug: split used to fall through to the averaging branch
+// and be silently downmixed.
+type mixdown struct {
+	outputs int
+	first   bool
+}
+
+// frame appends this frame's contribution to every output track. dst is indexed
+// by output, so the split case is a plain deinterleave and the other two cases
+// write a single value.
+func (m mixdown) frame(dst [][]float32, frame []byte, f wavFormat, width int) {
+	if m.outputs > 1 {
+		for c := 0; c < m.outputs; c++ {
+			dst[c] = append(dst[c], sampleToFloat(frame[c*width:(c+1)*width], f))
+		}
+		return
+	}
+	// Averaging is the default because a downmixed conversation loses less
+	// than an arbitrarily chosen leg.
+	if m.first || f.channels == 1 {
+		dst[0] = append(dst[0], sampleToFloat(frame[:width], f))
+		return
 	}
 	var sum float32
 	for c := 0; c < f.channels; c++ {
 		sum += sampleToFloat(frame[c*width:(c+1)*width], f)
 	}
-	return sum / float32(f.channels)
+	dst[0] = append(dst[0], sum/float32(f.channels))
 }
 
 func sampleToFloat(b []byte, f wavFormat) float32 {

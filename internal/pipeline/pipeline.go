@@ -30,6 +30,12 @@ type Options struct {
 	TargetSampleRate int
 	ChannelMode      core.ChannelMode
 	MinSilenceMS     int
+	// MaxSplitChannels and MaxDecodedBytes bound what one request may decode.
+	// Split multiplies decoded memory by the channel count, and neither the
+	// upload limit nor the queue's byte budget knows that: they count what
+	// arrived, not what it expands into.
+	MaxSplitChannels int
+	MaxDecodedBytes  int64
 
 	BatchMaxSize    int
 	BatchMaxSeconds int
@@ -117,14 +123,8 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 		return nil, err
 	}
 
-	pcm, err := runStage(&stages, "decode", func() (audio.PCM, error) { return p.decode(ctx, req) })
-	if err != nil {
-		return nil, err
-	}
-
-	segments, err := runStage(&stages, "vad", func() ([]vad.Segment, error) {
-		return p.segmenter.Segment(ctx, pcm)
-	})
+	// One PCM per channel: several under channel_mode: split, one otherwise.
+	tracks, err := runStage(&stages, "decode", func() ([]audio.PCM, error) { return p.decode(ctx, req) })
 	if err != nil {
 		return nil, err
 	}
@@ -135,19 +135,19 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 	}
 	defer lease.Release()
 
-	recognitions, err := runStage(&stages, "asr", func() ([]asr.Recognition, error) {
-		return p.recognise(ctx, lease.Recognizer, segments, pcm.SampleRate)
-	})
-	if err != nil {
-		return nil, err
+	// vad, asr and assemble run once per channel. They are timed inside, and
+	// stageTimer accumulates, so stages_ms reports the total work rather than
+	// whichever channel happened to finish last.
+	decoded := make([]track, 0, len(tracks))
+	for _, pcm := range tracks {
+		t, err := p.channel(ctx, &stages, lease, req, pcm)
+		if err != nil {
+			return nil, err
+		}
+		decoded = append(decoded, t)
 	}
 
-	// Timed like the others: assembling words from tokens is measurable work on
-	// a long file, and a stage missing from stages_ms reads as time nobody can
-	// account for.
-	result, _ := runStage(&stages, "assemble", func() (*core.Result, error) {
-		return p.assemble(id, lease, req, pcm, segments, recognitions), nil
-	})
+	result := p.assemble(id, lease, req, tracks, decoded)
 
 	warn = append(warn, pendingFeatures(req)...)
 	warn = append(warn, p.unsupportedOptions(req, lease)...)
@@ -178,30 +178,38 @@ func (p *Pipeline) resolveModel(req core.Request) (string, error) {
 		"no model requested and asr.default_model is not configured").WithParam("model")
 }
 
-func (p *Pipeline) decode(ctx context.Context, req core.Request) (audio.PCM, error) {
+func (p *Pipeline) decode(ctx context.Context, req core.Request) ([]audio.PCM, error) {
 	rc, err := req.Audio.Open()
 	if err != nil {
-		return audio.PCM{}, core.Errorf(core.CodeInvalidRequest, "cannot read the uploaded file").WithCause(err)
+		return nil, core.Errorf(core.CodeInvalidRequest, "cannot read the uploaded file").WithCause(err)
 	}
 	defer rc.Close()
 
-	mode := p.opt.ChannelMode
-	if req.ChannelMode != "" {
-		mode = req.ChannelMode
-	}
-
 	pcm, _, err := p.decoder.Decode(ctx, rc, audio.Options{
 		TargetSampleRate: p.opt.TargetSampleRate,
-		ChannelMode:      mode,
+		ChannelMode:      p.channelMode(req),
 		MaxDurationSec:   p.opt.MaxDuration.Seconds(),
+		MaxSplitChannels: p.opt.MaxSplitChannels,
+		MaxDecodedBytes:  p.opt.MaxDecodedBytes,
 	})
 	if err != nil {
-		return audio.PCM{}, err
+		return nil, err
 	}
-	if len(pcm.Samples) == 0 {
-		return audio.PCM{}, core.Errorf(core.CodeInvalidRequest, "the file contains no audio")
+	if len(pcm) == 0 || len(pcm[0].Samples) == 0 {
+		return nil, core.Errorf(core.CodeInvalidRequest, "the file contains no audio")
 	}
 	return pcm, nil
+}
+
+// channelMode is the request's choice over the server's default. Everything
+// that asks "are we splitting?" has to ask it this way: reading req.ChannelMode
+// alone would miss a server configured to split, and reading the option alone
+// would ignore the request.
+func (p *Pipeline) channelMode(req core.Request) core.ChannelMode {
+	if req.ChannelMode != "" {
+		return req.ChannelMode
+	}
+	return p.opt.ChannelMode
 }
 
 // recognise decodes the segments in batches.
@@ -249,26 +257,20 @@ func (p *Pipeline) recognise(ctx context.Context, rec asr.Recognizer, segments [
 	return out, nil
 }
 
-func (p *Pipeline) assemble(id string, lease *pool.Lease, req core.Request, pcm audio.PCM, segments []vad.Segment, recognitions []asr.Recognition) *core.Result {
+// buildSegments turns one channel's recognitions into segments. It reports
+// whether any of them carried real token timings, because a result whose spans
+// are only VAD boundaries has to say so.
+func (p *Pipeline) buildSegments(
+	lease *pool.Lease,
+	pcm audio.PCM,
+	segments []vad.Segment,
+	recognitions []asr.Recognition,
+) ([]core.Segment, bool) {
 	caps := lease.Recognizer.Capabilities()
 	unit := lease.Recognizer.ModelingUnit()
 	rate := pcm.SampleRate
 
-	result := &core.Result{
-		ID:              id,
-		Model:           lease.Manifest.Key(),
-		Language:        resultLanguage(req, lease),
-		Duration:        pcm.Duration(),
-		TimestampSource: core.TimestampToken,
-		Silence:         vad.Silences(segments, len(pcm.Samples), rate, p.opt.MinSilenceMS),
-		Stats: core.Stats{
-			AudioDuration: pcm.Duration(),
-			SegmentsTotal: len(segments),
-			SpeechRatio:   vad.SpeechRatio(segments, len(pcm.Samples)),
-		},
-	}
-
-	var texts []string
+	var out []core.Segment
 	sawTokenTimings := false
 
 	for i, s := range segments {
@@ -297,21 +299,73 @@ func (p *Pipeline) assemble(id string, lease *pool.Lease, req core.Request, pcm 
 		} else {
 			sawTokenTimings = true
 		}
+		if pcm.Channel != 0 {
+			for j := range ws {
+				ws[j].Channel = pcm.Channel
+			}
+		}
 
-		texts = append(texts, text)
-		result.Segments = append(result.Segments, core.Segment{
-			ID:            len(result.Segments),
+		out = append(out, core.Segment{
 			Start:         segStart,
 			End:           segEnd,
 			Text:          text,
-			Channel:       0,
+			Channel:       pcm.Channel,
 			Speaker:       nil,
 			AvgConfidence: averageConfidence(ws),
 			Words:         ws,
 		})
 	}
+	return out, sawTokenTimings
+}
 
-	result.Text = strings.Join(texts, " ")
+// assemble merges every channel into one result.
+//
+// Duration, silence and the speech ratio are properties of the recording, not
+// of a channel: they are computed over the union of what the channels found, so
+// silence is where every leg was quiet. SegmentsTotal stays the count of VAD
+// segments across the channels — len(Segments) is the transcript, and the two
+// stop being the same number as soon as anything splits or drops one.
+func (p *Pipeline) assemble(
+	id string,
+	lease *pool.Lease,
+	req core.Request,
+	pcm []audio.PCM,
+	tracks []track,
+) *core.Result {
+	rate := pcm[0].SampleRate
+	longest, vadTotal := 0, 0
+	spanSets := make([][]vad.Span, 0, len(tracks))
+	sawTokenTimings := false
+	for _, t := range tracks {
+		if t.samples > longest {
+			longest = t.samples
+		}
+		vadTotal += t.vadSegments
+		spanSets = append(spanSets, t.spans)
+		sawTokenTimings = sawTokenTimings || t.tokenTimings
+	}
+	spans := vad.MergeSpans(spanSets...)
+
+	duration := 0.0
+	if rate > 0 {
+		duration = float64(longest) / float64(rate)
+	}
+
+	result := &core.Result{
+		ID:              id,
+		Model:           lease.Manifest.Key(),
+		Language:        resultLanguage(req, lease),
+		Duration:        duration,
+		TimestampSource: core.TimestampToken,
+		Silence:         vad.SilencesFrom(spans, longest, rate, p.opt.MinSilenceMS),
+		Segments:        merge(tracks),
+		Stats: core.Stats{
+			AudioDuration: duration,
+			SegmentsTotal: vadTotal,
+			SpeechRatio:   vad.SpeechRatioFrom(spans, longest),
+		},
+	}
+	result.Text = joinSegments(result.Segments)
 
 	if len(result.Segments) == 0 {
 		result.Warnings = append(result.Warnings, core.Warning{

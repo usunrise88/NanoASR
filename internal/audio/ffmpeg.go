@@ -55,34 +55,56 @@ func (d *FFmpegDecoder) CanDecode(f Format) bool {
 	return d != nil && f != FormatUnknown && !f.Native()
 }
 
-// args is the only command line we ever run.
+// args is the only command line we ever run. Every element is a fixed string
+// or a number we produced: nothing the client sent reaches it (SPEC §11).
+//
+// The three channel modes need three different tails, and conflating any two
+// of them is a silent wrong answer rather than an error:
+//
+//   - downmix averages the channels, which is what -ac 1 does;
+//   - first keeps one leg, which is a filter — -ac 1 would average them
+//     instead of dropping one, so the two are not interchangeable;
+//   - split needs every channel, so it asks for no channel conversion at all
+//     and writes a WAV, which our own decoder then deinterleaves. Emitting
+//     raw f32le here would leave the channel count nowhere in the stream.
 func (d *FFmpegDecoder) args(opts Options) []string {
 	rate := opts.TargetSampleRate
 	if rate <= 0 {
 		rate = 16000
 	}
-	channels := "1"
-	if opts.ChannelMode == core.ChannelFirst {
-		// Keeping the first channel is a filter, not a channel count: -ac 1
-		// would average the legs instead of dropping one.
-		channels = "1"
-	}
-	return []string{
+	const resample = "aresample=resampler=soxr"
+
+	args := []string{
 		"-hide_banner", "-nostdin", "-loglevel", "error",
 		"-i", "pipe:0",
 		"-vn", "-sn", "-dn",
 		"-map", "0:a:0",
-		"-ac", channels,
-		"-ar", strconv.Itoa(rate),
-		"-af", "aresample=resampler=soxr",
-		"-f", "f32le",
-		"pipe:1",
 	}
+	switch opts.ChannelMode {
+	case core.ChannelSplit:
+		args = append(args,
+			"-ar", strconv.Itoa(rate),
+			"-af", resample,
+			"-c:a", "pcm_f32le",
+			"-f", "wav")
+	case core.ChannelFirst:
+		args = append(args,
+			"-ar", strconv.Itoa(rate),
+			"-af", "pan=mono|c0=c0,"+resample,
+			"-f", "f32le")
+	default:
+		args = append(args,
+			"-ac", "1",
+			"-ar", strconv.Itoa(rate),
+			"-af", resample,
+			"-f", "f32le")
+	}
+	return append(args, "pipe:1")
 }
 
-func (d *FFmpegDecoder) Decode(ctx context.Context, r io.Reader, opts Options) (PCM, error) {
+func (d *FFmpegDecoder) Decode(ctx context.Context, r io.Reader, opts Options) ([]PCM, error) {
 	if d == nil {
-		return PCM{}, core.Errorf(core.CodeUnsupportedMediaType, "ffmpeg is not configured")
+		return nil, core.Errorf(core.CodeUnsupportedMediaType, "ffmpeg is not configured")
 	}
 
 	rate := opts.TargetSampleRate
@@ -101,17 +123,17 @@ func (d *FFmpegDecoder) Decode(ctx context.Context, r io.Reader, opts Options) (
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return PCM{}, internalErr(err)
+		return nil, internalErr(err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return PCM{}, internalErr(err)
+		return nil, internalErr(err)
 	}
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return PCM{}, internalErr(err)
+		return nil, internalErr(err)
 	}
 
 	// Feed the input on a goroutine: ffmpeg rejecting a malformed file closes
@@ -125,7 +147,7 @@ func (d *FFmpegDecoder) Decode(ctx context.Context, r io.Reader, opts Options) (
 		_, _ = io.Copy(stdin, r)
 	}()
 
-	samples, readErr := readFloat32LE(ctx, stdout, rate, opts.MaxDurationSec)
+	out, readErr := d.consume(ctx, stdout, opts, rate)
 
 	// Drain whatever is left so ffmpeg is never blocked writing into a full
 	// pipe while we wait for it to exit.
@@ -135,34 +157,58 @@ func (d *FFmpegDecoder) Decode(ctx context.Context, r io.Reader, opts Options) (
 
 	switch {
 	case readErr != nil:
-		return PCM{}, readErr
+		return nil, readErr
 	case waitErr != nil:
 		if ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return PCM{}, core.Errorf(core.CodeProcessingTimeout,
+			return nil, core.Errorf(core.CodeProcessingTimeout,
 				"ffmpeg exceeded the %s decode timeout", d.timeout)
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return PCM{}, ctxErr
+			return nil, ctxErr
 		}
 		// ffmpeg's own diagnosis is far more useful than "exit status 1", but
 		// it goes to the log, not to the client.
-		return PCM{}, core.Errorf(core.CodeUnsupportedMediaType,
+		return nil, core.Errorf(core.CodeUnsupportedMediaType,
 			"ffmpeg could not decode this input").
 			WithCause(errors.New(stderr.String()))
-	case len(samples) == 0:
-		return PCM{}, core.Errorf(core.CodeInvalidRequest,
+	case len(out) == 0 || len(out[0].Samples) == 0:
+		return nil, core.Errorf(core.CodeInvalidRequest,
 			"input contains no decodable audio stream")
 	}
 
-	return PCM{Samples: samples, SampleRate: rate, Channels: 1}, nil
+	return out, nil
+}
+
+// consume turns ffmpeg's stdout into PCM. Under split that stdout is a WAV
+// stream, so it goes through the native decoder rather than through a second
+// deinterleaver written here: one implementation of "interleaved frames to
+// mono tracks" is enough, and it is already the tested one.
+func (d *FFmpegDecoder) consume(ctx context.Context, stdout io.Reader, opts Options, rate int) ([]PCM, error) {
+	if opts.ChannelMode == core.ChannelSplit {
+		return NewWAVDecoder().Decode(ctx, stdout, opts)
+	}
+	samples, err := readFloat32LE(ctx, stdout, rate, opts.MaxDurationSec, opts.MaxDecodedBytes)
+	if err != nil {
+		return nil, err
+	}
+	// ffmpeg has already mixed to one channel, so the source count it started
+	// from is not observable from here.
+	return []PCM{{Samples: samples, SampleRate: rate, SourceChannels: 1}}, nil
 }
 
 // readFloat32LE streams ffmpeg's raw output, stopping as soon as the duration
 // limit is crossed rather than after the whole file has been decoded.
-func readFloat32LE(ctx context.Context, r io.Reader, rate int, maxDurationSec float64) ([]float32, error) {
+func readFloat32LE(ctx context.Context, r io.Reader, rate int, maxDurationSec float64, maxBytes int64) ([]float32, error) {
 	maxSamples := -1
 	if maxDurationSec > 0 {
 		maxSamples = int(maxDurationSec * float64(rate))
+	}
+	// One mono track here, so the memory cap is a second ceiling on the same
+	// stream rather than a per-channel one.
+	if maxBytes > 0 {
+		if byBytes := int(maxBytes / 4); maxSamples < 0 || byBytes < maxSamples {
+			maxSamples = byBytes
+		}
 	}
 
 	const blockSamples = 8192

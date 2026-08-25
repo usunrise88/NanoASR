@@ -16,12 +16,21 @@ import (
 )
 
 // PCM is canonical audio: mono, float32 in [-1,1], SampleRate Hz.
+//
+// One PCM is always one mono signal. Under ChannelSplit a decoder returns
+// several of them, one per source channel, rather than widening this type:
+// every stage downstream — VAD, the recogniser, word assembly — takes mono, and
+// a PCM that were sometimes interleaved would put a "which kind is this?"
+// branch in all of them.
 type PCM struct {
 	Samples    []float32
 	SampleRate int
-	// Channels is what the source had before downmixing, kept for reporting
-	// and for ChannelSplit.
-	Channels int
+	// SourceChannels is how many channels the file had before any downmix,
+	// kept for reporting. Channel says which one this PCM carries, and is 0
+	// both for channel 0 of a split and for a downmix of all of them —
+	// the two are told apart by how many PCMs came back.
+	SourceChannels int
+	Channel        int
 }
 
 // Duration in seconds.
@@ -91,7 +100,10 @@ type Decoder interface {
 	CanDecode(f Format) bool
 	// Decode must respect ctx: a cancelled request has to stop the work, not
 	// just stop waiting for it.
-	Decode(ctx context.Context, r io.Reader, opts Options) (PCM, error)
+	//
+	// It returns one PCM per recognised channel: several under ChannelSplit,
+	// exactly one otherwise. The slice is never empty on a nil error.
+	Decode(ctx context.Context, r io.Reader, opts Options) ([]PCM, error)
 }
 
 // Options controls channel handling and the target rate.
@@ -101,6 +113,42 @@ type Options struct {
 	// MaxDurationSec aborts decoding of an over-long file instead of buffering
 	// it first and rejecting it afterwards.
 	MaxDurationSec float64
+	// MaxSplitChannels caps how many channels ChannelSplit will decode. A file
+	// with more is refused: split exists for a telephony leg pair, and a
+	// sixteen-track session would be decoded in full before anyone noticed.
+	// 0 means no split-specific limit.
+	MaxSplitChannels int
+	// MaxDecodedBytes caps decoded PCM across every channel together. The
+	// duration limit stopped being sufficient once one file could produce N
+	// channels of it. 0 means unlimited.
+	MaxDecodedBytes int64
+}
+
+// splitChannels reports how many channels to produce for a source that has n.
+func (o Options) splitChannels(n int) (int, error) {
+	if o.ChannelMode != core.ChannelSplit || n <= 1 {
+		return 1, nil
+	}
+	if o.MaxSplitChannels > 0 && n > o.MaxSplitChannels {
+		return 0, core.Errorf(core.CodeInvalidRequest,
+			"channel_mode=split accepts at most %d channels, this file has %d",
+			o.MaxSplitChannels, n).WithParam("channel_mode")
+	}
+	return n, nil
+}
+
+// checkDecodedBytes refuses a decode that would hold more PCM than allowed.
+// frames is per channel; float32 is four bytes.
+func (o Options) checkDecodedBytes(frames int64, channels int) error {
+	if o.MaxDecodedBytes <= 0 {
+		return nil
+	}
+	if got := frames * int64(channels) * 4; got > o.MaxDecodedBytes {
+		return core.Errorf(core.CodeFileTooLarge,
+			"decoding this file would need %d bytes of audio memory, the limit is %d",
+			got, o.MaxDecodedBytes)
+	}
+	return nil
 }
 
 // Router picks a decoder by format and reports a clean domain error when no
@@ -113,11 +161,11 @@ func NewRouter(decoders ...Decoder) *Router { return &Router{decoders: decoders}
 
 // Decode sniffs the head of r and dispatches. The sniffed prefix is pushed back
 // so decoders always see a complete stream.
-func (rt *Router) Decode(ctx context.Context, r io.Reader, opts Options) (PCM, Format, error) {
+func (rt *Router) Decode(ctx context.Context, r io.Reader, opts Options) ([]PCM, Format, error) {
 	head := make([]byte, SniffSize)
 	n, err := io.ReadFull(r, head)
 	if err != nil && err != io.ErrUnexpectedEOF {
-		return PCM{}, FormatUnknown, core.Errorf(core.CodeInvalidRequest, "cannot read audio: %v", err)
+		return nil, FormatUnknown, core.Errorf(core.CodeInvalidRequest, "cannot read audio: %v", err)
 	}
 	head = head[:n]
 	f := Sniff(head)
@@ -134,14 +182,14 @@ func (rt *Router) Decode(ctx context.Context, r io.Reader, opts Options) (PCM, F
 	// matters to whoever has to fix it: an unrecognised container is the
 	// caller's problem, a missing ffmpeg is the operator's.
 	if f == FormatUnknown {
-		return PCM{}, f, core.Errorf(core.CodeUnsupportedMediaType,
+		return nil, f, core.Errorf(core.CodeUnsupportedMediaType,
 			"the upload is not recognisable audio")
 	}
 	if !rt.handlesCompressed() {
-		return PCM{}, f, core.Errorf(core.CodeUnsupportedMediaType,
+		return nil, f, core.Errorf(core.CodeUnsupportedMediaType,
 			"format %q needs ffmpeg, which is not installed on the server", f)
 	}
-	return PCM{}, f, core.Errorf(core.CodeUnsupportedMediaType,
+	return nil, f, core.Errorf(core.CodeUnsupportedMediaType,
 		"no decoder for format %q", f)
 }
 

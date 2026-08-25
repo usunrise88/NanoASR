@@ -34,8 +34,8 @@ func (f *fakeSource) Close() error     { f.closed = true; return nil }
 type fakeDecoder struct{ pcm audio.PCM }
 
 func (fakeDecoder) CanDecode(audio.Format) bool { return true }
-func (d fakeDecoder) Decode(context.Context, io.Reader, audio.Options) (audio.PCM, error) {
-	return d.pcm, nil
+func (d fakeDecoder) Decode(context.Context, io.Reader, audio.Options) ([]audio.PCM, error) {
+	return []audio.PCM{d.pcm}, nil
 }
 
 type fakeSegmenter struct{ segments []vad.Segment }
@@ -128,7 +128,7 @@ func newHarness(t *testing.T, pcm audio.PCM, segs []vad.Segment, rec *fakeRecogn
 
 // silence builds a PCM buffer of the given duration.
 func silence(seconds float64) audio.PCM {
-	return audio.PCM{Samples: make([]float32, int(seconds*testRate)), SampleRate: testRate, Channels: 1}
+	return audio.PCM{Samples: make([]float32, int(seconds*testRate)), SampleRate: testRate, SourceChannels: 1}
 }
 
 func segment(startSec, lenSec float64) vad.Segment {

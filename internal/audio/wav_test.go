@@ -74,7 +74,10 @@ func decodeWAV(t *testing.T, raw []byte, opts Options) PCM {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	return pcm
+	if len(pcm) != 1 {
+		t.Fatalf("decode returned %d tracks, want 1", len(pcm))
+	}
+	return pcm[0]
 }
 
 func TestWAVSampleFormats(t *testing.T) {
@@ -164,8 +167,8 @@ func TestWAVChannelModes(t *testing.T) {
 	if math.Abs(float64(first.Samples[0]-0.5)) > 0.01 {
 		t.Errorf("first channel = %.4f, want 0.5", first.Samples[0])
 	}
-	if first.Channels != 2 {
-		t.Errorf("Channels = %d, want the source count 2", first.Channels)
+	if first.SourceChannels != 2 {
+		t.Errorf("SourceChannels = %d, want the source count 2", first.SourceChannels)
 	}
 }
 
@@ -287,4 +290,94 @@ func floatBytes(vals ...float32) []byte {
 		binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(v))
 	}
 	return b
+}
+
+func TestWAVSplitKeepsChannelsApart(t *testing.T) {
+	// Two channels: left at full scale, right at zero. Under downmix these
+	// average to 0.25; under split neither value may move.
+	raw := buildWAV(wavPCM, 2, 16000, 16, pcm16(16384, 0, 16384, 0))
+
+	tracks, err := (&WAVDecoder{}).Decode(context.Background(), bytes.NewReader(raw),
+		Options{TargetSampleRate: 16000, ChannelMode: core.ChannelSplit, MaxSplitChannels: 2})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(tracks) != 2 {
+		t.Fatalf("split returned %d tracks, want one per channel", len(tracks))
+	}
+	for i, want := range []float32{0.5, 0} {
+		if got := tracks[i].Samples[0]; math.Abs(float64(got-want)) > 0.01 {
+			t.Errorf("channel %d sample = %.4f, want %.4f", i, got, want)
+		}
+		if tracks[i].Channel != i {
+			t.Errorf("track %d reports Channel %d", i, tracks[i].Channel)
+		}
+		if tracks[i].SourceChannels != 2 {
+			t.Errorf("track %d reports SourceChannels %d, want 2", i, tracks[i].SourceChannels)
+		}
+	}
+}
+
+// A mono file asked to split is one track, not an error: the caller wants every
+// channel, and there is one.
+func TestWAVSplitOfMonoIsOneTrack(t *testing.T) {
+	raw := buildWAV(wavPCM, 1, 16000, 16, pcm16(16384, -16384))
+
+	tracks, err := (&WAVDecoder{}).Decode(context.Background(), bytes.NewReader(raw),
+		Options{TargetSampleRate: 16000, ChannelMode: core.ChannelSplit, MaxSplitChannels: 2})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("got %d tracks, want 1", len(tracks))
+	}
+}
+
+// Refusing is the point: a sixteen-track session would otherwise be decoded in
+// full, sixteen times the memory, before anyone noticed.
+func TestWAVSplitRefusesTooManyChannels(t *testing.T) {
+	raw := buildWAV(wavPCM, 4, 16000, 16, pcm16(0, 0, 0, 0))
+
+	_, err := (&WAVDecoder{}).Decode(context.Background(), bytes.NewReader(raw),
+		Options{TargetSampleRate: 16000, ChannelMode: core.ChannelSplit, MaxSplitChannels: 2})
+	var e *core.Error
+	if !errors.As(err, &e) || e.Code != core.CodeInvalidRequest {
+		t.Fatalf("err = %v, want invalid_request naming the channel limit", err)
+	}
+	if e.Param != "channel_mode" {
+		t.Errorf("Param = %q, want channel_mode so the caller knows which field to change", e.Param)
+	}
+}
+
+// The memory ceiling counts every channel, which is the whole reason it exists
+// beside the duration limit.
+func TestWAVSplitRefusesOverMemoryBudget(t *testing.T) {
+	frames := 4096
+	data := make([]byte, frames*2*2) // 2 channels, 16-bit
+	raw := buildWAV(wavPCM, 2, 16000, 16, data)
+
+	// One channel of this fits; two do not.
+	budget := int64(frames)*4 + 1
+
+	_, err := (&WAVDecoder{}).Decode(context.Background(), bytes.NewReader(raw),
+		Options{
+			TargetSampleRate: 16000,
+			ChannelMode:      core.ChannelSplit,
+			MaxSplitChannels: 2,
+			MaxDecodedBytes:  budget,
+		})
+	var e *core.Error
+	if !errors.As(err, &e) || e.Code != core.CodeFileTooLarge {
+		t.Fatalf("err = %v, want file_too_large", err)
+	}
+
+	// The same file downmixed is one track and stays inside the budget.
+	if _, err := (&WAVDecoder{}).Decode(context.Background(), bytes.NewReader(raw),
+		Options{
+			TargetSampleRate: 16000,
+			ChannelMode:      core.ChannelDownmix,
+			MaxDecodedBytes:  budget,
+		}); err != nil {
+		t.Fatalf("downmix of the same file must fit the budget: %v", err)
+	}
 }

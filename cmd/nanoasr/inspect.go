@@ -227,12 +227,17 @@ func decodeProbeAudio(path string) (audio.PCM, error) {
 	router := audio.NewRouter(audio.NewWAVDecoder(),
 		audio.NewFFmpegDecoder("ffmpeg", 60*time.Second))
 
+	// Downmix, so there is exactly one track: the probe asks whether the
+	// model's front end matches this audio, and one channel answers that.
 	pcm, _, err := router.Decode(context.Background(), f, audio.Options{
 		TargetSampleRate: 16000,
 		ChannelMode:      core.ChannelDownmix,
 		MaxDurationSec:   120,
 	})
-	return pcm, err
+	if err != nil {
+		return audio.PCM{}, err
+	}
+	return pcm[0], nil
 }
 
 // transcribeWith loads the model under one candidate configuration and decodes

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
@@ -71,11 +72,15 @@ func TestFFmpegDecodesCompressedFormats(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			raw := encodeWith(t, c.args...)
 
-			pcm, err := d.Decode(context.Background(), bytes.NewReader(raw),
+			tracks, err := d.Decode(context.Background(), bytes.NewReader(raw),
 				Options{TargetSampleRate: 16000, MaxDurationSec: 60})
 			if err != nil {
 				t.Fatalf("decode: %v", err)
 			}
+			if len(tracks) != 1 {
+				t.Fatalf("decode returned %d tracks, want 1", len(tracks))
+			}
+			pcm := tracks[0]
 
 			if pcm.SampleRate != 16000 {
 				t.Errorf("SampleRate = %d, want 16000", pcm.SampleRate)
@@ -219,7 +224,110 @@ type countingDecoder struct {
 	calls int
 }
 
-func (c *countingDecoder) Decode(ctx context.Context, r io.Reader, opts Options) (PCM, error) {
+func (c *countingDecoder) Decode(ctx context.Context, r io.Reader, opts Options) ([]PCM, error) {
 	c.calls++
 	return c.Decoder.Decode(ctx, r, opts)
+}
+
+// The split path is the only one where ffmpeg writes a container rather than
+// raw samples, and the only one whose channel count is carried in the stream
+// instead of in our arguments. A stereo fixture with a different tone per leg
+// proves both that the channels arrive and that they did not get mixed.
+func TestFFmpegSplitDeinterleavesChannels(t *testing.T) {
+	d := newTestFFmpeg(t)
+
+	// Left 1 kHz, right 3 kHz, merged into one stereo mp3.
+	raw := encodeStereo(t, 1000, 3000, "-c:a", "libmp3lame", "-b:a", "64k", "-f", "mp3")
+
+	tracks, err := d.Decode(context.Background(), bytes.NewReader(raw), Options{
+		TargetSampleRate: 16000,
+		ChannelMode:      core.ChannelSplit,
+		MaxDurationSec:   60,
+		MaxSplitChannels: 2,
+	})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(tracks) != 2 {
+		t.Fatalf("split returned %d tracks, want 2", len(tracks))
+	}
+
+	for i, want := range []float64{1000, 3000} {
+		other := []float64{3000, 1000}[i]
+		samples := interior(tracks[i].Samples)
+		mine := goertzel(samples, want, 16000)
+		theirs := goertzel(samples, other, 16000)
+		if mine < theirs*2 {
+			t.Errorf("channel %d: %.0f Hz amplitude %.4f is not clearly above the %.0f Hz leak %.4f; "+
+				"the channels were mixed", i, want, mine, other, theirs)
+		}
+		if tracks[i].Channel != i {
+			t.Errorf("track %d reports Channel %d", i, tracks[i].Channel)
+		}
+	}
+}
+
+// first must keep one leg. -ac 1 would average them, which is downmix wearing
+// the wrong name — the two produced identical output until M5.
+func TestFFmpegFirstKeepsOneChannel(t *testing.T) {
+	d := newTestFFmpeg(t)
+
+	// Left 1 kHz, right silent.
+	raw := encodeStereo(t, 1000, 0, "-c:a", "pcm_s16le", "-f", "wav")
+
+	decode := func(mode core.ChannelMode) float64 {
+		t.Helper()
+		tracks, err := d.Decode(context.Background(), bytes.NewReader(raw), Options{
+			TargetSampleRate: 16000, ChannelMode: mode, MaxDurationSec: 60,
+		})
+		if err != nil {
+			t.Fatalf("decode %s: %v", mode, err)
+		}
+		return goertzel(interior(tracks[0].Samples), 1000, 16000)
+	}
+
+	first := decode(core.ChannelFirst)
+	downmix := decode(core.ChannelDownmix)
+
+	// Keeping the leg preserves its amplitude; mixing it with silence does not.
+	// The gap is a factor of sqrt(2) rather than 2 because ffmpeg's -ac 1
+	// normalises a stereo downmix by -3 dB instead of averaging — which is
+	// exactly why the two modes cannot share an argument and why they produced
+	// identical output until this was fixed.
+	if first < fixtureAmplitude*0.8 {
+		t.Errorf("first = %.4f, want near the full %.4f: the leg was not kept intact",
+			first, fixtureAmplitude)
+	}
+	if first < downmix*1.25 {
+		t.Errorf("first = %.4f, downmix = %.4f: first is not keeping the loud leg, it is averaging",
+			first, downmix)
+	}
+}
+
+// encodeStereo builds a two-channel fixture whose legs differ, so a test can
+// tell one from the other after decoding. A zero frequency means silence.
+func encodeStereo(t *testing.T, left, right int, args ...string) []byte {
+	t.Helper()
+	requireFFmpeg(t)
+
+	source := func(hz int) string {
+		if hz == 0 {
+			return "anullsrc=r=16000:cl=mono:d=1"
+		}
+		return fmt.Sprintf("sine=frequency=%d:duration=1:sample_rate=16000", hz)
+	}
+
+	base := []string{"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", source(left),
+		"-f", "lavfi", "-i", source(right),
+		"-filter_complex", "[0:a][1:a]amerge=inputs=2[a]", "-map", "[a]"}
+	cmd := exec.Command("ffmpeg", append(base, append(args, "pipe:1")...)...)
+
+	var out, stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("encoding stereo fixture: %v\n%s", err, stderr.String())
+	}
+	return out.Bytes()
 }
