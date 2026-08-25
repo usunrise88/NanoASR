@@ -93,9 +93,16 @@ jobs:
 
       - name: build the archive
         id: dist
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+          GOOS: ${{ matrix.goos }}
+          UI: ${{ matrix.ui }}
         run: |
-          echo "archive=$(VERSION='${{ inputs.tag || github.ref_name }}' \
-            GOOS='${{ matrix.goos }}' UI='${{ matrix.ui }}' ./scripts/dist.sh)" >> "$GITHUB_OUTPUT"
+          # Assigned first and echoed second, on purpose: a failing command
+          # substitution inside `echo "..."` leaves echo's exit status, so the
+          # build could fail and the step still pass with an empty archive name.
+          archive="$(./scripts/dist.sh)"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
       # A release nobody can run is worse than no release. Unpack what was just
       # built and ask the binary what it is: the version has to be the tag, and

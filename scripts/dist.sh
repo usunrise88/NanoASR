@@ -25,8 +25,14 @@ case "$GOOS" in
   *) echo "unsupported GOOS: $GOOS" >&2; exit 1 ;;
 esac
 
+# The libraries live in the module cache and this script looks for them before
+# it builds anything, so on a cold checkout they have to be fetched first. `go
+# build` would have done it, but only after the check below had already failed —
+# which is exactly how a fresh CI runner failed on its first release.
+GOOS="$GOOS" go mod download
+
 if [[ ! -d "$LIBDIR" ]]; then
-  echo "native libraries not found at $LIBDIR — run 'go mod download' first" >&2
+  echo "native libraries not found at $LIBDIR after 'go mod download'" >&2
   exit 1
 fi
 
