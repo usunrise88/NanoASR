@@ -30,6 +30,11 @@ audio:
   max_duration: 30m
   target_sample_rate: 16000
   channel_mode: downmix         # downmix | first | split
+  # split decodes every channel in full, so memory scales with the channel
+  # count. Two is a telephony A/B leg pair; more is refused rather than
+  # decoded into an OOM.
+  max_split_channels: 2
+  max_decoded_bytes: 0          # 0 → max_duration x rate x 4 x max_split_channels
 
 vad:
   enabled: true
@@ -52,6 +57,13 @@ asr:
   batch:
     max_size: 8
     max_seconds: 60
+  # hotwords, decoding_method and max_active_paths cannot be changed on a
+  # loaded recogniser, so honouring them per request means a second resident
+  # copy of the model. 0 keeps the model's own settings and says so in a
+  # warning; raising this trades memory for per-request control.
+  variants:
+    max: 0
+    allow_hotwords: false
 
 registry:
   allow_download: true
@@ -78,10 +90,13 @@ jobs:
 postproc:
   punctuation:
     enabled: false
-    model: ""
+    model: ""                   # a catalog model of kind punctuation
   itn:
     enabled: false
     locale: ru
+  hotwords:
+    enabled: false              # requires asr.variants.max > 0
+    default_score: 1.5
 
 diarization:
   enabled: false
@@ -90,6 +105,10 @@ diarization:
   clustering:
     num_clusters: 0             # 0 → cluster by threshold
     threshold: 0.5
+  # How short a turn may be before it is dropped, and how short a gap may be
+  # before the turns around it are joined.
+  min_duration_on: 0.3
+  min_duration_off: 0.5
 
 storage:
   db_path: ./.nanoasr.db

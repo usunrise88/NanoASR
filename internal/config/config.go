@@ -91,6 +91,15 @@ type Audio struct {
 	MaxDuration      Duration `yaml:"max_duration"`
 	TargetSampleRate int      `yaml:"target_sample_rate"`
 	ChannelMode      string   `yaml:"channel_mode"`
+	// MaxSplitChannels bounds what channel_mode: split will accept. Split
+	// decodes every channel in full, so memory scales with the channel count —
+	// a six-channel field recording is not a pair of telephony legs, and
+	// refusing it is better than an OOM half an hour into the file.
+	MaxSplitChannels int `yaml:"max_split_channels"`
+	// MaxDecodedBytes caps decoded PCM across all channels. The duration limit
+	// alone stopped being sufficient once one file could produce N channels of
+	// it. 0 → derived in Autotune from max_duration and max_split_channels.
+	MaxDecodedBytes int64 `yaml:"max_decoded_bytes"`
 }
 
 type VAD struct {
@@ -112,6 +121,20 @@ type ASR struct {
 	IdleTTL           Duration `yaml:"idle_ttl"`
 	AcquireTimeout    Duration `yaml:"acquire_timeout"`
 	Batch             Batch    `yaml:"batch"`
+	Variants          Variants `yaml:"variants"`
+}
+
+// Variants governs per-request recogniser configuration.
+//
+// Hotwords, decoding_method and max_active_paths cannot be changed on a loaded
+// recogniser: sherpa-onnx settles them at construction, and the Go binding
+// exposes no per-stream override. Honouring them per request therefore means
+// admitting a second resident copy of the model, so the cost is memory and the
+// operator decides whether to pay it. Max 0 — the default — means the request
+// is answered with the model's configured behaviour and a warning saying so.
+type Variants struct {
+	Max           int  `yaml:"max"`
+	AllowHotwords bool `yaml:"allow_hotwords"`
 }
 
 type Batch struct {
@@ -150,8 +173,19 @@ type Jobs struct {
 }
 
 type PostProc struct {
-	Punctuation Punctuation `yaml:"punctuation"`
-	ITN         ITN         `yaml:"itn"`
+	Punctuation Punctuation    `yaml:"punctuation"`
+	ITN         ITN            `yaml:"itn"`
+	Hotwords    HotwordsPolicy `yaml:"hotwords"`
+}
+
+// HotwordsPolicy is the server-side half of hotword biasing. The words
+// themselves are always per request; what the server decides is whether it will
+// spend a model instance on them and what score to apply when the caller does
+// not say. The OpenAI dialect maps prompt → hotwords without a score, so a
+// default is not optional.
+type HotwordsPolicy struct {
+	Enabled      bool    `yaml:"enabled"`
+	DefaultScore float32 `yaml:"default_score"`
 }
 
 type Punctuation struct {
@@ -169,6 +203,12 @@ type Diarization struct {
 	SegmentationModel string     `yaml:"segmentation_model"`
 	EmbeddingModel    string     `yaml:"embedding_model"`
 	Clustering        Clustering `yaml:"clustering"`
+	// MinDurationOn and MinDurationOff smooth the segmentation output: how
+	// short a turn may be before it is discarded, and how short a gap may be
+	// before the two turns around it are joined. SPEC §5.7 names both; they
+	// had no key until M5.
+	MinDurationOn  float32 `yaml:"min_duration_on"`
+	MinDurationOff float32 `yaml:"min_duration_off"`
 }
 
 type Clustering struct {

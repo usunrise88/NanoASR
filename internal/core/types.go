@@ -79,6 +79,12 @@ type Request struct {
 }
 
 // Word is the smallest unit we report and the reason word_timestamps exists.
+//
+// Speaker and Channel live here rather than only on the segment because
+// attribution is per word (SPEC §5.7): a VAD segment can span a speaker change,
+// and a segment-level label would then be a majority vote presented as a fact.
+// Both are omitempty, so a single-speaker mono transcript serialises exactly as
+// it did before diarization existed.
 type Word struct {
 	Word       string  `json:"word"`
 	Start      float64 `json:"start"`
@@ -87,6 +93,14 @@ type Word struct {
 	// Original keeps the pre-ITN surface form when inverse text normalisation
 	// rewrote this span.
 	Original string `json:"original,omitempty"`
+
+	Speaker *string `json:"speaker,omitempty"`
+	// SpeakerConfidence is how much of this word the winning turn actually
+	// covered. A word that overlapped no turn at all keeps the nearest turn's
+	// label and drops to diarize.FallbackConfidence, so a client can tell an
+	// attribution that was measured from one that was guessed.
+	SpeakerConfidence float64 `json:"speaker_confidence,omitempty"`
+	Channel           int     `json:"channel,omitempty"`
 }
 
 // Segment is one VAD-delimited stretch of speech.

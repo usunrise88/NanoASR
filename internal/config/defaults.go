@@ -28,6 +28,8 @@ func Default() Config {
 			MaxDuration:      Dur(30 * time.Minute),
 			TargetSampleRate: 16000,
 			ChannelMode:      "downmix",
+			// Two: the workload split exists for is a telephony A/B leg pair.
+			MaxSplitChannels: 2,
 		},
 		VAD: VAD{
 			Enabled:      true,
@@ -53,10 +55,17 @@ func Default() Config {
 			MaxProcessingTime: Dur(30 * time.Minute),
 			HistoryTTL:        Dur(30 * 24 * time.Hour),
 		},
-		PostProc:    PostProc{ITN: ITN{Locale: "ru"}},
-		Diarization: Diarization{Clustering: Clustering{Threshold: 0.5}},
-		Storage:     Storage{DBPath: "/var/lib/nanoasr/nanoasr.db"},
-		Log:         Log{Level: "info", Format: "json"},
+		PostProc: PostProc{
+			ITN:      ITN{Locale: "ru"},
+			Hotwords: HotwordsPolicy{DefaultScore: 1.5},
+		},
+		Diarization: Diarization{
+			Clustering:     Clustering{Threshold: 0.5},
+			MinDurationOn:  0.3,
+			MinDurationOff: 0.5,
+		},
+		Storage: Storage{DBPath: "/var/lib/nanoasr/nanoasr.db"},
+		Log:     Log{Level: "info", Format: "json"},
 	}
 }
 
@@ -72,14 +81,37 @@ func (c *Config) Autotune() {
 	if c.ASR.NumThreads <= 0 {
 		c.ASR.NumThreads = clamp(cpus/2, 1, 8)
 	}
+	if c.Audio.MaxSplitChannels <= 0 {
+		c.Audio.MaxSplitChannels = 2
+	}
 	if c.Jobs.MaxConcurrent <= 0 {
 		c.Jobs.MaxConcurrent = clamp(cpus/c.ASR.NumThreads, 1, 8)
+		// A split job decodes every channel in full, so its peak memory is the
+		// per-job figure of SPEC §12.5 times the channel count. When split is
+		// the server default, every concurrent job pays that, and the
+		// concurrency has to come down or the plan is fiction.
+		//
+		// A per-request split on a downmix-default server is not covered here:
+		// it can transiently exceed the plan by (channels-1) x 115 MB x
+		// max_concurrent, bounded by audio.max_split_channels.
+		if c.Audio.ChannelMode == "split" && c.Audio.MaxSplitChannels > 1 {
+			c.Jobs.MaxConcurrent = clamp(c.Jobs.MaxConcurrent/c.Audio.MaxSplitChannels, 1, 8)
+		}
 	}
 	if c.ASR.MaxModelRSSMB <= 0 {
 		c.ASR.MaxModelRSSMB = clamp(ramMB/2, 1024, 16384)
 	}
 	if c.ASR.MaxResidentModels <= 0 {
 		c.ASR.MaxResidentModels = clamp(c.ASR.MaxModelRSSMB/1500, 1, 6)
+	}
+	// One decoded channel of the longest permitted file, times the channels a
+	// split may produce. This is the ceiling a single job can put in memory,
+	// and it is derived rather than guessed so that raising max_duration does
+	// not silently raise the memory a request can claim.
+	if c.Audio.MaxDecodedBytes <= 0 {
+		perChannel := int64(c.Audio.MaxDuration.Duration.Seconds()) *
+			int64(c.Audio.TargetSampleRate) * 4
+		c.Audio.MaxDecodedBytes = perChannel * int64(c.Audio.MaxSplitChannels)
 	}
 	// An unset temp_dir means "choose one", and it is a documented value in the
 	// shipped configuration files — so it is resolved here rather than left as
@@ -96,8 +128,16 @@ func (c *Config) Autotune() {
 // PeakMemoryEstimateMB is what the process is expected to need at full load:
 // resident models plus the decoded PCM of every concurrent job. 30 minutes of
 // mono float32 at 16 kHz is ~115 MB, which dominates on long files.
+//
+// Under channel_mode: split a job holds every channel at once, so the per-job
+// figure is multiplied by the channel bound. This is the server default only;
+// a per-request split against a downmix-default server can still exceed the
+// estimate, which is why audio.max_split_channels exists to bound it.
 func (c *Config) PeakMemoryEstimateMB() int {
 	pcmPerJob := int(c.Audio.MaxDuration.Seconds()) * c.Audio.TargetSampleRate * 4 / (1 << 20)
+	if c.Audio.ChannelMode == "split" && c.Audio.MaxSplitChannels > 1 {
+		pcmPerJob *= c.Audio.MaxSplitChannels
+	}
 	return c.ASR.MaxModelRSSMB + c.Jobs.MaxConcurrent*pcmPerJob
 }
 

@@ -105,6 +105,12 @@ func (p *Pipeline) Run(ctx context.Context, id string, req core.Request) (*core.
 func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) (*core.Result, error) {
 	started := time.Now()
 	stages := stageTimer{observer: p.opt.Observer, ctx: ctx, jobID: id}
+	stages.zero("post", "diarize")
+
+	// warn collects degradations as the stages discover them. It is threaded
+	// through rather than gathered at the end because only the stage that hit
+	// the limitation knows which limitation it hit.
+	var warn []core.Warning
 
 	modelID, err := p.resolveModel(req)
 	if err != nil {
@@ -142,7 +148,10 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 	result, _ := runStage(&stages, "assemble", func() (*core.Result, error) {
 		return p.assemble(id, lease, req, pcm, segments, recognitions), nil
 	})
-	result.Warnings = append(result.Warnings, p.unsupportedOptions(req, lease)...)
+
+	warn = append(warn, pendingFeatures(req)...)
+	warn = append(warn, p.unsupportedOptions(req, lease)...)
+	result.Warnings = append(result.Warnings, warn...)
 
 	if req.Strict {
 		if w, degraded := firstCapabilityWarning(result.Warnings); degraded {
@@ -324,39 +333,15 @@ func (p *Pipeline) assemble(id string, lease *pool.Lease, req core.Request, pcm 
 // unsupportedOptions reports request options this build accepts but does not
 // act on. Answering with a transcript that quietly ignored diarize=true is
 // worse than saying so.
+//
+// Only the language check lives here now. Every other degradation is reported
+// by the stage that discovers it — the acquire step knows why a variant was
+// refused, the post-processing factory knows which stages it could build, the
+// diarize step knows why it skipped — and a warning written where the knowledge
+// is cannot drift out of step with what the code actually did.
 func (p *Pipeline) unsupportedOptions(req core.Request, lease *pool.Lease) []core.Warning {
 	var out []core.Warning
 
-	if req.Diarize {
-		out = append(out, core.Warning{
-			Code:    "diarization_unavailable",
-			Message: "diarization is not implemented in this build; every word is unattributed",
-		})
-	}
-	if req.Punctuate {
-		out = append(out, core.Warning{
-			Code:    "punctuation_unavailable",
-			Message: "punctuation restoration is not implemented in this build",
-		})
-	}
-	if req.ITN {
-		out = append(out, core.Warning{
-			Code:    "itn_unavailable",
-			Message: "inverse text normalisation is not implemented in this build",
-		})
-	}
-	if len(req.Hotwords) > 0 {
-		out = append(out, core.Warning{
-			Code:    "hotwords_unavailable",
-			Message: "hotword biasing is not implemented in this build; the words were ignored",
-		})
-	}
-	if req.ChannelMode == core.ChannelSplit {
-		out = append(out, core.Warning{
-			Code:    "channel_split_unavailable",
-			Message: "per-channel recognition is not implemented in this build; channels were downmixed",
-		})
-	}
 	if req.Language != "" && !lease.Manifest.Supports(req.Language) {
 		out = append(out, core.Warning{
 			Code: "language_mismatch",
@@ -560,12 +545,31 @@ type stageTimer struct {
 	elapsed  map[string]int64
 }
 
+// record adds to a stage rather than replacing it. Channel split runs vad, asr
+// and assemble once per channel, and an assignment here would report only the
+// last channel's time while the others vanished into the gap between
+// processing_ms and the sum of the stages.
 func (t *stageTimer) record(stage string, d time.Duration, err error) {
 	if t.elapsed == nil {
 		t.elapsed = map[string]int64{}
 	}
-	t.elapsed[stage] = d.Milliseconds()
+	t.elapsed[stage] += d.Milliseconds()
 	t.observer.StageFinished(t.ctx, t.jobID, stage, d.Milliseconds(), err)
+}
+
+// zero declares stages that must appear in stages_ms even when they did not
+// run. SPEC §6 lists post and diarize in the result schema, and a client cannot
+// tell an absent key from a stage that was skipped — 0 says "did not run",
+// missing says "this build has never heard of it".
+func (t *stageTimer) zero(stages ...string) {
+	if t.elapsed == nil {
+		t.elapsed = map[string]int64{}
+	}
+	for _, s := range stages {
+		if _, ok := t.elapsed[s]; !ok {
+			t.elapsed[s] = 0
+		}
+	}
 }
 
 func newID(prefix string) string {

@@ -191,6 +191,66 @@ func (c *Config) Validate() error {
 	if len(c.API.Dialects) == 0 && !c.UI.Enabled {
 		return fmt.Errorf("no api dialects enabled and ui disabled: server would serve nothing")
 	}
+	if c.Audio.MaxSplitChannels < 1 {
+		return fmt.Errorf("audio.max_split_channels must be at least 1, got %d", c.Audio.MaxSplitChannels)
+	}
+	if err := c.validatePostProc(); err != nil {
+		return err
+	}
+	return c.validateDiarization()
+}
+
+// validatePostProc refuses post-processing that is switched on but has nothing
+// to run with. The alternative is a server that starts, looks configured, and
+// answers every punctuate=true with a warning nobody expected.
+func (c *Config) validatePostProc() error {
+	if c.PostProc.Punctuation.Enabled && c.PostProc.Punctuation.Model == "" {
+		return fmt.Errorf("postproc.punctuation.enabled is true but postproc.punctuation.model is empty; " +
+			"name a model of kind punctuation, or leave punctuation disabled")
+	}
+	if c.PostProc.ITN.Enabled && c.PostProc.ITN.Locale == "" {
+		return fmt.Errorf("postproc.itn.enabled is true but postproc.itn.locale is empty")
+	}
+	if c.PostProc.Hotwords.DefaultScore < 0 {
+		return fmt.Errorf("postproc.hotwords.default_score must not be negative, got %v",
+			c.PostProc.Hotwords.DefaultScore)
+	}
+	if c.ASR.Variants.Max < 0 {
+		return fmt.Errorf("asr.variants.max must not be negative, got %d", c.ASR.Variants.Max)
+	}
+	// Allowing hotwords without a variant budget is the configuration that
+	// looks enabled and does nothing: every request would be answered with the
+	// model's own decoding and a warning.
+	if c.PostProc.Hotwords.Enabled && c.ASR.Variants.Max == 0 {
+		return fmt.Errorf("postproc.hotwords.enabled is true but asr.variants.max is 0; " +
+			"per-request hotwords need a second resident model instance to load into")
+	}
+	return nil
+}
+
+func (c *Config) validateDiarization() error {
+	if !c.Diarization.Enabled {
+		return nil
+	}
+	if c.Diarization.SegmentationModel == "" || c.Diarization.EmbeddingModel == "" {
+		return fmt.Errorf("diarization.enabled is true but segmentation_model or embedding_model is empty; " +
+			"diarization needs both a segmentation and an embedding model")
+	}
+	if c.Diarization.Clustering.NumClusters < 0 {
+		return fmt.Errorf("diarization.clustering.num_clusters must not be negative, got %d",
+			c.Diarization.Clustering.NumClusters)
+	}
+	// Threshold is only consulted when the speaker count is unknown, so an
+	// out-of-range value is harmless until the day it is not.
+	if c.Diarization.Clustering.NumClusters == 0 {
+		if t := c.Diarization.Clustering.Threshold; t <= 0 || t >= 1 {
+			return fmt.Errorf("diarization.clustering.threshold must be between 0 and 1 exclusive, got %v; "+
+				"it is what decides speaker count when num_clusters is 0", t)
+		}
+	}
+	if c.Diarization.MinDurationOn < 0 || c.Diarization.MinDurationOff < 0 {
+		return fmt.Errorf("diarization.min_duration_on and min_duration_off must not be negative")
+	}
 	return nil
 }
 
