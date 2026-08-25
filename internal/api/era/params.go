@@ -43,11 +43,7 @@ const (
 type params struct {
 	request core.Request
 	output  string
-	// wantWords decides whether the json output carries word timings. The
-	// pipeline produces them either way — this only chooses what is rendered,
-	// which is what the upstream flag does too.
-	wantWords bool
-	warn      []core.Warning
+	warn    []core.Warning
 }
 
 func parseParams(r *http.Request, source core.AudioSource) (params, error) {
@@ -113,18 +109,20 @@ func parseParams(r *http.Request, source core.AudioSource) (params, error) {
 	}
 	p.applySpeakerRange(minSpeakers, maxSpeakers)
 
+	// word_timestamps is accepted and needs no action: the json output always
+	// carries words, matching the reference service, which aligns every request
+	// whether or not the flag was sent. Rejecting the parameter would break a
+	// client that sends it; warning about it would be noise about something
+	// that was in fact delivered.
+	if _, err := boolValue(r, "word_timestamps"); err != nil {
+		return p, err
+	}
+
 	// Parameters this pipeline cannot vary per request. They are accepted so a
 	// client written against the upstream service keeps working, and each one
 	// warns only when the caller actually sent it: warning on a default nobody
 	// typed would make every response noisy and teach clients to ignore the
 	// header the warnings arrive in.
-	if v, err := boolValue(r, "word_timestamps"); err != nil {
-		return p, err
-	} else if v {
-		// Not inert: it decides whether the json output carries words.
-		p.wantWords = true
-	}
-
 	if present(r, "vad_filter") {
 		p.warn = append(p.warn, core.Warning{
 			Code: "vad_filter_ignored",

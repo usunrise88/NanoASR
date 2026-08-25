@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -208,8 +209,8 @@ func TestASROutputFormats(t *testing.T) {
 		{outputTXT, "Привет, мир"},
 		{outputSRT, "00:00:00,500 --> 00:00:02,040"},
 		{outputVTT, "WEBVTT"},
-		{outputTSV, "start\tend\ttext\n500\t2040\tПривет, мир\n"},
-		{outputJSON, `"language": "ru"`},
+		{outputTSV, "500\t2040\tПривет, мир\n"},
+		{outputJSON, `"language":"ru"`},
 	} {
 		t.Run(tc.output, func(t *testing.T) {
 			svc := &fakeService{result: sampleResult()}
@@ -233,37 +234,138 @@ func TestASROutputFormats(t *testing.T) {
 	}
 }
 
-// word_timestamps chooses what the json output carries. The pipeline produces
-// words either way, so the flag has to actually remove them.
-func TestASRJSONWordsFollowWordTimestamps(t *testing.T) {
-	for _, tc := range []struct {
-		flag      string
-		wantWords bool
-	}{{"", false}, {"false", false}, {"true", true}} {
+// The json body is the reference service's document, not core.Result. A client
+// of this contract reads {segments, word_segments, language} and words carrying
+// "score"; serving our own schema would satisfy the paths and headers and still
+// break the caller at its first field access.
+func TestASRJSONMatchesTheReferenceSchema(t *testing.T) {
+	svc := &fakeService{result: sampleResult()}
+	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", query("output", outputJSON))
+
+	var doc map[string]any
+	decodeBody(t, resp, &doc)
+
+	if got, want := sortedKeys(doc), []string{"language", "segments", "word_segments"}; !equalStrings(got, want) {
+		t.Fatalf("top-level keys = %v, want %v", got, want)
+	}
+
+	segs := doc["segments"].([]any)
+	if len(segs) != 1 {
+		t.Fatalf("got %d segments, want 1", len(segs))
+	}
+	seg := segs[0].(map[string]any)
+	if got, want := sortedKeys(seg), []string{"end", "speaker", "start", "text", "words"}; !equalStrings(got, want) {
+		t.Errorf("segment keys = %v, want %v", got, want)
+	}
+	// Nothing of ours leaks in: no id, no channel, no avg_confidence.
+	for _, absent := range []string{"id", "channel", "avg_confidence"} {
+		if _, found := seg[absent]; found {
+			t.Errorf("segment carries %q, which this contract has no field for", absent)
+		}
+	}
+
+	words := seg["words"].([]any)
+	if len(words) != 2 {
+		t.Fatalf("got %d words, want 2", len(words))
+	}
+	word := words[0].(map[string]any)
+	for _, key := range []string{"word", "start", "end", "score"} {
+		if _, found := word[key]; !found {
+			t.Errorf("word is missing %q", key)
+		}
+	}
+	if _, found := word["confidence"]; found {
+		t.Error(`word carries "confidence"; this contract calls it "score"`)
+	}
+
+	// word_segments is every word of the transcript in one flat list.
+	flat := doc["word_segments"].([]any)
+	if len(flat) != 2 {
+		t.Errorf("word_segments has %d entries, want 2", len(flat))
+	}
+}
+
+// The reference aligns every request, so words appear whether or not
+// word_timestamps was sent. A client that omits the flag still expects them.
+func TestASRJSONAlwaysCarriesWords(t *testing.T) {
+	for _, flag := range []string{"", "false", "true"} {
 		svc := &fakeService{result: sampleResult()}
 		q := url.Values{"output": {outputJSON}}
-		if tc.flag != "" {
-			q.Set("word_timestamps", tc.flag)
+		if flag != "" {
+			q.Set("word_timestamps", flag)
 		}
 		resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", q)
 
-		got := strings.Contains(bodyOf(t, resp), `"word": "Привет,"`)
-		if got != tc.wantWords {
-			t.Errorf("word_timestamps=%q: words present = %v, want %v", tc.flag, got, tc.wantWords)
+		if !strings.Contains(bodyOf(t, resp), `"word":"Привет,"`) {
+			t.Errorf("word_timestamps=%q: the json output lost its words", flag)
 		}
 	}
 }
 
-// A rendered result must not lose its words for the caller that held it: the
-// json writer strips them from a copy, not from the result it was handed.
-func TestJSONWithoutWordsDoesNotMutateTheResult(t *testing.T) {
+// txt is one line per segment. A client splitting the body on newlines to get
+// utterances must not receive one enormous utterance.
+func TestASRTextIsOneLinePerSegment(t *testing.T) {
 	res := sampleResult()
-	if _, err := transcriptJSON(res, false); err != nil {
-		t.Fatal(err)
+	res.Segments = append(res.Segments, core.Segment{
+		ID: 1, Start: 2.5, End: 4.0, Text: "  как дела  ",
+	})
+	svc := &fakeService{result: res}
+	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", nil)
+
+	if got, want := bodyOf(t, resp), "Привет, мир\nкак дела\n"; got != want {
+		t.Errorf("body = %q, want %q", got, want)
 	}
-	if len(res.Segments[0].Words) != 2 {
-		t.Errorf("rendering stripped words from the caller's result")
+}
+
+// The reference emits no TSV header, unlike whisper's own writer. A client
+// reading the first line as data would take the header for a segment.
+func TestASRTSVHasNoHeader(t *testing.T) {
+	svc := &fakeService{result: sampleResult()}
+	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", query("output", outputTSV))
+
+	body := bodyOf(t, resp)
+	if strings.HasPrefix(body, "start\t") {
+		t.Errorf("TSV starts with a header row:\n%s", body)
 	}
+	if got, want := body, "500\t2040\tПривет, мир\n"; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+// A model that reports no per-word confidence produces a schema full of zeroes,
+// which a client would otherwise read as "every word is certainly wrong".
+func TestASRJSONReportsMissingWordConfidence(t *testing.T) {
+	res := sampleResult()
+	for i := range res.Segments[0].Words {
+		res.Segments[0].Words[i].Confidence = 0
+	}
+	svc := &fakeService{result: res}
+	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", query("output", outputJSON))
+
+	if w := resp.Header.Get(warningsHeader); !strings.Contains(w, "word_confidence_unavailable") {
+		t.Errorf("%s = %q, want word_confidence_unavailable", warningsHeader, w)
+	}
+}
+
+func sortedKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestASRRejectsAnUnknownOutput(t *testing.T) {

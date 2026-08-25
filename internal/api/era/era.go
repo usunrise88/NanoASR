@@ -94,7 +94,7 @@ func (*Adapter) asr(svc core.Service) http.HandlerFunc {
 			return
 		}
 		result.Warnings = append(result.Warnings, p.warn...)
-		writeTranscript(w, result, p.output, source.Filename(), p.wantWords)
+		writeTranscript(w, result, p.output, source.Filename())
 	}
 }
 
@@ -260,8 +260,7 @@ func (*Adapter) asrTaskByID(svc core.Service) http.HandlerFunc {
 				})
 				return
 			}
-			wantWords, _ := boolValue(r, "word_timestamps")
-			writeTranscript(w, job.Result, output, job.Filename, wantWords)
+			writeTranscript(w, job.Result, output, job.Filename)
 		default:
 			writeJSON(w, http.StatusOK, taskState{
 				Success: false,

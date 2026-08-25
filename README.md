@@ -292,6 +292,13 @@ query string: `encode`, `task`, `language`, `initial_prompt`, `vad_filter`,
 `output` formats: `txt` (default), `vtt`, `srt`, `tsv`, `json`. All are served as
 `text/plain` with the `Asr-Engine` and `Content-Disposition` headers.
 
+The bodies follow the reference service rather than the native result: `txt` is one
+line per segment, `tsv` carries no header row, and `json` is
+`{"segments": [{"start", "end", "text", "words": [{"word", "start", "end", "score"}]}],
+"word_segments": [...], "language": "..."}`. Words are always present, whether or not
+`word_timestamps` was sent. Models that report no per-word confidence produce a `score`
+of 0 and the `word_confidence_unavailable` warning.
+
 Differences from the original service:
 
 | Parameter or behaviour | NanoASR implementation |

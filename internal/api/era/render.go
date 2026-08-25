@@ -31,13 +31,21 @@ const warningsHeader = "X-NanoASR-Warnings"
 // oversight copied from upstream: clients of this contract read the body as
 // bytes and save it under the Content-Disposition filename, and answering
 // application/json for one of the five would make that branch.
-func writeTranscript(w http.ResponseWriter, res *core.Result, output, filename string, wantWords bool) {
-	body, err := renderTranscript(res, output, wantWords)
+func writeTranscript(w http.ResponseWriter, res *core.Result, output, filename string) {
+	body, err := renderTranscript(res, output)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	setWarnings(w, res.Warnings)
+	warnings := res.Warnings
+	if output == outputJSON && missingWordConfidence(res) {
+		warnings = append(warnings, core.Warning{
+			Code: "word_confidence_unavailable",
+			Message: "this model reports no per-word confidence, so every score " +
+				"in the json output is 0",
+		})
+	}
+	setWarnings(w, warnings)
 	w.Header().Set("Asr-Engine", engineName)
 	w.Header().Set("Content-Disposition", contentDisposition(filename, output))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -45,7 +53,7 @@ func writeTranscript(w http.ResponseWriter, res *core.Result, output, filename s
 	_, _ = io.WriteString(w, body)
 }
 
-func renderTranscript(res *core.Result, output string, wantWords bool) (string, error) {
+func renderTranscript(res *core.Result, output string) (string, error) {
 	switch output {
 	case outputVTT:
 		return subtitle.VTT(res), nil
@@ -54,17 +62,34 @@ func renderTranscript(res *core.Result, output string, wantWords bool) (string, 
 	case outputTSV:
 		return tsv(res), nil
 	case outputJSON:
-		return transcriptJSON(res, wantWords)
+		return transcriptJSON(res)
 	default:
-		return res.Text + "\n", nil
+		return txt(res), nil
 	}
 }
 
-// tsv is the tab-separated transcript whisper's writers produce: a header row,
-// then integer milliseconds and the segment text with tabs squeezed out.
+// txt is one segment per line.
+//
+// Not the whole transcript as a single paragraph: the reference service writes
+// a line per segment, and a client that splits the body on newlines to get
+// utterances would see one enormous utterance instead.
+func txt(res *core.Result) string {
+	var b strings.Builder
+	for _, s := range res.Segments {
+		b.WriteString(strings.TrimSpace(s.Text))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// tsv is the tab-separated transcript: integer milliseconds and the segment
+// text with tabs squeezed out.
+//
+// No header row. Whisper's own TSV writer emits "start end text" first, and the
+// reference service this dialect replaces does not — a client reading the first
+// line as data would take the header for a segment.
 func tsv(res *core.Result) string {
 	var b strings.Builder
-	b.WriteString("start\tend\ttext\n")
 	for _, s := range res.Segments {
 		fmt.Fprintf(&b, "%d\t%d\t%s\n",
 			millis(s.Start), millis(s.End),
@@ -80,29 +105,99 @@ func millis(seconds float64) int64 {
 	return int64(seconds*1000 + 0.5)
 }
 
-// transcriptJSON is the whole result, minus the word timings when the caller
-// did not ask for them.
+// transcriptJSON renders the shape the reference service returns.
 //
-// Words are dropped rather than never produced: this pipeline reports them for
-// every request because they are the reason it exists, and word_timestamps
-// chooses what is rendered. The copy is shallow apart from the segments, which
-// are rewritten precisely so the caller's result is not mutated.
-func transcriptJSON(res *core.Result, wantWords bool) (string, error) {
-	out := res
-	if !wantWords {
-		trimmed := *res
-		trimmed.Segments = make([]core.Segment, len(res.Segments))
-		for i, s := range res.Segments {
-			s.Words = nil
-			trimmed.Segments[i] = s
-		}
-		out = &trimmed
+// Deliberately not core.Result. This dialect exists so a client written against
+// whisper-asr-webservice keeps working, and that client parses
+// {segments, word_segments, language} with words carrying a "score" — a
+// completely different document from the native result. Serving our own schema
+// here would satisfy the contract's paths and headers and still break every
+// caller at the first field access.
+//
+// Words are always present, with no flag to ask for them. The reference aligns
+// every request whether or not word_timestamps was sent, so a client that omits
+// the flag still expects them.
+type jsonTranscript struct {
+	Segments []jsonSegment `json:"segments"`
+	// WordSegments is every word of the transcript in one flat list, which is
+	// how the reference reports them alongside the per-segment copies.
+	WordSegments []jsonWord `json:"word_segments"`
+	Language     string     `json:"language"`
+}
+
+type jsonSegment struct {
+	Start float64    `json:"start"`
+	End   float64    `json:"end"`
+	Text  string     `json:"text"`
+	Words []jsonWord `json:"words"`
+	// Speaker is additive and appears only when diarization ran. The reference
+	// has no diarization at all, so no client of it can be relying on its
+	// absence.
+	Speaker *string `json:"speaker,omitempty"`
+}
+
+type jsonWord struct {
+	Word  string  `json:"word"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	// Score is the model's confidence in this word. It is always written, even
+	// when the model reports none and the value is therefore 0: the field is
+	// part of the schema, and a client indexing into it must not find nothing.
+	// A result with no confidences at all is reported in X-NanoASR-Warnings.
+	Score   float64 `json:"score"`
+	Speaker *string `json:"speaker,omitempty"`
+}
+
+func transcriptJSON(res *core.Result) (string, error) {
+	out := jsonTranscript{
+		Segments:     make([]jsonSegment, 0, len(res.Segments)),
+		WordSegments: []jsonWord{},
+		Language:     res.Language,
 	}
-	b, err := json.MarshalIndent(out, "", "  ")
+	for _, s := range res.Segments {
+		seg := jsonSegment{
+			Start:   s.Start,
+			End:     s.End,
+			Text:    strings.TrimSpace(s.Text),
+			Words:   make([]jsonWord, 0, len(s.Words)),
+			Speaker: s.Speaker,
+		}
+		for _, word := range s.Words {
+			w := jsonWord{
+				Word:    word.Word,
+				Start:   word.Start,
+				End:     word.End,
+				Score:   word.Confidence,
+				Speaker: word.Speaker,
+			}
+			seg.Words = append(seg.Words, w)
+			out.WordSegments = append(out.WordSegments, w)
+		}
+		out.Segments = append(out.Segments, seg)
+	}
+
+	b, err := json.Marshal(out)
 	if err != nil {
 		return "", core.Errorf(core.CodeInternal, "cannot render the transcript as json").WithCause(err)
 	}
-	return string(b) + "\n", nil
+	return string(b), nil
+}
+
+// missingWordConfidence reports whether the result carries no per-word
+// confidence at all, which happens with models that do not produce one. The
+// json schema still has a score field, so the zeroes have to be explained
+// somewhere rather than read as "every word is certainly wrong".
+func missingWordConfidence(res *core.Result) bool {
+	seen := false
+	for _, s := range res.Segments {
+		for _, w := range s.Words {
+			seen = true
+			if w.Confidence > 0 {
+				return false
+			}
+		}
+	}
+	return seen
 }
 
 // contentDisposition reproduces upstream's header byte for byte, percent-escape
