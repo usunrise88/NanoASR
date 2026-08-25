@@ -113,6 +113,52 @@ tar -xzf nanoasr-v1.0.0-linux-amd64.tar.gz -C ~/nanoasr
 cd ~/nanoasr
 ```
 
+### Служба systemd
+
+Файл `nanoasr.service` входит в состав Linux-архива. Разметка каталогов: бинарь и
+конфигурация в `/opt/nanoasr`, модели, база задач и спул — в `/var/lib/nanoasr`.
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin nanoasr
+sudo mkdir -p /opt/nanoasr /var/lib/nanoasr
+sudo tar -xzf nanoasr-v1.0.1-linux-amd64.tar.gz -C /opt/nanoasr
+sudo chown -R nanoasr:nanoasr /opt/nanoasr /var/lib/nanoasr
+```
+
+Конфигурация, ключи и модели создаются от имени служебного пользователя, чтобы
+загруженные файлы принадлежали ему:
+
+```bash
+sudo -u nanoasr /opt/nanoasr/nanoasr init \
+  -config /opt/nanoasr/nanoasr.yaml \
+  -data-dir /var/lib/nanoasr \
+  -addr 127.0.0.1:8080 \
+  -force
+```
+
+`-force` требуется потому, что архив уже содержит `nanoasr.yaml`. Оба выпущенных ключа
+выводятся на экран; они же остаются в конфигурации.
+
+```bash
+sudo cp /opt/nanoasr/nanoasr.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nanoasr
+systemctl status nanoasr
+```
+
+Юнит запускает `nanoasr serve -config /opt/nanoasr/nanoasr.yaml` и применяет
+`ProtectSystem=strict`: единственный каталог, доступный службе на запись, —
+`/var/lib/nanoasr`. Конфигурация читается при старте, поэтому выпуск и отзыв ключей
+требуют `systemctl restart nanoasr`.
+
+Готовность проверяется по `/readyz`, а не по факту запуска процесса: загрузка весов
+занимает секунды, а при заполненной очереди `/readyz` отвечает `503`. Причина отказа
+запуска выводится в журнал:
+
+```bash
+journalctl -u nanoasr -n 50 --no-pager
+```
+
 ### Docker
 
 ```bash
@@ -140,6 +186,48 @@ make docker           # образ контейнера
 
 ffmpeg опционален. Без него доступны WAV и PCM, включая a-law и µ-law; остальные
 форматы отклоняются с кодом `415`.
+
+### Обновление
+
+Веса моделей, база задач и спул лежат в каталоге данных и переживают обновление любым
+из способов. Версию после обновления показывает `nanoasr version` и ответ `/healthz`.
+
+**Архив и systemd.** Архив содержит собственный `nanoasr.yaml`, поэтому распаковка
+поверх каталога перезаписала бы рабочую конфигурацию — её нужно исключить:
+
+```bash
+sudo systemctl stop nanoasr
+sudo tar -xzf nanoasr-<новая версия>-linux-amd64.tar.gz -C /opt/nanoasr \
+  --exclude=./nanoasr.yaml
+sudo chown -R nanoasr:nanoasr /opt/nanoasr
+sudo systemctl start nanoasr
+```
+
+Если в новой версии изменился файл юнита, его следует скопировать заново и выполнить
+`systemctl daemon-reload`. Смена варианта сборки — с веб-интерфейсом или без — это то же
+обновление: меняется только бинарь.
+
+**Архив без systemd, включая Windows.** Остановить процесс, распаковать архив поверх
+каталога, сохранив свою конфигурацию, запустить снова. В Windows следует заменить
+`nanoasr.exe` и файлы `*.dll` вместе — библиотеки и бинарь версионируются совместно.
+
+**Docker.** Пересборка образа с сохранением тома данных:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+Том `nanoasr-data` не пересоздаётся, поэтому веса моделей заново не загружаются.
+
+**Сборка из исходников.**
+
+```bash
+git pull
+make web build
+```
+
+Затем перезапустить процесс или службу. Если сервер установлен из архива, собранный
+бинарь заменяется тем же способом, что и при обновлении из релиза.
 
 ## Быстрый старт
 

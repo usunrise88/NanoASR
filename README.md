@@ -113,6 +113,53 @@ tar -xzf nanoasr-v1.0.0-linux-amd64.tar.gz -C ~/nanoasr
 cd ~/nanoasr
 ```
 
+### systemd service
+
+The Linux archive contains a `nanoasr.service` unit. The directory layout is the binary
+and configuration in `/opt/nanoasr`, and models, job database and spool in
+`/var/lib/nanoasr`.
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin nanoasr
+sudo mkdir -p /opt/nanoasr /var/lib/nanoasr
+sudo tar -xzf nanoasr-v1.0.1-linux-amd64.tar.gz -C /opt/nanoasr
+sudo chown -R nanoasr:nanoasr /opt/nanoasr /var/lib/nanoasr
+```
+
+The configuration, keys and models are created as the service user so that the
+downloaded files belong to it:
+
+```bash
+sudo -u nanoasr /opt/nanoasr/nanoasr init \
+  -config /opt/nanoasr/nanoasr.yaml \
+  -data-dir /var/lib/nanoasr \
+  -addr 127.0.0.1:8080 \
+  -force
+```
+
+`-force` is required because the archive already ships a `nanoasr.yaml`. Both issued
+keys are printed, and they also remain in the configuration.
+
+```bash
+sudo cp /opt/nanoasr/nanoasr.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nanoasr
+systemctl status nanoasr
+```
+
+The unit runs `nanoasr serve -config /opt/nanoasr/nanoasr.yaml` under
+`ProtectSystem=strict`: the only directory the service may write to is
+`/var/lib/nanoasr`. The configuration is read at startup, so issuing and revoking keys
+requires `systemctl restart nanoasr`.
+
+Readiness is checked with `/readyz` rather than by the process being up: loading weights
+takes seconds, and `/readyz` answers `503` while the queue is full. A refusal to start
+is explained in the journal:
+
+```bash
+journalctl -u nanoasr -n 50 --no-pager
+```
+
 ### Docker
 
 ```bash
@@ -141,6 +188,50 @@ make docker           # container image
 
 ffmpeg is optional. Without it, WAV and PCM are available, including a-law and µ-law;
 every other format is rejected with `415`.
+
+### Updating
+
+Model weights, the job database and the spool live in the data directory and survive an
+update by any of the methods below. The version after an update is reported by
+`nanoasr version` and by the `/healthz` response.
+
+**Archive with systemd.** The archive ships its own `nanoasr.yaml`, so unpacking over
+the directory would overwrite the working configuration; exclude it:
+
+```bash
+sudo systemctl stop nanoasr
+sudo tar -xzf nanoasr-<new version>-linux-amd64.tar.gz -C /opt/nanoasr \
+  --exclude=./nanoasr.yaml
+sudo chown -R nanoasr:nanoasr /opt/nanoasr
+sudo systemctl start nanoasr
+```
+
+If the unit file changed in the new version, copy it again and run
+`systemctl daemon-reload`. Switching between the build variants — with or without the
+web interface — is the same procedure: only the binary changes.
+
+**Archive without systemd, including Windows.** Stop the process, unpack the archive
+over the directory while keeping your configuration, and start it again. On Windows,
+replace `nanoasr.exe` and the `*.dll` files together: the binary and the libraries are
+versioned as a unit.
+
+**Docker.** Rebuild the image, keeping the data volume:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+The `nanoasr-data` volume is not recreated, so model weights are not downloaded again.
+
+**Source build.**
+
+```bash
+git pull
+make web build
+```
+
+Then restart the process or the service. If the server was installed from an archive,
+the freshly built binary replaces it the same way a release update would.
 
 ## Getting started
 
