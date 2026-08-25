@@ -1,4 +1,4 @@
-package sherpa
+package asr
 
 import (
 	"bufio"
@@ -7,8 +7,13 @@ import (
 	"unicode"
 )
 
-// tokensCarryPunctuation reports whether a model's vocabulary can emit
+// VocabularyPunctuates reports whether a model's vocabulary can emit
 // punctuation and capitalisation, by reading the vocabulary.
+//
+// It lives here rather than beside the loader because two callers need it and
+// only one of them loads anything: the pool answers "can this model punctuate?"
+// for models that are merely on disk, which is when the question is asked — a
+// user picks a model before transcribing with it, not after.
 //
 // The alternative was a capabilities block in the manifest, which the manifest
 // deliberately does not have: what a model can produce follows from the model,
@@ -25,7 +30,7 @@ import (
 // An unreadable tokens file is not an error: it means the recogniser is about
 // to fail to load for a better reason, and reporting "no builtin punctuation"
 // on the way is the harmless answer.
-func tokensCarryPunctuation(path string) bool {
+func VocabularyPunctuates(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false

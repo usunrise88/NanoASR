@@ -1,4 +1,4 @@
-package sherpa
+package asr
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestTokensCarryPunctuation(t *testing.T) {
+func TestVocabularyPunctuates(t *testing.T) {
 	cases := []struct {
 		name   string
 		tokens string
@@ -57,7 +57,7 @@ func TestTokensCarryPunctuation(t *testing.T) {
 			if err := os.WriteFile(path, []byte(c.tokens), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if got := tokensCarryPunctuation(path); got != c.want {
+			if got := VocabularyPunctuates(path); got != c.want {
 				t.Errorf("tokensCarryPunctuation = %v, want %v", got, c.want)
 			}
 		})
@@ -66,19 +66,19 @@ func TestTokensCarryPunctuation(t *testing.T) {
 
 // A missing file means the recogniser is about to fail to load for a better
 // reason. Reporting no builtin punctuation on the way must not panic.
-func TestTokensCarryPunctuationMissingFile(t *testing.T) {
-	if tokensCarryPunctuation(filepath.Join(t.TempDir(), "absent.txt")) {
+func TestVocabularyPunctuatesMissingFile(t *testing.T) {
+	if VocabularyPunctuates(filepath.Join(t.TempDir(), "absent.txt")) {
 		t.Error("an unreadable tokens file must not claim builtin punctuation")
 	}
 }
 
 // The token itself may be a space, so only the trailing id is stripped.
-func TestTokensCarryPunctuationHandlesSpaceToken(t *testing.T) {
+func TestVocabularyPunctuatesHandlesSpaceToken(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.txt")
 	if err := os.WriteFile(path, []byte("  0\n. 1\nА 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !tokensCarryPunctuation(path) {
+	if !VocabularyPunctuates(path) {
 		t.Error("a vocabulary whose first token is a space was misparsed")
 	}
 }

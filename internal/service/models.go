@@ -6,6 +6,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/usunrise88/nanoasr/internal/asr"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/core"
 	"github.com/usunrise88/nanoasr/internal/pool"
@@ -50,7 +51,7 @@ func (m *Models) List(ctx context.Context) ([]core.ModelInfo, error) {
 		// the weights are not here at all, which is what the catalog reports.
 		// Conflating the two told the UI that every installed model was
 		// missing.
-		out = append(out, describe(man, core.ModelDownloaded))
+		out = append(out, m.describe(man, core.ModelDownloaded))
 	}
 
 	// A model can be resident without being on disk any more — someone deleted
@@ -71,7 +72,7 @@ func (m *Models) Catalog(ctx context.Context) ([]core.ModelInfo, error) {
 	}
 	out := make([]core.ModelInfo, 0, len(entries))
 	for _, man := range entries {
-		out = append(out, describe(man, core.ModelAbsent))
+		out = append(out, m.describe(man, core.ModelAbsent))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
@@ -107,10 +108,21 @@ func (m *Models) Reload(ctx context.Context, id, revision string) error {
 // describe projects a manifest for a model that is not loaded. Capabilities
 // come from the family, which is the same source the loaded recogniser reports,
 // so the two views cannot disagree.
-func describe(man registry.Manifest, state core.ModelState) core.ModelInfo {
+// describe reports a model that is not resident. Capabilities come from the
+// family, plus the one thing the family cannot know.
+//
+// Whether a model punctuates is a property of its weights, not of its family —
+// two GigaAM releases share a family and differ on exactly this — so it is read
+// from the vocabulary. It has to be answered here rather than only for loaded
+// models, because the UI gates its punctuation switch on this while the user is
+// choosing what to run, which is before anything has been loaded.
+func (m *Models) describe(man registry.Manifest, state core.ModelState) core.ModelInfo {
 	var caps core.Capabilities
 	if fam, err := sherpa.LookupFamily(man.Family); err == nil {
 		caps = fam.Capabilities()
+	}
+	if state != core.ModelAbsent {
+		caps.PunctuationBuiltin = m.vocabularyPunctuates(man)
 	}
 	return core.ModelInfo{
 		ID:           man.ID,
@@ -127,3 +139,24 @@ func describe(man registry.Manifest, state core.ModelState) core.ModelInfo {
 }
 
 var _ core.ModelService = (*Models)(nil)
+
+// vocabularyPunctuates reads a model's tokens file to see whether it can write
+// sentence marks and capitals.
+//
+// Anything unreadable answers false. A model whose weights cannot be opened is
+// not usable anyway, and claiming a capability for it would be exactly the kind
+// of unchecked claim the manifest deliberately refuses to carry.
+func (m *Models) vocabularyPunctuates(man registry.Manifest) bool {
+	if man.EffectiveKind() != registry.KindASR {
+		return false
+	}
+	dir, err := m.registry.Dir(man.ID)
+	if err != nil {
+		return false
+	}
+	tokens, err := man.FilePath(dir, "tokens")
+	if err != nil {
+		return false
+	}
+	return asr.VocabularyPunctuates(tokens)
+}

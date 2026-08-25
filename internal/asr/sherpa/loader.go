@@ -98,7 +98,7 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 		// the same family differ on exactly that, so it cannot come from the
 		// family, and it is measured rather than declared.
 		caps := fam.Capabilities()
-		caps.PunctuationBuiltin = tokensCarryPunctuation(tokens)
+		caps.PunctuationBuiltin = asr.VocabularyPunctuates(tokens)
 
 		rec, err := New(&cfg, caps, m.ModelingUnit)
 		if err != nil {

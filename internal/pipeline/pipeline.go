@@ -149,7 +149,7 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 
 	result := p.assemble(id, lease, req, tracks, decoded)
 
-	warn = append(warn, pendingFeatures(req)...)
+	warn = append(warn, pendingFeatures(req, lease.Recognizer.Capabilities())...)
 	warn = append(warn, p.unsupportedOptions(req, lease)...)
 	result.Warnings = append(result.Warnings, warn...)
 

@@ -12,7 +12,7 @@ import "github.com/usunrise88/nanoasr/internal/core"
 //
 // It exists at all so the honesty rule survives the milestone: a transcript
 // that quietly ignored diarize=true is worse than one that says it did.
-func pendingFeatures(req core.Request) []core.Warning {
+func pendingFeatures(req core.Request, caps core.Capabilities) []core.Warning {
 	var out []core.Warning
 
 	// Owned by track D (diarization).
@@ -23,10 +23,15 @@ func pendingFeatures(req core.Request) []core.Warning {
 		})
 	}
 	// Owned by track C (post-processing).
-	if req.Punctuate {
+	//
+	// A model that punctuates itself needs no stage and gets no warning: the
+	// caller asked for punctuation and is getting punctuation. Saying otherwise
+	// would train people to ignore the field.
+	if req.Punctuate && !caps.PunctuationBuiltin {
 		out = append(out, core.Warning{
-			Code:    "punctuation_unavailable",
-			Message: "punctuation restoration is not implemented in this build",
+			Code: "punctuation_unavailable",
+			Message: "this model does not punctuate and no punctuation model is configured; " +
+				"choose a model that punctuates, such as gigaam-v3-ctc-punct-ru for Russian",
 		})
 	}
 	if req.ITN {

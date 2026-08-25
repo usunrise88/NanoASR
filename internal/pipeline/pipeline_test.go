@@ -436,3 +436,49 @@ func near(a, b float64) bool {
 	d := a - b
 	return d < 1e-3 && d > -1e-3
 }
+
+// A model that punctuates itself answers punctuate=true by punctuating. Saying
+// "unavailable" anyway would train people to ignore the warnings field.
+func TestTranscribeDoesNotWarnWhenTheModelPunctuates(t *testing.T) {
+	segs := []vad.Segment{segment(0, 1)}
+	rec := &fakeRecognizer{
+		unit: "bpe",
+		caps: core.Capabilities{WordTimestamps: true, PunctuationBuiltin: true},
+		results: []asr.Recognition{
+			timedRecognition("Да.", []string{"▁Да."}, []float32{0}, []float32{0.2}),
+		},
+	}
+
+	h := newHarness(t, silence(2), segs, rec, Options{})
+	got, err := h.pipeline.Transcribe(context.Background(),
+		core.Request{Audio: &fakeSource{}, Punctuate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWarning(got.Warnings, "punctuation_unavailable") {
+		t.Errorf("warnings %+v claim punctuation is unavailable from a model that punctuates",
+			got.Warnings)
+	}
+}
+
+// The same request against a model that cannot punctuate must still say so,
+// and must still fail strict mode.
+func TestTranscribeWarnsWhenTheModelCannotPunctuate(t *testing.T) {
+	segs := []vad.Segment{segment(0, 1)}
+	rec := &fakeRecognizer{
+		unit: "bpe", caps: core.Capabilities{WordTimestamps: true},
+		results: []asr.Recognition{
+			timedRecognition("да", []string{"▁да"}, []float32{0}, []float32{0.2}),
+		},
+	}
+
+	h := newHarness(t, silence(2), segs, rec, Options{})
+	got, err := h.pipeline.Transcribe(context.Background(),
+		core.Request{Audio: &fakeSource{}, Punctuate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWarning(got.Warnings, "punctuation_unavailable") {
+		t.Errorf("warnings %+v should say punctuation was asked for and not delivered", got.Warnings)
+	}
+}
