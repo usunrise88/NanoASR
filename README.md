@@ -17,12 +17,37 @@ Go, CPU, длинные файлы, **word-level тайминги**, OpenAI-со
 | Профиль нагрузки | файлы 1–10 минут (лимит 30), телефонийные 8 кГц, моно и стерео |
 | Результат | текст, сегменты, **пословные тайминги**, зоны тишины, спикеры, пунктуация |
 | Инференс | CPU, оффлайн, без стриминга |
-| API | OpenAI (`/v1/audio/transcriptions`) + нативный (`/api/v1`), новый диалект — один файл |
+| API | OpenAI (`/v1/audio/transcriptions`), нативный (`/api/v1`), whisper-asr-webservice (`/asr`), новый диалект — один файл |
 | Модели | реестр с автозагрузкой, LRU-резидентность, hot swap без разрыва запросов |
 | Постобработка | пунктуация, ITN(ru), hotwords — всё опционально, по умолчанию выключено |
 | UI | SPA внутри бинаря, отключается конфигом или `-tags noui` |
 
 ## Быстрый старт
+
+```bash
+nanoasr init            # конфиг + два ключа + модели по умолчанию
+nanoasr serve -config nanoasr.yaml
+```
+
+`init` делает всё, что раньше приходилось делать руками: пишет `nanoasr.yaml`,
+выпускает **admin**- и **user**-ключ и скачивает четыре модели, которых хватает
+для русского на любом маршруте — распознавание, VAD и две модели диаризации.
+Ключи печатаются один раз в конце и остаются в конфиге.
+
+```
+configuration  nanoasr.yaml
+data           /var/lib/nanoasr
+
+admin key      sk-nanoasr-...
+user  key      sk-nanoasr-...
+```
+
+Данные (модели и база) кладутся в `/var/lib/nanoasr`, если туда можно писать, и
+в `./nanoasr-data` иначе; путь печатается, а не угадывается. Полезные флаги:
+`-data-dir DIR`, `-addr ADDR`, `-model ID`, `-no-diarize`, `-no-download`,
+`-force`.
+
+Из исходников — то же самое вручную:
 
 ```bash
 make web build                                  # собрать SPA и сервер
@@ -31,7 +56,7 @@ make web build                                  # собрать SPA и серв
 ./dist/nanoasr serve -config configs/nanoasr.dev.yaml
 ```
 
-Или одной командой: `make models` — скачает весь каталог (~1 ГБ).
+Или одной командой: `make models` — скачает весь каталог (~1.1 ГБ).
 
 Модель по умолчанию — `gigaam-v3-ctc-punct-ru`: она сама расставляет знаки
 препинания и заглавные буквы. Отдельной модели пунктуации для русского не
@@ -39,6 +64,23 @@ make web build                                  # собрать SPA и серв
 
 В боевом конфиге нужен ключ: `auth.mode: apikey` без ключей — это ошибка старта,
 а не сервер, отвечающий 401 на всё.
+
+### Ключи
+
+```bash
+nanoasr key list                                   # что есть, секреты замаскированы
+nanoasr key issue ci -rps 5                        # выпустить, печатает секрет в stdout
+nanoasr key issue bot -hash                        # в конфиг ляжет только sha256
+nanoasr key issue ops -admin -interactive          # админ, задачи вне общей очереди
+nanoasr key remove ci                              # отозвать
+```
+
+Файл правится как YAML-документ, а не перечитывается через структуру конфига:
+комментарии, порядок ключей и то, чего в файле нет, остаются на месте. Сервер
+читает ключи при старте — после правки его нужно перезапустить.
+
+`-hash` хранит только digest: секрет печатается один раз и восстановить его
+нельзя. Без него ключ лежит в файле открытым текстом и его видно в `key list`.
 
 ```bash
 curl -s localhost:8080/v1/audio/transcriptions \
@@ -204,6 +246,122 @@ curl -s localhost:8080/api/v1/transcribe -H "Authorization: Bearer $KEY" \
 разумная отправная точка. В диалекте OpenAI список приезжает через `prompt` без счёта,
 и тогда берётся `postproc.hotwords.default_score`.
 
+### `diarize` и `num_speakers` — кто говорит
+
+Диаризация идёт вторым проходом по всей записи: pyannote размечает границы реплик,
+модель эмбеддингов превращает каждый кусок в вектор голоса, кластеризация решает,
+какие куски принадлежат одному человеку. Стоит примерно 0.05 RTF поверх распознавания.
+
+```bash
+curl -s localhost:8080/api/v1/transcribe -H "Authorization: Bearer $KEY" \
+  -F file=@call.wav -F diarize=true -F num_speakers=2 \
+  | jq '.speakers, [.segments[] | {start, speaker}]'
+```
+
+**Если все реплики достаются `spk_0`** — это почти всегда не сбой сервера, а два
+голоса, которые модель эмбеддингов не различает. Порядок действий:
+
+| что попробовать | почему |
+|---|---|
+| `diarization.embedding_model: campplus-sv-voxceleb` | дефолт с версии 1656695; см. замер ниже |
+| `wespeaker-voxceleb-resnet34` | вдвое дороже, различает более похожие голоса |
+| понизить `clustering.threshold` до 0.35 | ниже порог — охотнее разделяет |
+| `channel_mode: split`, если голоса в разных каналах | точнее любой кластеризации, и бесплатно |
+| **убрать** `num_speakers` | см. ниже: он не всегда помогает |
+
+Замер на двух русских голосах (записи одного диктора со сдвигом высоты — резким для
+«лёгкого» файла и умеренным, близким к реальной паре голосов, для «трудного»):
+
+| модель эмбеддингов | лёгкий файл | трудный файл |
+|---|---|---|
+| `campplus-sv-zh-en` | 2 спикера, граница точная | **1 спикер при любом пороге** |
+| `campplus-sv-voxceleb` | 2 спикера, граница смещена | 2 спикера, граница точная |
+
+`campplus-sv-zh-en` обучен на китайском и английском, и на русской паре голосов он
+упирается в потолок: ни один порог от 0.30 до 0.60 не разделяет их. Поэтому дефолт
+теперь `campplus-sv-voxceleb` — та же архитектура, но обученная на VoxCeleb, где много
+языков. На «лёгком» файле он ставит границу хуже, так что это компромисс, а не чистый
+выигрыш; вернуть прежнее поведение — одна строка в конфиге.
+
+**`num_speakers` — не гарантия.** Он не «заставляет найти N спикеров»: sherpa-onnx
+строит одну и ту же дендрограмму, а `num_speakers` меняет лишь то, где её резать — по
+высоте (`threshold`) или ровно на N листьев. Если в записи есть выброс — один шумный
+кусок, — верхнее деление отделит именно его, а не двух собеседников. Измерено: на
+трудном файле `num_speakers=2` даёт одного спикера, а тот же файл без него — двух.
+
+Поэтому: указывайте `num_speakers`, когда счёт точно известен и результат стал лучше,
+и убирайте, когда стал хуже. Если попросили больше спикеров, чем получилось, ответ
+придёт с предупреждением `diarization_fewer_speakers`, называющим оба числа, — молчания
+здесь больше нет.
+
+При `channel_mode=split` диаризация не запускается вовсе: каналы уже разделили
+говорящих лучше, чем это сделает любая кластеризация. Ответ придёт с
+`diarization_skipped_split`, и это не деградация.
+
+## Диалект `era` — замена whisper-asr-webservice
+
+Контракт [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice)
+и его Era-форка воспроизведён целиком: клиент, написанный под тот сервис,
+переключается на NanoASR сменой адреса. Включается в конфиге:
+
+```yaml
+api:
+  dialects: [openai, native, era]
+```
+
+| Метод | Путь | Что делает |
+|---|---|---|
+| `POST` | `/asr` | загрузил, дождался, получил транскрипт файлом |
+| `POST` | `/detect-language` | `{detected_language, language_code, confidence}` |
+| `POST` | `/asr_task` | поставил в очередь, получил `{success, task_id}` |
+| `GET` | `/asr_task/{task_id}` | опросил: не готово / транскрипт / ошибка |
+
+Файл кладётся в поле **`audio_file`**, остальное — query-параметры: `encode`,
+`task`, `language`, `initial_prompt`, `vad_filter`, `word_timestamps`,
+`diarize`, `min_speakers`, `max_speakers`, `output`. Форматы `output`:
+`txt` (по умолчанию), `vtt`, `srt`, `tsv`, `json` — все отдаются как
+`text/plain` с заголовками `Asr-Engine` и `Content-Disposition`, как у upstream.
+
+```bash
+curl -s -H "Authorization: Bearer $KEY" \
+  -X POST "http://localhost:8080/asr?output=srt&diarize=true&min_speakers=2&max_speakers=2" \
+  -F audio_file=@call.wav
+
+# Асинхронно: task_id несёт в себе запрошенный формат.
+TASK=$(curl -s -H "Authorization: Bearer $KEY" \
+  -X POST "http://localhost:8080/asr_task?output=json&word_timestamps=true" \
+  -F audio_file=@call.wav | jq -r .task_id)
+curl -s -H "Authorization: Bearer $KEY" "http://localhost:8080/asr_task/$TASK"
+```
+
+Пока задача идёт, опрос отвечает `{"success":true,"is_ready":false}`; когда
+готова — самим транскриптом; когда упала —
+`{"success":false,"is_ready":true,"error":{...}}`. Неизвестная задача — `404`
+с `{"detail":{"message":"task not found"}}`.
+
+**Чем отличается от оригинала — и почему.** Каждое расхождение намеренное:
+
+| Что | Почему |
+|---|---|
+| `GET /` не редиректит на `/docs` | Swagger UI тут нет, а диалект, забравший корень, отвечал бы за все непойманные пути — включая чужие диалекты |
+| `task=translate` → `501` | моделей перевода в сборке нет, а перевести запрос в транскрипцию молча — единственная деградация, которую по телу не заметить |
+| `initial_prompt` → hotwords | LM-подсказки здесь нет; ближайшее честное — смещение декодера, ровно как `prompt` в диалекте OpenAI |
+| `encode`, `vad_filter` принимаются и не действуют | это настройки сервера, а не опции запроса |
+| `min_speakers`/`max_speakers` → одно число | кластеризатор берёт точный счёт или порог, диапазону резать не по чему; пришлите их равными, чтобы задать счёт |
+| `task_id` = `<job_id>~<output>` | формат нужен при опросе, а таблица в памяти терялась бы при рестарте — притом что сама задача его переживает |
+| нужен ключ | как и везде на этом сервере; у upstream аутентификации нет вовсе |
+| задачи живут `jobs.history_ttl` (30 дней) | upstream удаляет их через 30 минут |
+
+Полей для предупреждений в этом контракте нет, поэтому деградации едут в
+заголовке **`X-NanoASR-Warnings`** — список кодов через запятую. Клиент, который
+про него не знает, ничего не замечает; тот, кто знает, видит, что именно из
+запрошенного не сделано.
+
+`/detect-language` честен до неудобного: модели идентификации языка в сборке
+нет. Ответ — язык, который объявляет разрешившаяся модель, а `confidence`
+показывает, был ли выбор: `1`, если модель не умеет ничего другого, и `0`, если
+языков у неё несколько и взят первый. Стоит это целого распознавания файла.
+
 ## Развёртывание на Linux
 
 Пошагово, для Ubuntu Server 22.04/24.04 и любого systemd-дистрибутива. Всё, кроме
@@ -241,64 +399,69 @@ sudo apt install -y ffmpeg
 прочее ответят `415`. В архив ffmpeg не входит намеренно — это внешняя зависимость
 с собственным циклом обновлений.
 
-### 4. Задать ключ
-
-`/opt/nanoasr/nanoasr.yaml` приезжает с `auth.mode: apikey` и пустым списком ключей.
-**Сервер откажется стартовать, пока ключа нет** — это не баг: сервер, отвечающий 401
-на всё, хуже, чем сервер, который честно не поднялся.
+### 4. Настроить и скачать модели — одной командой
 
 ```bash
-KEY="sk-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
-echo "$KEY"                        # запишите, второй раз он не покажется
-printf '%s' "$KEY" | sha256sum     # хеш для конфига
+sudo -u nanoasr /opt/nanoasr/nanoasr init \
+  -config /opt/nanoasr/nanoasr.yaml \
+  -data-dir /var/lib/nanoasr \
+  -addr 127.0.0.1:8080 \
+  -force
 ```
 
-В `auth.keys` кладите **хеш**, а не сам ключ — тогда секрет не лежит в конфиге:
+Это перезапишет пришедший в архиве `nanoasr.yaml` рабочим конфигом, выпустит
+**admin**- и **user**-ключ и скачает четыре модели (~1.1 ГБ): распознавание, VAD и
+две модели диаризации. Оба ключа печатаются в конце — запишите их, в конфиге они
+лежат открытым текстом и доступны через `nanoasr key list`.
 
-```yaml
-auth:
-  mode: apikey
-  keys:
-    - name: app
-      key: "sha256:<хеш из команды выше>"
-      rps: 10          # 0 — без ограничения
+`-force` нужен именно потому, что файл в архиве уже есть; без него `init`
+откажется затирать чужой конфиг.
+
+Открытый режим (`auth.mode: open`) разрешён **только** на loopback: на любом
+другом адресе сервер откажется стартовать. `auth.mode: apikey` с пустым списком
+ключей — тоже ошибка старта, а не сервер, отвечающий 401 на всё.
+
+<details>
+<summary>То же самое вручную</summary>
+
+Ключ можно хранить хешем — тогда секрет не лежит в конфиге вовсе:
+
+```bash
+sudo -u nanoasr /opt/nanoasr/nanoasr key issue app \
+  -config /opt/nanoasr/nanoasr.yaml -hash -rps 10
 ```
 
-Ключ должен быть не короче 16 символов. Открытый режим (`auth.mode: open`)
-разрешён **только** на loopback: на любом другом адресе сервер откажется стартовать.
-
-### 5. Скачать модели
-
-Веса в архив не входят (~1 ГБ на весь каталог) и качаются на сервере:
+Модели:
 
 ```bash
 sudo -u nanoasr /opt/nanoasr/nanoasr models pull \
   -config /opt/nanoasr/nanoasr.yaml \
-  gigaam-v3-ctc-punct-ru silero-vad-v5
+  gigaam-v3-ctc-punct-ru silero-vad-v5 \
+  pyannote-segmentation-3 campplus-sv-voxceleb
 ```
 
-Минимум — модель распознавания и VAD. Пропишите её в конфиге, иначе каждый запрос
-должен будет называть модель сам:
+Минимум — модель распознавания и VAD; остальные две нужны диаризации.
 
 ```yaml
 asr:
   default_model: gigaam-v3-ctc-punct-ru
-```
-
-Для диаризации нужны ещё две модели и включённый блок:
-
-```bash
-sudo -u nanoasr /opt/nanoasr/nanoasr models pull \
-  -config /opt/nanoasr/nanoasr.yaml \
-  pyannote-segmentation-3 campplus-sv-zh-en
-```
-
-```yaml
 diarization:
   enabled: true
   segmentation_model: pyannote-segmentation-3
-  embedding_model: campplus-sv-zh-en
+  embedding_model: campplus-sv-voxceleb
 ```
+
+</details>
+
+### 5. Проверить конфиг
+
+```bash
+sudo -u nanoasr /opt/nanoasr/nanoasr models list -config /opt/nanoasr/nanoasr.yaml
+sudo -u nanoasr /opt/nanoasr/nanoasr key list   -config /opt/nanoasr/nanoasr.yaml
+```
+
+Первая команда покажет, что веса на месте и читаются, вторая — какие ключи знает
+файл. Обе не поднимают сервер, так что ошибка здесь дешевле, чем в systemd.
 
 ### 6. Запустить как сервис
 
@@ -335,8 +498,9 @@ sudo systemctl start nanoasr
 ```
 
 Конфиг архив не перезаписывает вслепую — файл называется `nanoasr.yaml` и приезжает
-как есть, так что свой держите в стороне или сравнивайте перед распаковкой. Веса в
-`/var/lib/nanoasr` переживают обновление.
+как есть, так что свой держите в стороне или сравнивайте перед распаковкой (`init`
+без `-force` тоже откажется его затирать). Веса в `/var/lib/nanoasr` переживают
+обновление.
 
 ### Если не поднимается
 
@@ -349,10 +513,11 @@ sudo journalctl -u nanoasr -n 50 --no-pager
 
 | Сообщение | Что делать |
 |---|---|
-| `auth.mode=apikey but no keys are configured` | шаг 4 |
+| `auth.mode=apikey but no keys are configured` | `nanoasr key issue admin -admin` |
 | `key must be at least 16 characters` | ключ короче 16 символов |
 | `auth.mode=open requires a loopback listen address` | либо `addr: "127.0.0.1:8080"`, либо `mode: apikey` |
-| `model ... is not present in ...` | шаг 5 |
+| `model ... is not present in ...` | модели не скачаны — шаг 4 |
+| `diarization models expect 16000 Hz but audio.target_sample_rate is ...` | приведите `audio.target_sample_rate` к 16000 |
 | `error while loading shared libraries` | `lib/` не рядом с бинарём — распакуйте архив целиком |
 | `diarization.enabled is true but ... is empty` | назовите обе модели диаризации |
 | `postproc.hotwords.enabled is true but asr.variants.max is 0` | hotwords нужен второй экземпляр модели |
@@ -360,7 +525,7 @@ sudo journalctl -u nanoasr -n 50 --no-pager
 ### Слушать не только localhost
 
 `addr: ":8080"` в конфиге слушает все интерфейсы. Перед тем как открывать наружу:
-ключ обязателен (шаг 4), а `jobs.webhook_allow_private` должен остаться `false` —
+ключ обязателен, а `jobs.webhook_allow_private` должен остаться `false` —
 иначе `webhook_url` с приватным адресом превращает сервер в SSRF-прокси внутрь вашей
 сети. TLS у сервера своего нет: ставьте его за nginx/Caddy или за туннелем.
 
@@ -374,7 +539,7 @@ sudo journalctl -u nanoasr -n 50 --no-pager
 ## Структура
 
 ```
-cmd/nanoasr        точка входа: serve | models | version
+cmd/nanoasr        точка входа: init | serve | key | models | version
 internal/core      доменные типы и контракт сервиса — без HTTP
 internal/audio     сниффинг, WAV/PCM, ffmpeg, ресемплинг
 internal/vad       нарезка речи и зоны тишины
@@ -397,7 +562,7 @@ docs/SPEC.md       спецификация
 ```bash
 make lint             # go vet + gofmt + eslint + tsc
 make test-race        # пул, очередь и губернатор корректны только под -race
-make models testdata  # веса (~1 ГБ) и аудио для сквозных тестов
+make models testdata  # веса (~1.1 ГБ) и аудио для сквозных тестов
 make test-integration # реальное распознавание + отчёты M1 и M5
 make load             # 100 параллельных файлов, 30 минут, против живого сервера
 cd web && npm run dev
