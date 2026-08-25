@@ -243,3 +243,63 @@ func hasWarningCode(ws []core.Warning, code string) bool {
 	}
 	return false
 }
+
+// TestM5Report prints what M5 promised to measure, the same way TestM1Report
+// does and for the same reason: the numbers depend on the host, and a threshold
+// here would fail on a laptop and pass on a server while telling nobody
+// anything.
+//
+// What it answers: what the second pass and the text stages actually cost, and
+// whether normalisation moved any word boundaries.
+func TestM5Report(t *testing.T) {
+	p := newStack(t)
+	path := audioPath(t, "ru-2spk.wav")
+
+	// Warm the model, or the first row carries several hundred megabytes of
+	// model load and means nothing.
+	transcribe(t, p, "ru-16k.wav")
+
+	t.Log("")
+	t.Log("=== M5 report ===")
+	t.Logf("%-28s %8s %8s %9s %9s %7s", "request", "rtf", "asr_ms", "diarize_ms", "post_ms", "words")
+
+	row := func(label string, req core.Request) *core.Result {
+		t.Helper()
+		req.Audio = &fileSource{path: path}
+		res, err := p.Transcribe(t.Context(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		t.Logf("%-28s %8.3f %7dms %8dms %8dms %7d",
+			label, res.Stats.RTF,
+			res.Stats.StagesMS["asr"], res.Stats.StagesMS["diarize"], res.Stats.StagesMS["post"],
+			len(res.Words()))
+		return res
+	}
+
+	base := row("plain", core.Request{})
+
+	d := newDiarizer(t)
+	t.Cleanup(func() { _ = d.Close() })
+	p.WithDiarizer(d)
+
+	diarized := row("diarize", core.Request{Diarize: true})
+	normalised := row("itn", core.Request{ITN: true, Language: "ru"})
+	row("diarize+itn", core.Request{Diarize: true, ITN: true, Language: "ru"})
+
+	// The cost of speakers, as a fraction of the recording. SPEC §5.7 budgets
+	// 0.3-0.5x RTF on top of recognition.
+	if base.Duration > 0 {
+		cost := float64(diarized.Stats.StagesMS["diarize"]) / 1000 / base.Duration
+		t.Logf("")
+		t.Logf("diarization costs %.3fx RTF on top of recognition (SPEC §5.7 budgets 0.3-0.5x)", cost)
+		t.Logf("it found %d speakers", len(diarized.Speakers))
+	}
+
+	// Normalisation may merge words but must never move the boundaries of the
+	// ones it keeps. Anything else would break the player.
+	t.Logf("")
+	t.Logf("normalisation: %d words became %d", len(base.Words()), len(normalised.Words()))
+	drift := medianStartDrift(base.Words(), normalised.Words())
+	t.Logf("median word-start drift after normalisation: %.0f ms (expected 0)", drift*1000)
+}

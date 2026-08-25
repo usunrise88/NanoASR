@@ -12,7 +12,7 @@ DIST        := dist
 UI_DIST     := internal/ui/dist
 
 .PHONY: all web build build-noui dist docker lint test test-race test-integration \
-	models testdata golden-update run clean tidy help
+	load models testdata golden-update run clean tidy help
 
 all: web build
 
@@ -70,6 +70,13 @@ test-integration:
 golden-update:
 	$(GO) test -tags integration ./internal/pipeline/ \
 		-run TestIntegrationTranscribesReferenceClip -update-golden -v
+
+## load: 100 concurrent 5-minute files against a running server (SPEC §15)
+#
+# Not part of `make test`, and not in CI: it takes thirty minutes by design,
+# because a leak is only visible over time. Start a server first.
+load:
+	./scripts/loadtest.sh
 
 ## test-race: the pool, the queue and the governor are only correct under -race
 test-race:

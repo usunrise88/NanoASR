@@ -8,7 +8,9 @@
 # apart, so this is a thin wrapper and nothing more.
 set -euo pipefail
 
-MODELS="${MODELS:-gigaam-v3-ctc-punct-ru gigaam-v3-rnnt-punct-ru gigaam-v2-ctc-ru gigaam-v2-rnnt-ru zipformer-small-en silero-vad-v5}"
+MODELS="${MODELS:-gigaam-v3-ctc-punct-ru gigaam-v3-rnnt-punct-ru \
+  gigaam-v2-ctc-ru gigaam-v2-rnnt-ru zipformer-small-en silero-vad-v5 \
+  pyannote-segmentation-3 campplus-sv-zh-en}"
 CONFIG="${CONFIG:-configs/nanoasr.dev.yaml}"
 
 if [[ -x dist/nanoasr ]]; then
