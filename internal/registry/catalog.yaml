@@ -164,6 +164,54 @@ models:
       Same acoustics as gigaam-v2-ctc-ru, exported as a transducer.
 
   # ---------------------------------------------------------------------------
+  # Diarization, part one: segmentation. Answers "is someone speaking, and is it
+  # a different someone" over a sliding window; it does not identify anyone.
+  - id: pyannote-segmentation-3
+    revision: "3.0"
+    kind: segmentation
+    family: pyannote
+    display_name: Pyannote segmentation 3.0
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      model: model.int8.onnx
+    resources:
+      approx_rss_mb: 64
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2
+      sha256: 24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488
+      size_bytes: 6958444
+    license: mit
+    commercial_use: "yes"
+    notes: >-
+      Speaker-agnostic: it finds turn boundaries, and the embedding model below
+      decides which turns belong to the same person.
+
+  # ---------------------------------------------------------------------------
+  # Diarization, part two: speaker embeddings. Not an archive, one .onnx file.
+  #
+  # Trained on Chinese and English, and used here for Russian on purpose: a
+  # speaker embedding is voice timbre rather than language, and the clustering
+  # only ever compares embeddings with each other.
+  - id: campplus-sv-zh-en
+    revision: "16k-common-advanced"
+    kind: embedding
+    family: campplus
+    display_name: CAM++ speaker embedding (zh/en)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      model: 3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx
+    resources:
+      approx_rss_mb: 96
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx
+      sha256: aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2
+      size_bytes: 28281164
+    license: apache-2.0
+    commercial_use: "yes"
+
+  # ---------------------------------------------------------------------------
   # English, transducer, SentencePiece. Small enough for CI, and the only entry
   # with a BPE vocabulary — the branch of word assembly the Russian models never
   # exercise.

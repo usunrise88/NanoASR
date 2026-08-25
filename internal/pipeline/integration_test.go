@@ -533,3 +533,14 @@ func abs(v float64) float64 {
 	}
 	return v
 }
+
+// transcribeWith runs one clip through the stack with request options set.
+func transcribeWith(t *testing.T, p *Pipeline, name string, req core.Request) *core.Result {
+	t.Helper()
+	req.Audio = &fileSource{path: audioPath(t, name)}
+	res, err := p.Transcribe(t.Context(), req)
+	if err != nil {
+		t.Fatalf("transcribing %s: %v", name, err)
+	}
+	return res
+}

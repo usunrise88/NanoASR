@@ -71,6 +71,10 @@ type verboseWord struct {
 	End        float64 `json:"end"`
 	Confidence float64 `json:"confidence,omitempty"`
 	Speaker    *string `json:"speaker,omitempty"`
+	// SpeakerConfidence is how much of this word the winning speaker turn
+	// covered. Additive, like the rest: an OpenAI client ignores it.
+	SpeakerConfidence float64 `json:"speaker_confidence,omitempty"`
+	Channel           int     `json:"channel,omitempty"`
 }
 
 // render writes the result in the requested format.
@@ -116,11 +120,13 @@ func buildVerbose(res *core.Result, wantWords bool) verboseResponse {
 		}
 		for _, word := range s.Words {
 			out.Words = append(out.Words, verboseWord{
-				Word:       word.Word,
-				Start:      word.Start,
-				End:        word.End,
-				Confidence: word.Confidence,
-				Speaker:    s.Speaker,
+				Word:              word.Word,
+				Start:             word.Start,
+				End:               word.End,
+				Confidence:        word.Confidence,
+				Speaker:           wordSpeaker(word, s),
+				SpeakerConfidence: word.SpeakerConfidence,
+				Channel:           word.Channel,
 			})
 		}
 	}
@@ -146,4 +152,16 @@ func writeText(w http.ResponseWriter, contentType, body string) {
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, body)
+}
+
+// wordSpeaker prefers the word's own attribution over its segment's.
+//
+// They agree once diarization has split segments at turn boundaries. They do
+// not agree when a result was stored before that happened, and the word is the
+// more specific of the two.
+func wordSpeaker(w core.Word, s core.Segment) *string {
+	if w.Speaker != nil {
+		return w.Speaker
+	}
+	return s.Speaker
 }

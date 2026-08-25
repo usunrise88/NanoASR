@@ -18,23 +18,58 @@ const (
 	VTTContentType = "text/vtt; charset=utf-8"
 )
 
-// SRT renders SubRip.
-func SRT(res *core.Result) string {
+// Options controls what goes into a cue beyond the words.
+type Options struct {
+	// Speakers prefixes each cue with who said it. Off for an undiarized
+	// result, where every cue would carry the same empty label.
+	Speakers bool
+}
+
+// SRT renders SubRip, labelling speakers when the result has any.
+func SRT(res *core.Result) string { return SRTWith(res, defaults(res)) }
+
+// VTT renders WebVTT, labelling speakers when the result has any.
+func VTT(res *core.Result) string { return VTTWith(res, defaults(res)) }
+
+// defaults turns speaker labels on exactly when there are speakers to label, so
+// an undiarized result renders byte for byte as it did before diarization
+// existed.
+func defaults(res *core.Result) Options {
+	return Options{Speakers: len(res.Speakers) > 0}
+}
+
+// SRTWith renders SubRip.
+//
+// SubRip has no notion of a speaker, so the label goes inside the cue text as
+// "spk_0: ". That is the convention players and editors already expect, and an
+// unknown tag would simply be displayed verbatim.
+func SRTWith(res *core.Result, o Options) string {
 	var b strings.Builder
 	for i, s := range res.Segments {
+		text := s.Text
+		if o.Speakers && s.Speaker != nil {
+			text = *s.Speaker + ": " + text
+		}
 		fmt.Fprintf(&b, "%d\n%s --> %s\n%s\n\n",
-			i+1, Timecode(s.Start, ','), Timecode(s.End, ','), s.Text)
+			i+1, Timecode(s.Start, ','), Timecode(s.End, ','), text)
 	}
 	return b.String()
 }
 
-// VTT renders WebVTT.
-func VTT(res *core.Result) string {
+// VTTWith renders WebVTT.
+//
+// WebVTT has a real voice span, so it gets one: a player can style or filter
+// <v spk_0> rather than having to parse a prefix back out of the words.
+func VTTWith(res *core.Result, o Options) string {
 	var b strings.Builder
 	b.WriteString("WEBVTT\n\n")
 	for _, s := range res.Segments {
+		text := s.Text
+		if o.Speakers && s.Speaker != nil {
+			text = "<v " + *s.Speaker + ">" + text + "</v>"
+		}
 		fmt.Fprintf(&b, "%s --> %s\n%s\n\n",
-			Timecode(s.Start, '.'), Timecode(s.End, '.'), s.Text)
+			Timecode(s.Start, '.'), Timecode(s.End, '.'), text)
 	}
 	return b.String()
 }

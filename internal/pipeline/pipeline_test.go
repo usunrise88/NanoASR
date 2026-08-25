@@ -482,3 +482,26 @@ func TestTranscribeWarnsWhenTheModelCannotPunctuate(t *testing.T) {
 		t.Errorf("warnings %+v should say punctuation was asked for and not delivered", got.Warnings)
 	}
 }
+
+// newHarnessWithDecoder is newHarness for a test that needs its own decoder,
+// such as one standing in for a multi-channel file.
+func newHarnessWithDecoder(
+	t *testing.T,
+	dec audio.Decoder,
+	segs []vad.Segment,
+	rec *fakeRecognizer,
+	opt Options,
+) *harness {
+	t.Helper()
+
+	models := pool.New(fakeRegistry{languages: []string{"ru"}},
+		func(context.Context, registry.Manifest, string, asr.Variant) (asr.Recognizer, error) { return rec, nil },
+		pool.Options{MaxResidentModels: 2, MaxModelRSSMB: 4096})
+	t.Cleanup(func() { _ = models.Close() })
+
+	if opt.DefaultModel == "" {
+		opt.DefaultModel = "test-model"
+	}
+	p := New(audio.NewRouter(dec), fakeSegmenter{segments: segs}, models, pool.NewGovernor(4), opt)
+	return &harness{pipeline: p, rec: rec}
+}

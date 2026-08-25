@@ -11,6 +11,8 @@ import (
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/config"
 	"github.com/usunrise88/nanoasr/internal/core"
+	"github.com/usunrise88/nanoasr/internal/diarize"
+	diarizesherpa "github.com/usunrise88/nanoasr/internal/diarize/sherpa"
 	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pipeline"
 	"github.com/usunrise88/nanoasr/internal/pool"
@@ -29,6 +31,7 @@ type server struct {
 	registry *registry.Remote
 	pool     *pool.Pool
 	vad      vad.Segmenter
+	diarizer diarize.Diarizer
 
 	queue   *job.Queue
 	store   *sqlite.Store
@@ -68,10 +71,18 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		return nil, err
 	}
 
+	diarizer, err := buildDiarizer(ctx, cfg, reg, log)
+	if err != nil {
+		models.Close()
+		_ = segmenter.Close()
+		return nil, err
+	}
+
 	store, err := sqlite.Open(cfg.Storage.DBPath)
 	if err != nil {
 		models.Close()
 		_ = segmenter.Close()
+		closeDiarizer(diarizer)
 		return nil, err
 	}
 
@@ -90,7 +101,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 			BatchMaxSize:         cfg.ASR.Batch.MaxSize,
 			BatchMaxSeconds:      cfg.ASR.Batch.MaxSeconds,
 			NumThreads:           cfg.ASR.NumThreads,
-		})
+		}).WithDiarizer(diarizer)
 
 	hooks := webhook.New(webhook.Options{
 		Secret:       cfg.Jobs.WebhookSecret,
@@ -120,6 +131,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		registry: reg,
 		pool:     models,
 		vad:      segmenter,
+		diarizer: diarizer,
 		queue:    queue,
 		store:    store,
 		spool:    sp,
@@ -311,7 +323,75 @@ func (s *server) Close() {
 	if s.vad != nil {
 		_ = s.vad.Close()
 	}
+	closeDiarizer(s.diarizer)
 	if s.pool != nil {
 		_ = s.pool.Close()
+	}
+}
+
+// buildDiarizer resolves the two speaker models through the same registry that
+// serves ASR models, and builds one instance per concurrent job.
+//
+// Like the VAD pool, this sits outside the model pool: these are not
+// recognisers, they are not selectable per request, and they stay loaded for
+// the life of the server. That means they do not participate in LRU eviction or
+// max_model_rss_mb, which is a deliberate trade — the alternative is a pool key
+// space where "model" means two unrelated things.
+func buildDiarizer(
+	ctx context.Context,
+	cfg config.Config,
+	reg *registry.Remote,
+	log *slog.Logger,
+) (diarize.Diarizer, error) {
+	if !cfg.Diarization.Enabled {
+		return nil, nil
+	}
+
+	resolve := func(id string) (string, error) {
+		man, err := reg.Resolve(ctx, id)
+		if err != nil {
+			return "", fmt.Errorf("diarization model %q: %w", id, err)
+		}
+		dir, err := reg.Dir(id)
+		if err != nil {
+			return "", err
+		}
+		return man.FilePath(dir, "model")
+	}
+
+	segmentation, err := resolve(cfg.Diarization.SegmentationModel)
+	if err != nil {
+		return nil, err
+	}
+	embedding, err := resolve(cfg.Diarization.EmbeddingModel)
+	if err != nil {
+		return nil, err
+	}
+
+	pooled, err := diarizesherpa.NewPool(diarize.Config{
+		SegmentationModel: segmentation,
+		EmbeddingModel:    embedding,
+		NumClusters:       cfg.Diarization.Clustering.NumClusters,
+		Threshold:         cfg.Diarization.Clustering.Threshold,
+		MinDurationOn:     cfg.Diarization.MinDurationOn,
+		MinDurationOff:    cfg.Diarization.MinDurationOff,
+	}, cfg.ASR.NumThreads, cfg.Jobs.MaxConcurrent)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info("diarization ready",
+		"segmentation", cfg.Diarization.SegmentationModel,
+		"embedding", cfg.Diarization.EmbeddingModel,
+		"instances", cfg.Jobs.MaxConcurrent,
+		"note", "a diarization pass cannot be cancelled once started (SPEC §2 decision 34)")
+	return pooled, nil
+}
+
+// closeDiarizer is nil-safe: diarization is off by default, so most servers
+// never build one.
+func closeDiarizer(d diarize.Diarizer) {
+	if d != nil {
+		_ = d.Close()
 	}
 }

@@ -3,11 +3,14 @@
 package pipeline
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/usunrise88/nanoasr/internal/core"
+	"github.com/usunrise88/nanoasr/internal/diarize"
+	diarizesherpa "github.com/usunrise88/nanoasr/internal/diarize/sherpa"
 )
 
 const (
@@ -117,6 +120,124 @@ func TestIntegrationTokenShapesAreUnchanged(t *testing.T) {
 func hasConfidence(ws []core.Word) bool {
 	for _, w := range ws {
 		if w.Confidence > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Diarization against the real segmentation and embedding models.
+//
+// The fixture is two voices derived from one clip by pitch shift, which is the
+// only two-speaker audio the repository can produce without shipping someone's
+// recording. The shift factor is measured rather than chosen: see
+// scripts/fetch-testdata.sh.
+func TestIntegrationDiarizesTwoSpeakers(t *testing.T) {
+	p := newStack(t)
+	d := newDiarizer(t)
+	p.WithDiarizer(d)
+	t.Cleanup(func() { _ = d.Close() })
+
+	res := transcribeWith(t, p, "ru-2spk.wav", core.Request{Diarize: true})
+
+	if len(res.Speakers) != 2 {
+		t.Fatalf("found %d speakers, want 2: %+v", len(res.Speakers), res.Speakers)
+	}
+	// The summary has to agree with the transcript beside it.
+	total := 0.0
+	for _, s := range res.Speakers {
+		if s.Segments == 0 {
+			t.Errorf("speaker %s claims no segments", s.ID)
+		}
+		total += s.TotalSpeech
+	}
+	if total > res.Duration {
+		t.Errorf("speakers account for %.1fs of a %.1fs recording", total, res.Duration)
+	}
+
+	// Every word is attributed, and every segment agrees with its own words.
+	for _, seg := range res.Segments {
+		if seg.Speaker == nil {
+			t.Errorf("segment %d has no speaker", seg.ID)
+			continue
+		}
+		for _, w := range seg.Words {
+			if w.Speaker == nil {
+				t.Errorf("word %q has no speaker", w.Word)
+				continue
+			}
+			if *w.Speaker != *seg.Speaker {
+				t.Errorf("word %q says %q, its segment says %q", w.Word, *w.Speaker, *seg.Speaker)
+			}
+			if w.SpeakerConfidence <= 0 || w.SpeakerConfidence > 1 {
+				t.Errorf("word %q has speaker confidence %v", w.Word, w.SpeakerConfidence)
+			}
+		}
+	}
+	assertWordInvariants(t, res.Words(), res.Duration)
+
+	// Both halves say the same sentence, so both speakers should have found
+	// most of it. This is what catches a diarizer that returns turns nobody
+	// spoke in.
+	if wer := wordErrorRate(res.Text, res.Text); wer != 0 {
+		t.Fatalf("self-comparison is not zero: %v", wer)
+	}
+}
+
+// Split already separates the speakers, so the second pass must not run
+// (SPEC §5.7) — and skipping must not look like a failure.
+func TestIntegrationDiarizationSkippedUnderSplit(t *testing.T) {
+	p := newStack(t)
+	d := newDiarizer(t)
+	p.WithDiarizer(d)
+	t.Cleanup(func() { _ = d.Close() })
+
+	res := transcribeWith(t, p, "ru-stereo.wav",
+		core.Request{Diarize: true, ChannelMode: core.ChannelSplit})
+
+	if len(res.Speakers) != 0 {
+		t.Errorf("speakers = %+v, want none under split", res.Speakers)
+	}
+	if !hasWarningCode(res.Warnings, "diarization_skipped_split") {
+		t.Errorf("warnings %+v should say why diarization was skipped", res.Warnings)
+	}
+	channels := map[int]bool{}
+	for _, s := range res.Segments {
+		channels[s.Channel] = true
+	}
+	if len(channels) != 2 {
+		t.Errorf("segments cover channels %v, want both legs", channels)
+	}
+}
+
+func newDiarizer(t *testing.T) *diarizesherpa.Pool {
+	t.Helper()
+	root := repoRoot(t)
+	seg := filepath.Join(root, ".models", "pyannote-segmentation-3@3.0", "model.int8.onnx")
+	emb := filepath.Join(root, ".models", "campplus-sv-zh-en@16k-common-advanced",
+		"3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx")
+	for _, p := range []string{seg, emb} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("diarization models are not downloaded: %v", err)
+		}
+	}
+
+	d, err := diarizesherpa.NewPool(diarize.Config{
+		SegmentationModel: seg,
+		EmbeddingModel:    emb,
+		Threshold:         0.5,
+		MinDurationOn:     0.3,
+		MinDurationOff:    0.5,
+	}, 2, 1)
+	if err != nil {
+		t.Fatalf("building the diarizer: %v", err)
+	}
+	return d
+}
+
+func hasWarningCode(ws []core.Warning, code string) bool {
+	for _, w := range ws {
+		if w.Code == code {
 			return true
 		}
 	}

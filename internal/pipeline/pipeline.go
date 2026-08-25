@@ -17,6 +17,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/asr"
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/core"
+	"github.com/usunrise88/nanoasr/internal/diarize"
 	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pool"
 	"github.com/usunrise88/nanoasr/internal/vad"
@@ -54,6 +55,15 @@ type Options struct {
 	Observer core.Observer
 }
 
+// WithDiarizer attaches the speaker pass. It is set after construction rather
+// than taken by New because it is optional, server-wide and built from its own
+// config block — threading it through New would put a nil in every caller that
+// does not use it.
+func (p *Pipeline) WithDiarizer(d diarize.Diarizer) *Pipeline {
+	p.diarizer = d
+	return p
+}
+
 func (o Options) withDefaults() Options {
 	if o.TargetSampleRate <= 0 {
 		o.TargetSampleRate = 16000
@@ -85,6 +95,7 @@ type Pipeline struct {
 	segmenter vad.Segmenter
 	models    *pool.Pool
 	governor  *pool.Governor
+	diarizer  diarize.Diarizer
 	opt       Options
 
 	// Supplied by Attach; nil on a server built without a queue.
@@ -156,6 +167,22 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 	}
 
 	result := p.assemble(id, lease, req, tracks, decoded)
+
+	// Diarization is a second pass over the whole recording, so it runs after
+	// the transcript exists and rewrites it rather than being woven into it.
+	spk, err := runStage(&stages, "diarize", func() (diarizeResult, error) {
+		r, w, err := p.diarize(ctx, req, tracks, result.Segments)
+		warn = append(warn, w...)
+		return r, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	result.Segments = spk.segments
+	result.Speakers = spk.speakers
+	if len(spk.speakers) > 0 {
+		result.Text = joinSegments(result.Segments)
+	}
 
 	warn = append(warn, pendingFeatures(req, lease.Recognizer.Capabilities())...)
 	warn = append(warn, p.unsupportedOptions(req, lease)...)

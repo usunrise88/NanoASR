@@ -15,13 +15,6 @@ import "github.com/usunrise88/nanoasr/internal/core"
 func pendingFeatures(req core.Request, caps core.Capabilities) []core.Warning {
 	var out []core.Warning
 
-	// Owned by track D (diarization).
-	if req.Diarize {
-		out = append(out, core.Warning{
-			Code:    "diarization_unavailable",
-			Message: "diarization is not implemented in this build; every word is unattributed",
-		})
-	}
 	// Owned by track C (post-processing).
 	//
 	// A model that punctuates itself needs no stage and gets no warning: the

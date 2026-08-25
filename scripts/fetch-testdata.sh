@@ -46,5 +46,39 @@ ffmpeg -hide_banner -loglevel error -y -i "$OUT/ru-16k.wav" \
 ffmpeg -hide_banner -loglevel error -y -i "$OUT/ru-16k.wav" \
   -c:a libopus -b:a 24k "$OUT/ru-16k.opus"
 
+# Two speakers, derived rather than downloaded.
+#
+# The source clip is one voice, and diarization cannot be tested with one voice.
+# Shifting the pitch without changing the tempo produces a genuinely different
+# timbre — which is what a speaker embedding keys on — so the two halves cluster
+# apart. asetrate resamples to shift, aresample puts the rate back, and atempo
+# undoes the speed change that shifting caused.
+#
+# The factor is measured, not chosen for looks. At 1.25 the CAM++ embedding
+# still calls both halves the same person, which is a defensible judgement and
+# makes a useless fixture; at 1.6 it separates them at the default threshold.
+log "deriving the two-speaker fixtures"
+SHIFT="asetrate=16000*1.6,aresample=16000,atempo=0.625"
+
+ffmpeg -hide_banner -loglevel error -y -i "$OUT/ru-16k.wav" \
+  -af "$SHIFT" "$OUT/.voice-b.wav"
+
+# Sequential: voice A, then voice B. What diarization has to take apart.
+ffmpeg -hide_banner -loglevel error -y -i "$OUT/ru-16k.wav" -i "$OUT/.voice-b.wav" \
+  -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" \
+  -c:a pcm_s16le "$OUT/ru-2spk.wav"
+
+# Two legs of a call: A on the left, B on the right, delayed so they alternate.
+# What channel_mode=split has to keep apart without any clustering at all.
+#
+# A is padded to the full length first: amerge stops at the shortest input, so
+# without the pad the delayed leg would be cut off entirely and the fixture
+# would be a stereo file with one silent channel.
+ffmpeg -hide_banner -loglevel error -y -i "$OUT/ru-16k.wav" -i "$OUT/.voice-b.wav" \
+  -filter_complex "[0:a]apad=whole_dur=24[a0];[1:a]adelay=12000,apad=whole_dur=24[b];[a0][b]amerge=inputs=2[a]" \
+  -map "[a]" -c:a pcm_s16le "$OUT/ru-stereo.wav"
+
+rm -f "$OUT/.voice-b.wav"
+
 log "test audio in $OUT:"
 ls -1 "$OUT"

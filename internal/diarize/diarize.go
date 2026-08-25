@@ -32,18 +32,42 @@ type Config struct {
 }
 
 // Diarizer wraps sherpa_onnx.OfflineSpeakerDiarization.
+//
+// numClusters is the request's speaker count, or 0 to cluster by threshold.
+// It is a parameter rather than configuration because it is the one clustering
+// knob a caller may set per request, and an implementation that has to mutate
+// shared state to honour it can then do so while it holds the instance.
 type Diarizer interface {
-	Process(ctx context.Context, pcm audio.PCM) ([]Turn, error)
+	Process(ctx context.Context, pcm audio.PCM, numClusters int) ([]Turn, error)
 	Close() error
 }
 
+// Attribution is one word's speaker and how sure we are it is that speaker
+// rather than the neighbour's.
+//
+// Confidence is the fraction of the word the winning turn actually covered, so
+// a word wholly inside one turn scores 1 and a word straddling a boundary
+// scores the larger share. It is not a probability and does not pretend to be
+// one; it exists so a client can tell a measured attribution from a guessed
+// one, and so a UI can mark the guesses.
+type Attribution struct {
+	Speaker    string
+	Confidence float64
+}
+
+// FallbackConfidence is what a word gets when no turn overlapped it at all and
+// the nearest one was used instead. SPEC §5.7 requires the drop; the value is
+// arbitrary but deliberately low enough to sort to the bottom.
+const FallbackConfidence = 0.3
+
 // Assign attributes each word to the speaker whose turn overlaps it most.
 //
-// Words that overlap nothing (a word straddling a turn boundary, or a turn map
-// with gaps) fall back to the nearest turn; the caller lowers reported
-// confidence for those.
-func Assign(words []core.Word, turns []Turn) []string {
-	out := make([]string, len(words))
+// Words that overlap nothing — a word in a gap in the turn map, or before the
+// first turn — fall back to the nearest turn at FallbackConfidence. The
+// fallback used to be invisible to the caller, which made the confidence drop
+// SPEC §5.7 asks for impossible to produce.
+func Assign(words []core.Word, turns []Turn) []Attribution {
+	out := make([]Attribution, len(words))
 	for i, w := range words {
 		best, bestOverlap := -1, 0.0
 		for _, t := range turns {
@@ -52,14 +76,31 @@ func Assign(words []core.Word, turns []Turn) []string {
 				best, bestOverlap = t.Speaker, ov
 			}
 		}
-		if best < 0 {
-			best = nearest(w, turns)
-		}
 		if best >= 0 {
-			out[i] = speakerID(best)
+			out[i] = Attribution{
+				Speaker:    speakerID(best),
+				Confidence: share(bestOverlap, w.End-w.Start),
+			}
+			continue
+		}
+		if best = nearest(w, turns); best >= 0 {
+			out[i] = Attribution{Speaker: speakerID(best), Confidence: FallbackConfidence}
 		}
 	}
 	return out
+}
+
+// share is overlap as a fraction of the word, clamped. A zero-length word — a
+// model that reported identical start and end — would divide by zero, and the
+// honest answer for it is the fallback rather than either 0 or 1.
+func share(overlap, duration float64) float64 {
+	if duration <= 0 {
+		return FallbackConfidence
+	}
+	if r := overlap / duration; r < 1 {
+		return r
+	}
+	return 1
 }
 
 func overlap(aStart, aEnd, bStart, bEnd float64) float64 {
