@@ -6,6 +6,7 @@ import (
 
 	sonnx "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 
+	"github.com/usunrise88/nanoasr/internal/asr"
 	"github.com/usunrise88/nanoasr/internal/registry"
 )
 
@@ -103,7 +104,7 @@ func TestLoaderReportsMissingWeights(t *testing.T) {
 	load := NewLoader(LoaderOptions{NumThreads: 1, SkipWarmup: true})
 	m := manifest("nemo_ctc", map[string]string{"model": "model.onnx", "tokens": "tokens.txt"})
 
-	_, err := load(t.Context(), m, t.TempDir())
+	_, err := load(t.Context(), m, t.TempDir(), asr.Variant{})
 	if err == nil {
 		t.Fatal("expected an error when the weights are absent")
 	}

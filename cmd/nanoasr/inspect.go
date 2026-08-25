@@ -246,10 +246,10 @@ func decodeProbeAudio(path string) (audio.PCM, error) {
 // wrong.
 func transcribeWith(
 	ctx context.Context,
-	load func(context.Context, registry.Manifest, string) (asr.Recognizer, error),
+	load func(context.Context, registry.Manifest, string, asr.Variant) (asr.Recognizer, error),
 	m registry.Manifest, dir string, pcm audio.PCM,
 ) (string, error) {
-	rec, err := load(ctx, m, dir)
+	rec, err := load(ctx, m, dir, asr.Variant{})
 	if err != nil {
 		return "", err
 	}

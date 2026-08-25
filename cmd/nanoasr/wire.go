@@ -57,6 +57,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 			MaxModelRSSMB:     cfg.ASR.MaxModelRSSMB,
 			IdleTTL:           cfg.ASR.IdleTTL.Duration,
 			AcquireTimeout:    cfg.ASR.AcquireTimeout.Duration,
+			MaxVariants:       cfg.ASR.Variants.Max,
 		})
 
 	decoder := buildDecoder(cfg, log)
@@ -83,9 +84,12 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 			MinSilenceMS:     cfg.VAD.MinSilenceMS,
 			MaxSplitChannels: cfg.Audio.MaxSplitChannels,
 			MaxDecodedBytes:  cfg.Audio.MaxDecodedBytes,
-			BatchMaxSize:     cfg.ASR.Batch.MaxSize,
-			BatchMaxSeconds:  cfg.ASR.Batch.MaxSeconds,
-			NumThreads:       cfg.ASR.NumThreads,
+
+			HotwordsEnabled:      cfg.PostProc.Hotwords.Enabled,
+			HotwordsDefaultScore: cfg.PostProc.Hotwords.DefaultScore,
+			BatchMaxSize:         cfg.ASR.Batch.MaxSize,
+			BatchMaxSeconds:      cfg.ASR.Batch.MaxSeconds,
+			NumThreads:           cfg.ASR.NumThreads,
 		})
 
 	hooks := webhook.New(webhook.Options{

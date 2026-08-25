@@ -64,17 +64,3 @@ func (*ITN) Name() string { return "itn" }
 func (*ITN) Apply(context.Context, []core.Word) ([]core.Word, error) {
 	return nil, core.ErrNotImplemented
 }
-
-// Hotwords is not a Stage: biasing happens before decoding, through the
-// recogniser's hotwords file and score. It lives here so all text-shaping
-// concerns are in one package.
-type Hotwords struct {
-	Words []string
-	Score float32
-}
-
-// TODO(M5): materialise a hotwords file in the model's tokenisation and pass
-// it through OfflineRecognizer.SetConfig for the duration of the request.
-func (h Hotwords) Materialise(dir string) (path string, err error) {
-	return "", core.ErrNotImplemented
-}

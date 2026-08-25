@@ -54,7 +54,7 @@ func newTestPool(t *testing.T, opt Options) (*Pool, map[string]*fakeRec) {
 	t.Helper()
 	recs := map[string]*fakeRec{}
 	var mu sync.Mutex
-	load := func(_ context.Context, m registry.Manifest, _ string) (asr.Recognizer, error) {
+	load := func(_ context.Context, m registry.Manifest, _ string, _ asr.Variant) (asr.Recognizer, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		r := &fakeRec{id: m.Key()}

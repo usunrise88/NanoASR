@@ -37,6 +37,13 @@ type Options struct {
 	MaxSplitChannels int
 	MaxDecodedBytes  int64
 
+	// HotwordsEnabled is the server's consent to spend a model instance on a
+	// caller's bias list. HotwordsDefaultScore applies when the caller does not
+	// name one — the OpenAI dialect maps prompt to hotwords without a score, so
+	// there has to be a default.
+	HotwordsEnabled      bool
+	HotwordsDefaultScore float32
+
 	BatchMaxSize    int
 	BatchMaxSeconds int
 	// NumThreads is the CPU budget one decode batch claims from the governor.
@@ -129,11 +136,12 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 		return nil, err
 	}
 
-	lease, err := p.models.Acquire(ctx, modelID)
+	lease, variantWarnings, err := p.acquire(ctx, modelID, req)
 	if err != nil {
 		return nil, err
 	}
 	defer lease.Release()
+	warn = append(warn, variantWarnings...)
 
 	// vad, asr and assemble run once per channel. They are timed inside, and
 	// stageTimer accumulates, so stages_ms reports the total work rather than

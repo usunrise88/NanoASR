@@ -40,12 +40,5 @@ func pendingFeatures(req core.Request, caps core.Capabilities) []core.Warning {
 			Message: "inverse text normalisation is not implemented in this build",
 		})
 	}
-	// Owned by track B (recogniser variants).
-	if len(req.Hotwords) > 0 {
-		out = append(out, core.Warning{
-			Code:    "hotwords_unavailable",
-			Message: "hotword biasing is not implemented in this build; the words were ignored",
-		})
-	}
 	return out
 }

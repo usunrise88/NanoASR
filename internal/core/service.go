@@ -59,12 +59,18 @@ type ModelInfo struct {
 	DisplayName string `json:"display_name"`
 	// Kind separates transcription models from the supporting ones — VAD,
 	// punctuation, diarization — that share the same registry.
-	Kind         string       `json:"kind"`
-	Family       string       `json:"family"`
-	Languages    []string     `json:"languages"`
-	License      string       `json:"license"`
-	State        ModelState   `json:"state"`
-	Pinned       bool         `json:"pinned"`
+	Kind      string     `json:"kind"`
+	Family    string     `json:"family"`
+	Languages []string   `json:"languages"`
+	License   string     `json:"license"`
+	State     ModelState `json:"state"`
+	Pinned    bool       `json:"pinned"`
+	// Variant describes a second resident instance of the same model, loaded
+	// because a request asked for hotwords or a decoding method the base
+	// instance was not built with. Empty for the base instance, which is what
+	// ordinary traffic uses. It exists so that a model appearing twice in this
+	// list explains itself rather than looking like a bug.
+	Variant      string       `json:"variant,omitempty"`
 	RefCount     int          `json:"ref_count"`
 	RSSMB        int          `json:"rss_mb"`
 	LastUsedUnix int64        `json:"last_used_unix,omitempty"`

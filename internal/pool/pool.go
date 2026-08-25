@@ -14,7 +14,7 @@ import (
 // Loader turns a resolved manifest into a live recogniser. It is injected so
 // the pool can be tested without models, and so an out-of-process backend
 // (SPEC §17, M6) can replace it without touching this file.
-type Loader func(ctx context.Context, m registry.Manifest, dir string) (asr.Recognizer, error)
+type Loader func(ctx context.Context, m registry.Manifest, dir string, v asr.Variant) (asr.Recognizer, error)
 
 // Options configures the pool. Zero values are replaced with safe minimums.
 type Options struct {
@@ -23,6 +23,11 @@ type Options struct {
 	IdleTTL           time.Duration
 	AcquireTimeout    time.Duration
 	Observer          core.Observer
+	// MaxVariants caps the extra instances one model may hold for per-request
+	// configurations. Zero — the default — means the base instance is the only
+	// one, and a request asking for a variant is answered with the model's own
+	// settings plus a warning saying so.
+	MaxVariants int
 }
 
 // Pool keeps loaded models alive, bounded by count and by memory, and performs
@@ -44,7 +49,12 @@ type Pool struct {
 }
 
 type entry struct {
+	// id is the pool key: the model id for the base instance, and the model id
+	// with a variant suffix for the others. baseID is the model either way, so
+	// a variant can be counted against its model and reported under it.
 	id       string
+	baseID   string
+	variant  asr.Variant
 	manifest registry.Manifest
 	rec      asr.Recognizer
 
@@ -99,12 +109,26 @@ func (l *Lease) Release() {
 // Acquire returns a ready model, loading or waiting as needed. It fails with
 // model_unavailable rather than blocking forever when nothing can be evicted.
 func (p *Pool) Acquire(ctx context.Context, id string) (*Lease, error) {
+	return p.AcquireVariant(ctx, id, asr.Variant{})
+}
+
+// AcquireVariant is Acquire for a request that needs its own recogniser
+// configuration. The zero variant is the base instance, so the two share a key
+// and ordinary traffic never pays for the feature.
+func (p *Pool) AcquireVariant(ctx context.Context, id string, v asr.Variant) (*Lease, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.opt.AcquireTimeout)
 	defer cancel()
 
+	key := variantKey(id, v)
+	if !v.Zero() {
+		if err := p.admitVariant(id, key); err != nil {
+			return nil, err
+		}
+	}
+
 	for {
 		p.mu.Lock()
-		e, ok := p.current[id]
+		e, ok := p.current[key]
 		if ok {
 			switch e.state {
 			case core.ModelReady:
@@ -124,23 +148,25 @@ func (p *Pool) Acquire(ctx context.Context, id string) (*Lease, error) {
 			}
 		}
 
-		// Nothing serving this id: claim the slot and load it ourselves.
+		// Nothing serving this key: claim the slot and load it ourselves.
 		placeholder := &entry{
-			id:       id,
+			id:       key,
+			baseID:   id,
+			variant:  v,
 			state:    core.ModelLoading,
 			ready:    make(chan struct{}),
 			lastUsed: time.Now(),
 		}
-		p.current[id] = placeholder
+		p.current[key] = placeholder
 		p.mu.Unlock()
 
 		p.opt.Observer.ModelEvent(id, core.ModelAbsent, core.ModelLoading)
-		rec, man, err := p.materialise(ctx, id)
+		rec, man, err := p.materialise(ctx, id, v)
 
 		p.mu.Lock()
 		if err != nil {
 			placeholder.loadErr = err
-			delete(p.current, id)
+			delete(p.current, key)
 			close(placeholder.ready)
 			p.cond.Broadcast()
 			p.mu.Unlock()
@@ -165,7 +191,7 @@ func (p *Pool) Acquire(ctx context.Context, id string) (*Lease, error) {
 // materialise resolves, downloads if needed and loads. It runs without the
 // pool lock held: loading a model takes seconds and must not block Acquire for
 // every other model.
-func (p *Pool) materialise(ctx context.Context, id string) (asr.Recognizer, registry.Manifest, error) {
+func (p *Pool) materialise(ctx context.Context, id string, v asr.Variant) (asr.Recognizer, registry.Manifest, error) {
 	man, err := p.reg.Resolve(ctx, id)
 	if err != nil {
 		return nil, registry.Manifest{}, err
@@ -176,7 +202,7 @@ func (p *Pool) materialise(ctx context.Context, id string) (asr.Recognizer, regi
 	if err != nil {
 		return nil, man, err
 	}
-	rec, err := p.load(ctx, man, dir)
+	rec, err := p.load(ctx, man, dir, v)
 	if err != nil {
 		return nil, man, err
 	}
@@ -204,7 +230,7 @@ func (p *Pool) release(e *entry) {
 // switch only once it is ready. In-flight requests keep decoding on the old
 // instance until they finish, and nobody ever sees a half-loaded model.
 func (p *Pool) Reload(ctx context.Context, id, revision string) error {
-	rec, man, err := p.materialise(ctx, id)
+	rec, man, err := p.materialise(ctx, id, asr.Variant{})
 	if err != nil {
 		return err
 	}
@@ -219,6 +245,7 @@ func (p *Pool) Reload(ctx context.Context, id, revision string) error {
 
 	fresh := &entry{
 		id:       id,
+		baseID:   id,
 		manifest: man,
 		rec:      rec,
 		state:    core.ModelReady,
@@ -228,14 +255,13 @@ func (p *Pool) Reload(ctx context.Context, id, revision string) error {
 	}
 	if old, ok := p.current[id]; ok {
 		fresh.pinned = old.pinned
-		old.state = core.ModelDraining
-		if old.refs == 0 {
-			p.closeLocked(old)
-		} else {
-			p.draining = append(p.draining, old)
-		}
+		p.retireLocked(old)
 		p.opt.Observer.ModelEvent(id, core.ModelReady, core.ModelDraining)
 	}
+	// Every variant of this model was built from the revision being replaced.
+	// Leaving them would mean a request with hotwords quietly kept decoding on
+	// weights the hot swap was meant to retire.
+	p.retireVariantsLocked(id)
 	p.current[id] = fresh
 	p.evictLocked()
 	p.cond.Broadcast()
@@ -250,14 +276,30 @@ func (p *Pool) Unload(id string) error {
 	if !ok {
 		return core.Errorf(core.CodeModelNotFound, "model %s is not loaded", id)
 	}
-	delete(p.current, id)
+	p.retireLocked(e)
+	p.retireVariantsLocked(id)
+	return nil
+}
+
+// retireLocked takes an entry out of service, closing it now if nothing holds
+// it and draining it otherwise.
+func (p *Pool) retireLocked(e *entry) {
+	delete(p.current, e.id)
 	if e.refs == 0 {
 		p.closeLocked(e)
-		return nil
+		return
 	}
 	e.state = core.ModelDraining
 	p.draining = append(p.draining, e)
-	return nil
+}
+
+// retireVariantsLocked retires every variant instance of a base model.
+func (p *Pool) retireVariantsLocked(baseID string) {
+	for _, e := range p.current {
+		if e.baseID == baseID && e.id != baseID {
+			p.retireLocked(e)
+		}
+	}
 }
 
 // Pin protects a model from eviction.
@@ -330,7 +372,16 @@ func (p *Pool) lruVictimLocked() *entry {
 	if len(cands) == 0 {
 		return nil
 	}
-	sort.Slice(cands, func(i, j int) bool { return cands[i].lastUsed.Before(cands[j].lastUsed) })
+	// A variant goes before a base instance of the same age. A base model is
+	// what ordinary requests use; a variant serves whoever asked for hotwords
+	// and can be rebuilt from it.
+	sort.Slice(cands, func(i, j int) bool {
+		iv, jv := cands[i].id != cands[i].baseID, cands[j].id != cands[j].baseID
+		if iv != jv {
+			return iv
+		}
+		return cands[i].lastUsed.Before(cands[j].lastUsed)
+	})
 	return cands[0]
 }
 
@@ -363,7 +414,8 @@ func (p *Pool) List() []core.ModelInfo {
 			caps = e.rec.Capabilities()
 		}
 		out = append(out, core.ModelInfo{
-			ID:           e.id,
+			ID:           e.baseID,
+			Variant:      e.variant.String(),
 			Revision:     e.manifest.Revision,
 			Kind:         e.manifest.EffectiveKind(),
 			DisplayName:  e.manifest.DisplayName,
@@ -410,4 +462,64 @@ func closedChan() chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 	return ch
+}
+
+// variantKey is the map key for one configuration of one model. The zero
+// variant keys on the model id alone, so ordinary traffic is unaffected by the
+// feature existing.
+func variantKey(id string, v asr.Variant) string {
+	if v.Zero() {
+		return id
+	}
+	return id + "!" + v.Key()
+}
+
+// admitVariant decides whether a second instance of a model may be loaded.
+//
+// The budget is per base model rather than global: one model with a runaway
+// client must not evict every other model's variants, and a cap that counted
+// them together would let it. Hitting the cap warns rather than evicting,
+// because evicting to make room for a variant means a client that sends a fresh
+// hotword list every request can churn the pool indefinitely.
+func (p *Pool) admitVariant(baseID, key string) error {
+	if p.opt.MaxVariants <= 0 {
+		return core.Errorf(core.CodeCapabilityUnavailable,
+			"per-request recogniser settings need a second resident instance, "+
+				"and asr.variants.max is 0")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	n := 0
+	for _, e := range p.current {
+		if e.baseID != baseID || e.id == baseID {
+			continue
+		}
+		if e.id == key {
+			return nil // already resident: reusing it costs nothing
+		}
+		n++
+	}
+	if n >= p.opt.MaxVariants {
+		return core.Errorf(core.CodeCapabilityUnavailable,
+			"model %s already holds %d recogniser variants (asr.variants.max)", baseID, n)
+	}
+	return nil
+}
+
+// Manifest resolves a model's manifest without loading it.
+//
+// The pipeline needs it to decide whether a request's options are expressible
+// on this model at all, and that decision has to be made before committing to
+// the memory of a second instance.
+func (p *Pool) Manifest(ctx context.Context, id string) (registry.Manifest, error) {
+	p.mu.Lock()
+	if e, ok := p.current[id]; ok && e.state == core.ModelReady {
+		man := e.manifest
+		p.mu.Unlock()
+		return man, nil
+	}
+	p.mu.Unlock()
+	return p.reg.Resolve(ctx, id)
 }

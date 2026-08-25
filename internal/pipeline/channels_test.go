@@ -56,7 +56,7 @@ func TestTranscribeSplitLabelsAndInterleavesChannels(t *testing.T) {
 	}
 
 	models := pool.New(fakeRegistry{languages: []string{"ru"}},
-		func(context.Context, registry.Manifest, string) (asr.Recognizer, error) { return rec, nil },
+		func(context.Context, registry.Manifest, string, asr.Variant) (asr.Recognizer, error) { return rec, nil },
 		pool.Options{MaxResidentModels: 2, MaxModelRSSMB: 4096})
 	t.Cleanup(func() { _ = models.Close() })
 
