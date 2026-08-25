@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/usunrise88/nanoasr/internal/core"
@@ -11,6 +12,11 @@ import (
 
 const (
 	enModel = "zipformer-small-en"
+	// charModel is named rather than reached through the default, because the
+	// default is a subword model now and the character branch of word assembly
+	// still has to be exercised by something.
+	charModel = "gigaam-v2-ctc-ru"
+	rnntModel = "gigaam-v3-rnnt-punct-ru"
 )
 
 // Both transducer entries in the catalog exist to answer questions the CTC
@@ -20,8 +26,11 @@ const (
 func TestIntegrationTransducerFamily(t *testing.T) {
 	p := newStack(t)
 
+	// The same generation on both sides. Comparing across generations would
+	// measure how much the model improved, which is not a property of the
+	// transducer mapping and not something a test can hold to a threshold.
 	ctc := transcribe(t, p, "ru-16k.wav")
-	rnnt := transcribeWithModel(t, p, "gigaam-v2-rnnt-ru", audioPath(t, "ru-16k.wav"))
+	rnnt := transcribeWithModel(t, p, rnntModel, audioPath(t, "ru-16k.wav"))
 
 	assertWordInvariants(t, rnnt.Words(), rnnt.Duration)
 
@@ -73,7 +82,7 @@ func TestIntegrationSentencePieceVocabulary(t *testing.T) {
 func TestIntegrationTokenShapesAreUnchanged(t *testing.T) {
 	p := newStack(t)
 
-	ctc := transcribe(t, p, "ru-16k.wav")
+	ctc := transcribeWithModel(t, p, charModel, audioPath(t, "ru-16k.wav"))
 	if got := ctc.TimestampSource; got != core.TimestampToken {
 		t.Errorf("CTC timestamp_source = %q, want token", got)
 	}
@@ -83,6 +92,18 @@ func TestIntegrationTokenShapesAreUnchanged(t *testing.T) {
 			t.Errorf("suspiciously short word %q: the character vocabulary may be "+
 				"assembling one word per character", w.Word)
 		}
+	}
+
+	// The Russian subword model is the default, and it is the one whose output
+	// most users see. Same question, different vocabulary: a broken boundary
+	// rule shows up here as one enormous word rather than as many tiny ones.
+	punct := transcribe(t, p, "ru-16k.wav")
+	if n := len(punct.Words()); n < 5 {
+		t.Errorf("the default subword model produced %d words for an 11s clip: %q",
+			n, punct.Text)
+	}
+	if !strings.ContainsAny(punct.Text, ".,?!") {
+		t.Errorf("the default model is meant to punctuate, but wrote none: %q", punct.Text)
 	}
 
 	wav := filepath.Join(repoRoot(t), ".models", "zipformer-small-en@2023-06-26", "test_wavs", "0.wav")

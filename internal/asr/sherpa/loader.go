@@ -93,7 +93,14 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 			return nil, err
 		}
 
-		rec, err := New(&cfg, fam.Capabilities(), m.ModelingUnit)
+		// The family says what this kind of model can do; the vocabulary says
+		// whether this particular set of weights punctuates. Two releases of
+		// the same family differ on exactly that, so it cannot come from the
+		// family, and it is measured rather than declared.
+		caps := fam.Capabilities()
+		caps.PunctuationBuiltin = tokensCarryPunctuation(tokens)
+
+		rec, err := New(&cfg, caps, m.ModelingUnit)
 		if err != nil {
 			return nil, err
 		}

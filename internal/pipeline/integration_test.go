@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/audio"
@@ -34,7 +35,7 @@ import (
 var updateGolden = flag.Bool("update-golden", false, "rewrite testdata/golden from this run")
 
 const (
-	testModel    = "gigaam-v2-ctc-ru"
+	testModel    = "gigaam-v3-ctc-punct-ru"
 	testVADModel = "silero-vad-v5"
 )
 
@@ -391,8 +392,8 @@ func writeGolden(t *testing.T, res *core.Result) {
 // wordErrorRate is the usual Levenshtein distance over words, normalised by
 // the reference length.
 func wordErrorRate(reference, hypothesis string) float64 {
-	ref := strings.Fields(strings.ToLower(reference))
-	hyp := strings.Fields(strings.ToLower(hypothesis))
+	ref := normaliseForWER(reference)
+	hyp := normaliseForWER(hypothesis)
 	if len(ref) == 0 {
 		if len(hyp) == 0 {
 			return 0
@@ -419,6 +420,29 @@ func wordErrorRate(reference, hypothesis string) float64 {
 	return float64(prev[len(hyp)]) / float64(len(ref))
 }
 
+// normaliseForWER lowercases and strips punctuation before comparing.
+//
+// This is deliberate rather than incidental. The default model punctuates, so
+// its words arrive with marks attached — mergePunctuation glues a comma to the
+// word before it, by design, so that a comma is not a word with a duration.
+// Counting "похвал," as a substitution for "похвал" would make the error rate a
+// measure of punctuation agreement rather than of recognition, and every
+// comparison here is between models or between codecs, where the question is
+// whether the words are the same.
+func normaliseForWER(s string) []string {
+	fields := strings.Fields(strings.ToLower(s))
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.TrimFunc(f, func(r rune) bool {
+			return unicode.IsPunct(r) || unicode.IsSymbol(r)
+		})
+		if f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // startDrifts pairs identical words between two transcripts and reports how
 // far their onsets moved.
 //
@@ -432,7 +456,7 @@ func startDrifts(base, other []core.Word) []float64 {
 	var out []float64
 	i, j := 0, 0
 	for i < len(base) && j < len(other) {
-		if base[i].Word == other[j].Word {
+		if sameWord(base[i].Word, other[j].Word) {
 			out = append(out, abs(other[j].Start-base[i].Start))
 			i++
 			j++
@@ -451,10 +475,23 @@ func startDrifts(base, other []core.Word) []float64 {
 	return out
 }
 
+// sameWord compares two words for alignment, ignoring case and attached
+// punctuation. A punctuating model can place a comma differently on narrowband
+// audio than on wideband, and treating that as a substitution would make this a
+// measurement of punctuation agreement rather than of when words start.
+func sameWord(a, b string) bool {
+	trim := func(s string) string {
+		return strings.TrimFunc(strings.ToLower(s), func(r rune) bool {
+			return unicode.IsPunct(r) || unicode.IsSymbol(r)
+		})
+	}
+	return trim(a) == trim(b)
+}
+
 // findWithin looks for word in seq[from:from+n], returning its index or -1.
 func findWithin(seq []core.Word, from, n int, word string) int {
 	for k := from; k < from+n && k < len(seq); k++ {
-		if seq[k].Word == word {
+		if sameWord(seq[k].Word, word) {
 			return k
 		}
 	}

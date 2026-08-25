@@ -32,7 +32,7 @@
     "noModels": "No models on disk",
     "noModelsHint": "Download one from the catalog — here, or on the models page.",
     "submitFailed": "Could not submit the job",
-    "punctuateHint": "The model punctuates on its own; a separate punctuation model arrives in M5",
+    "punctuateHint": "This model writes sentence marks and capitals itself",
     "itnHint": "Spelled-out numbers and dates into digits; arrives in M5",
     "later": "Arrives in M5"
   },

@@ -53,6 +53,85 @@ models:
       derives its own feature dimension and ignores features.dim entirely.
 
   # ---------------------------------------------------------------------------
+  # Russian, CTC, punctuating. The default model: it writes sentence marks and
+  # capitals itself, which is the only way Russian gets punctuation at all —
+  # sherpa-onnx publishes a CT-Transformer punctuation model for Chinese and
+  # English and none for Russian (SPEC §5.6).
+  #
+  # Punctuation is not declared here. It is read from tokens.txt at load time,
+  # because the family cannot say it — v2 below is the same family and does not
+  # punctuate — and a manifest that claimed it would be a claim nobody checked.
+  - id: gigaam-v3-ctc-punct-ru
+    revision: "2025-12-16"
+    kind: asr
+    family: nemo_ctc
+    display_name: GigaAM v3 CTC punct (Russian)
+    languages: [ru]
+    sample_rate: 16000
+    modeling_unit: bpe
+    files:
+      model: model.int8.onnx
+      tokens: tokens.txt
+    features:
+      sample_rate: 16000
+      dim: 64
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      approx_rss_mb: 900
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-ctc-punct-giga-am-v3-russian-2025-12-16.tar.bz2
+      sha256: 20e41e160efa6f2460a7ef6554cdbbb9e8fffb2b92e6bc708e9406bd8b9256ea
+      size_bytes: 163282594
+    license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
+    # Same as v2: the archive ships a saved GitHub HTML page in place of the
+    # licence text, so the terms cannot be established from the download.
+    commercial_use: unknown
+    notes: >-
+      Subword vocabulary of 257 tokens carrying full stops, commas, question
+      marks and capitals — hence punctuation and casing without a second pass.
+      Like v2 it derives its own feature dimension and ignores features.dim.
+      Measured on the reference clip: correct on both 8 kHz telephony variants,
+      but on the 16 kHz original it fuses two words across one VAD boundary
+      ("Лукоморьядууб"). The transducer entry below does not. Telephony is the
+      workload this model is the default for, and it is the cheaper of the two
+      on CPU, so the artefact is recorded rather than traded for the cost.
+
+  # ---------------------------------------------------------------------------
+  # Russian, transducer, punctuating. The v3 pair to the entry above, for
+  # callers who want per-word confidence with their punctuation.
+  - id: gigaam-v3-rnnt-punct-ru
+    revision: "2025-12-16"
+    kind: asr
+    family: transducer
+    display_name: GigaAM v3 RNNT punct (Russian)
+    languages: [ru]
+    sample_rate: 16000
+    modeling_unit: bpe
+    files:
+      encoder: encoder.int8.onnx
+      decoder: decoder.onnx
+      joiner: joiner.onnx
+      tokens: tokens.txt
+    features:
+      sample_rate: 16000
+      dim: 64
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      approx_rss_mb: 1100
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16.tar.bz2
+      sha256: f9620a0099019c6afcee26525ef9ed3297fa50dd5691c1902af0c948fc1a470b
+      size_bytes: 170197019
+    license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
+    commercial_use: unknown
+    notes: >-
+      Punctuates and capitalises like gigaam-v3-ctc-punct-ru but over its own
+      larger vocabulary — 1024 subwords against the CTC model's 257 — and being
+      a transducer its words carry confidence.
+
+  # ---------------------------------------------------------------------------
   # Russian, transducer. The same acoustic model as the CTC entry above, which
   # makes the two directly comparable on identical audio.
   - id: gigaam-v2-rnnt-ru
