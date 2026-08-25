@@ -214,8 +214,8 @@ func newDiarizer(t *testing.T) *diarizesherpa.Pool {
 	t.Helper()
 	root := repoRoot(t)
 	seg := filepath.Join(root, ".models", "pyannote-segmentation-3@3.0", "model.int8.onnx")
-	emb := filepath.Join(root, ".models", "campplus-sv-zh-en@16k-common-advanced",
-		"3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx")
+	emb := filepath.Join(root, ".models", "campplus-sv-voxceleb@16k",
+		"3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx")
 	for _, p := range []string{seg, emb} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("diarization models are not downloaded: %v", err)
@@ -225,7 +225,7 @@ func newDiarizer(t *testing.T) *diarizesherpa.Pool {
 	d, err := diarizesherpa.NewPool(diarize.Config{
 		SegmentationModel: seg,
 		EmbeddingModel:    emb,
-		Threshold:         0.5,
+		Threshold:         0.4,
 		MinDurationOn:     0.3,
 		MinDurationOff:    0.5,
 	}, 2, 1)

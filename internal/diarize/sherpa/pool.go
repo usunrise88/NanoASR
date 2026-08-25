@@ -56,6 +56,17 @@ func (p *Pool) Process(ctx context.Context, pcm audio.PCM, numClusters int) ([]d
 	}
 }
 
+// SampleRate is the rate the models were trained at.
+//
+// Every instance is built from the same configuration, so asking the first one
+// answers for all of them.
+func (p *Pool) SampleRate() int {
+	if len(p.all) == 0 {
+		return 0
+	}
+	return p.all[0].SampleRate()
+}
+
 func (p *Pool) Close() error {
 	for _, d := range p.all {
 		_ = d.Close()

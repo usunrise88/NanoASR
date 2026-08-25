@@ -396,6 +396,19 @@ func buildDiarizer(
 		return nil, err
 	}
 
+	// The pipeline hands the diarizer whatever audio.target_sample_rate
+	// produced, and sherpa-onnx does not check: feeding 8 kHz to a 16 kHz
+	// model is not an error there, it is a recording played at double speed,
+	// with turn boundaries in the wrong place and embeddings that cluster
+	// everything into one speaker. Caught here, at startup, where it is a
+	// configuration mistake with an obvious fix.
+	if want := pooled.SampleRate(); want > 0 && want != cfg.Audio.TargetSampleRate {
+		_ = pooled.Close()
+		return nil, fmt.Errorf(
+			"diarization models expect %d Hz but audio.target_sample_rate is %d; "+
+				"set them to the same rate", want, cfg.Audio.TargetSampleRate)
+	}
+
 	log.Info("diarization ready",
 		"segmentation", cfg.Diarization.SegmentationModel,
 		"embedding", cfg.Diarization.EmbeddingModel,

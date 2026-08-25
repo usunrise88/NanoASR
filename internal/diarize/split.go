@@ -72,7 +72,7 @@ func splitOne(s core.Segment) []core.Segment {
 	runs := speakerRuns(s.Words)
 	if len(runs) <= 1 {
 		// One speaker for the whole segment: keep it whole, and let it say so.
-		s.Speaker = speakerOf(s.Words[0])
+		s.Speaker = dominantSpeaker(s.Words)
 		return []core.Segment{s}
 	}
 
@@ -82,7 +82,7 @@ func splitOne(s core.Segment) []core.Segment {
 		child := core.Segment{
 			Text:    wordsText(words),
 			Channel: s.Channel,
-			Speaker: speakerOf(words[0]),
+			Speaker: dominantSpeaker(words),
 			Words:   words,
 		}
 		// The outer edges belong to the parent: the first child starts where
@@ -132,6 +132,16 @@ func speakerRuns(words []core.Word) []run {
 		}
 		out = append(out, r)
 	}
+
+	// The first run has no run before it to be absorbed into, so a single
+	// misattributed opening word survives the loop above and becomes a segment
+	// of its own — observed as a 0.1-second spk_0 in front of a sentence that
+	// belongs entirely to spk_1. It joins the run that follows instead, which
+	// then claims the speaker holding most of its time.
+	if len(out) > 1 && !isTurn(words[out[0].from:out[0].to]) {
+		out[1].from = out[0].from
+		out = out[1:]
+	}
 	return out
 }
 
@@ -148,15 +158,46 @@ func sameSpeaker(a, b core.Word) bool {
 	return *a.Speaker == *b.Speaker
 }
 
-// speakerOf reports the speaker a segment should claim, which is the speaker of
-// its words. A copy, because two segments must not share one pointer.
-func speakerOf(w core.Word) *string {
-	if w.Speaker == nil {
+// dominantSpeaker reports the speaker a segment should claim: the one holding
+// most of its spoken time.
+//
+// Not the first word's speaker. Once a run can absorb a neighbour too short to
+// be a turn of its own, the first word is exactly the one likely to be the
+// absorbed mistake, and letting it name the segment would hand the whole
+// sentence to the wrong person.
+//
+// The returned pointer is a copy, because two segments must not share one.
+func dominantSpeaker(ws []core.Word) *string {
+	byID := map[string]float64{}
+	for _, w := range ws {
+		if w.Speaker == nil {
+			continue
+		}
+		d := w.End - w.Start
+		if d <= 0 {
+			d = 0 // a zero-length word still counts as a vote, not as time
+		}
+		byID[*w.Speaker] += d + tieBreak
+	}
+	if len(byID) == 0 {
 		return nil
 	}
-	s := *w.Speaker
+	best, bestTime := "", -1.0
+	for id, t := range byID {
+		// Sorted by id on a tie so that the same input always names the same
+		// speaker: map iteration order would otherwise make the result differ
+		// between runs of the same file.
+		if t > bestTime || (t == bestTime && id < best) {
+			best, bestTime = id, t
+		}
+	}
+	s := best
 	return &s
 }
+
+// tieBreak is the weight of a word beyond its duration, so that a run of many
+// very short words is not outvoted by one long one.
+const tieBreak = 0.01
 
 // Speakers summarises the clusters that actually reached the transcript.
 //

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/core"
@@ -73,7 +74,26 @@ func (p *Pipeline) diarize(
 	}
 
 	split := diarize.Split(segs)
-	return diarizeResult{segments: split, speakers: diarize.Speakers(split)}, nil, nil
+	speakers := diarize.Speakers(split)
+
+	// A caller who said how many people are on the recording has told us what
+	// the answer should look like, so getting fewer is worth saying out loud.
+	// Silence here is what makes "everything is spk_0" look like a bug in the
+	// server rather than what it is: two voices the embedding model cannot
+	// tell apart. Not an _unavailable code — the transcript is fine, and
+	// strict mode should not reject it.
+	var warn []core.Warning
+	if req.NumSpeakers > 1 && len(speakers) < req.NumSpeakers {
+		warn = append(warn, core.Warning{
+			Code: "diarization_fewer_speakers",
+			Message: fmt.Sprintf(
+				"asked for %d speakers, separated %d from %d turns; "+
+					"a different diarization.embedding_model or a lower "+
+					"diarization.clustering.threshold separates similar voices better",
+				req.NumSpeakers, len(speakers), len(turns)),
+		})
+	}
+	return diarizeResult{segments: split, speakers: speakers}, warn, nil
 }
 
 // wordsOf flattens segment words in the order Apply expects to walk them.

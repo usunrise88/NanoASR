@@ -211,6 +211,54 @@ models:
     license: apache-2.0
     commercial_use: "yes"
 
+  # The same architecture trained on VoxCeleb instead of Chinese corpora.
+  #
+  # It exists because the clustering compares embeddings with each other, but
+  # the space they live in is still learned from a corpus: a model trained on
+  # zh-cn/en telephony puts two Russian voices closer together than VoxCeleb
+  # does, and close voices are exactly what collapses a two-speaker call into
+  # one cluster. VoxCeleb is interview audio from speakers of many languages,
+  # so it is the better prior for anything that is neither Chinese nor English.
+  - id: campplus-sv-voxceleb
+    revision: "16k"
+    kind: embedding
+    family: campplus
+    display_name: CAM++ speaker embedding (VoxCeleb)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      model: 3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx
+    resources:
+      approx_rss_mb: 96
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx
+      sha256: 357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b
+      size_bytes: 29596978
+    license: apache-2.0
+    commercial_use: "yes"
+
+  # A larger, stronger embedding for when two voices are genuinely similar.
+  # Same VoxCeleb prior, ResNet34 instead of CAM++: roughly twice the cost per
+  # turn, and the one to reach for when campplus-sv-voxceleb still merges two
+  # speakers into one cluster.
+  - id: wespeaker-voxceleb-resnet34
+    revision: "LM"
+    kind: embedding
+    family: wespeaker
+    display_name: WeSpeaker ResNet34 (VoxCeleb, LM)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      model: wespeaker_en_voxceleb_resnet34_LM.onnx
+    resources:
+      approx_rss_mb: 128
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx
+      sha256: e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012
+      size_bytes: 26530550
+    license: apache-2.0
+    commercial_use: "yes"
+
   # ---------------------------------------------------------------------------
   # English, transducer, SentencePiece. Small enough for CI, and the only entry
   # with a BPE vocabulary — the branch of word assembly the Russian models never

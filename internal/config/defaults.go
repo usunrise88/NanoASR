@@ -60,7 +60,16 @@ func Default() Config {
 			Hotwords: HotwordsPolicy{DefaultScore: 1.5},
 		},
 		Diarization: Diarization{
-			Clustering:     Clustering{Threshold: 0.5},
+			SegmentationModel: "pyannote-segmentation-3",
+			// VoxCeleb rather than the zh/en embedding: measured on two
+			// similar Russian voices, the zh/en model puts them in one cluster
+			// at every threshold, and no amount of tuning separates them. See
+			// the diarization notes in the README.
+			EmbeddingModel: "campplus-sv-voxceleb",
+			// 0.5 is sherpa-onnx's own default and is too permissive for two
+			// voices of the same language and register: it merged a measured
+			// two-speaker fixture into one speaker, and 0.4 did not.
+			Clustering:     Clustering{Threshold: 0.4},
 			MinDurationOn:  0.3,
 			MinDurationOff: 0.5,
 		},

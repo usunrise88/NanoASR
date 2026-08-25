@@ -201,3 +201,69 @@ func TestApplyWritesSpeakerAndConfidence(t *testing.T) {
 		t.Errorf("word = %+v, want spk_2 at 0.9", w)
 	}
 }
+
+// The mirror image of TestSplitAbsorbsARunTooShortToBeATurn: a stray word at
+// the very start has no run before it to be absorbed into, so it used to
+// survive as a segment of its own — observed in the wild as a 0.1-second spk_0
+// in front of a sentence that was entirely spk_1.
+func TestSplitAbsorbsAShortLeadingRun(t *testing.T) {
+	seg := segmentWith(0, 3,
+		core.Word{Word: "а", Start: 0.1, End: 0.2, Speaker: spk("spk_0")}, // the stray
+		core.Word{Word: "мы", Start: 0.4, End: 0.7, Speaker: spk("spk_1")},
+		core.Word{Word: "уже", Start: 0.7, End: 1.1, Speaker: spk("spk_1")},
+		core.Word{Word: "отправили", Start: 1.1, End: 2.0, Speaker: spk("spk_1")},
+	)
+
+	got := Split([]core.Segment{seg})
+	if len(got) != 1 {
+		t.Fatalf("got %d segments, want 1: one leading word is not a turn", len(got))
+	}
+	if got[0].Speaker == nil || *got[0].Speaker != "spk_1" {
+		t.Errorf("speaker = %v, want spk_1 — the speaker holding the segment's time",
+			derefSpeaker(got[0].Speaker))
+	}
+}
+
+// A segment claims the speaker who holds most of its time, not the speaker of
+// whichever word happens to come first. Taking the first word would hand this
+// whole sentence to spk_0 on the strength of a single 0.1-second mistake.
+func TestSplitClaimsTheDominantSpeaker(t *testing.T) {
+	seg := segmentWith(0, 3,
+		core.Word{Word: "и", Start: 0.0, End: 0.1, Speaker: spk("spk_0")},
+		core.Word{Word: "поэтому", Start: 0.1, End: 1.0, Speaker: spk("spk_1")},
+		core.Word{Word: "мы", Start: 1.0, End: 1.4, Speaker: spk("spk_1")},
+		core.Word{Word: "решили", Start: 1.4, End: 2.5, Speaker: spk("spk_1")},
+	)
+	got := Split([]core.Segment{seg})
+	if len(got) != 1 {
+		t.Fatalf("got %d segments, want 1", len(got))
+	}
+	if got[0].Speaker == nil || *got[0].Speaker != "spk_1" {
+		t.Errorf("speaker = %v, want spk_1", derefSpeaker(got[0].Speaker))
+	}
+}
+
+// Two genuine turns still separate: absorbing must not become merging.
+func TestSplitStillCutsWhenBothRunsAreTurns(t *testing.T) {
+	seg := segmentWith(0, 5,
+		core.Word{Word: "добрый", Start: 0.1, End: 0.6, Speaker: spk("spk_0")},
+		core.Word{Word: "день", Start: 0.6, End: 1.2, Speaker: spk("spk_0")},
+		core.Word{Word: "здравствуйте", Start: 1.5, End: 2.3, Speaker: spk("spk_1")},
+		core.Word{Word: "слушаю", Start: 2.3, End: 3.0, Speaker: spk("spk_1")},
+	)
+	got := Split([]core.Segment{seg})
+	if len(got) != 2 {
+		t.Fatalf("got %d segments, want 2", len(got))
+	}
+	if *got[0].Speaker != "spk_0" || *got[1].Speaker != "spk_1" {
+		t.Errorf("speakers = %v/%v, want spk_0/spk_1",
+			derefSpeaker(got[0].Speaker), derefSpeaker(got[1].Speaker))
+	}
+}
+
+func derefSpeaker(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
