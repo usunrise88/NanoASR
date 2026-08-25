@@ -20,6 +20,7 @@
 # every derived form is reproducible. The golden transcript IS committed.
 /testdata/audio/
 /.nanoasr.db*
+/.nanoasr-public.db*
 *.db-wal
 *.db-shm
 /configs/nanoasr.local.yaml
