@@ -24,9 +24,25 @@ Go, CPU, длинные файлы, **word-level тайминги**, OpenAI-со
 
 ## Быстрый старт
 
+Готовые сборки — на [странице релизов](https://github.com/usunrise88/NanoASR/releases).
+Четыре архива на тег:
+
+| файл | для чего |
+|---|---|
+| `nanoasr-<tag>-linux-amd64.tar.gz` | Linux, веб-интерфейс внутри |
+| `nanoasr-<tag>-linux-amd64-noui.tar.gz` | Linux, без интерфейса |
+| `nanoasr-<tag>-windows-amd64.zip` | Windows, веб-интерфейс внутри |
+| `nanoasr-<tag>-windows-amd64-noui.zip` | Windows, без интерфейса |
+
+Интерфейс вшивается на этапе компиляции, поэтому «без него» — это отдельный
+бинарь, а не флаг. Нативные библиотеки лежат **внутри** архива: распаковывайте
+целиком, а не вытаскивайте бинарь — на Linux `RUNPATH` смотрит в `./lib`, на
+Windows загрузчик ищет DLL рядом с `.exe`.
+
 ```bash
-nanoasr init            # конфиг + два ключа + модели по умолчанию
-nanoasr serve -config nanoasr.yaml
+tar -xzf nanoasr-v1.0.0-linux-amd64.tar.gz -C ~/nanoasr && cd ~/nanoasr
+./nanoasr init            # конфиг + два ключа + модели по умолчанию
+./nanoasr serve -config nanoasr.yaml
 ```
 
 `init` делает всё, что раньше приходилось делать руками: пишет `nanoasr.yaml`,
