@@ -91,6 +91,9 @@ postproc:
   punctuation:
     enabled: false
     model: ""                   # a catalog model of kind punctuation
+  # Inverse text normalisation needs no model: the rules are built in. Left off
+  # by default because it is a request option (SPEC decision 14), not because
+  # anything is missing.
   itn:
     enabled: false
     locale: ru

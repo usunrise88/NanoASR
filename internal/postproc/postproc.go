@@ -13,54 +13,90 @@ import (
 )
 
 // Stage transforms words while preserving timing.
+//
+// spans says, for each output word, how many consecutive input words it
+// consumed. A nil spans means one-to-one, which is what a stage that only
+// rewrites text returns. Anything that merges words has to say so, because the
+// caller has to put the result back into the segments it came from and cannot
+// work out which output belongs where by looking at the text.
 type Stage interface {
 	Name() string
-	Apply(ctx context.Context, in []core.Word) ([]core.Word, error)
+	Apply(ctx context.Context, in []core.Word) (out []core.Word, spans []int, err error)
 }
 
 // Chain runs stages in order, stopping at the first error.
 type Chain []Stage
 
-func (c Chain) Apply(ctx context.Context, in []core.Word) ([]core.Word, error) {
+func (c Chain) Apply(ctx context.Context, in []core.Word) ([]core.Word, []int, error) {
 	out := in
+	var spans []int
 	for _, s := range c {
-		var err error
-		if out, err = s.Apply(ctx, out); err != nil {
-			return nil, err
+		got, gotSpans, err := s.Apply(ctx, out)
+		if err != nil {
+			return nil, nil, err
 		}
+		if err := checkSpans(s.Name(), len(out), got, gotSpans); err != nil {
+			return nil, nil, err
+		}
+		out = got
+		spans = composeSpans(spans, gotSpans, len(out))
 	}
-	return out, nil
+	return out, spans, nil
 }
 
-// Punctuator restores punctuation and capitalisation using a separate
-// sherpa-onnx OfflinePunctuation model (CT-Transformer).
+// checkSpans refuses a stage whose bookkeeping does not add up.
 //
-// Marks are attached to the preceding word, so word boundaries never move.
-type Punctuator struct{ model string }
-
-func NewPunctuator(model string) *Punctuator { return &Punctuator{model: model} }
-
-func (*Punctuator) Name() string { return "punctuation" }
-
-// TODO(M5): run the CT-Transformer over the joined text, then walk the
-// punctuated output against the input words to re-attach marks.
-func (*Punctuator) Apply(context.Context, []core.Word) ([]core.Word, error) {
-	return nil, core.ErrNotImplemented
+// Every future stage has to maintain this vector, and a wrong one does not
+// produce a visible error — it silently misattributes text to the wrong slice
+// of the recording. Failing loudly here is the difference between a bug that is
+// found in a test and one that is found in a transcript.
+func checkSpans(stage string, inputs int, out []core.Word, spans []int) error {
+	if spans == nil {
+		if len(out) != inputs {
+			return core.Errorf(core.CodeInternal,
+				"postproc stage %s returned %d words for %d inputs without a span vector",
+				stage, len(out), inputs)
+		}
+		return nil
+	}
+	if len(spans) != len(out) {
+		return core.Errorf(core.CodeInternal,
+			"postproc stage %s returned %d words and %d spans", stage, len(out), len(spans))
+	}
+	total := 0
+	for _, n := range spans {
+		if n < 1 {
+			return core.Errorf(core.CodeInternal,
+				"postproc stage %s produced a word covering %d inputs", stage, n)
+		}
+		total += n
+	}
+	if total != inputs {
+		return core.Errorf(core.CodeInternal,
+			"postproc stage %s spans cover %d of %d input words", stage, total, inputs)
+	}
+	return nil
 }
 
-// ITN performs inverse text normalisation: "двадцать пять рублей" → "25 руб.".
-//
-// sherpa-onnx ships RuleFsts for some languages, but effectively nothing for
-// Russian, so this is a rule layer of our own: numbers, dates, times, money,
-// phone numbers, percentages. Rewritten spans keep the original surface form in
-// Word.Original so a client can show either.
-type ITN struct{ locale string }
-
-func NewITN(locale string) *ITN { return &ITN{locale: locale} }
-
-func (*ITN) Name() string { return "itn" }
-
-// TODO(M5): implement the rule engine and a golden corpus per locale.
-func (*ITN) Apply(context.Context, []core.Word) ([]core.Word, error) {
-	return nil, core.ErrNotImplemented
+// composeSpans folds a stage's spans into the running total, so the vector
+// always describes the distance back to the words the pipeline started with
+// rather than to whatever the previous stage produced.
+func composeSpans(outer, inner []int, outputs int) []int {
+	switch {
+	case inner == nil:
+		return outer
+	case outer == nil:
+		return inner
+	}
+	out := make([]int, 0, outputs)
+	cursor := 0
+	for _, n := range inner {
+		total := 0
+		for range n {
+			total += outer[cursor]
+			cursor++
+		}
+		out = append(out, total)
+	}
+	return out
 }

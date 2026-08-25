@@ -13,6 +13,7 @@ import {
   ErrorState,
   Input,
   Progress,
+  Select,
   Skeleton,
   Spinner,
 } from '@/components/ui'
@@ -54,6 +55,7 @@ function ResultPage() {
   const [file, setFile] = useState<File | undefined>(() => recall(jobId))
   const [currentTime, setCurrentTime] = useState(0)
   const [search, setSearch] = useState('')
+  const [speaker, setSpeaker] = useState('')
   const player = useRef<PlayerHandle>(null)
 
   const onReady = useCallback((handle: PlayerHandle) => {
@@ -152,11 +154,26 @@ function ResultPage() {
           >
             <Card>
               <Stack gap={3}>
-                <Input
-                  value={search}
-                  placeholder={t('result.search')}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
+                <Inline gap={2}>
+                  <Input
+                    value={search}
+                    placeholder={t('result.search')}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                  {(result.speakers ?? []).length > 0 && (
+                    <Select
+                      value={speaker}
+                      onChange={setSpeaker}
+                      options={[
+                        { value: '', label: t('result.allSpeakers') },
+                        ...(result.speakers ?? []).map((s) => ({
+                          value: s.id,
+                          label: s.id,
+                        })),
+                      ]}
+                    />
+                  )}
+                </Inline>
                 <Transcript
                   result={result}
                   words={words}
@@ -164,6 +181,7 @@ function ResultPage() {
                   onSeek={seek}
                   confidenceThreshold={prefs.confidenceThreshold}
                   query={search}
+                  speaker={speaker || undefined}
                 />
               </Stack>
             </Card>

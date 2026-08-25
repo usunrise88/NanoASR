@@ -20,6 +20,7 @@ export function Transcript({
   onSeek,
   confidenceThreshold,
   query,
+  speaker,
 }: {
   result: Result
   words: Word[]
@@ -27,6 +28,8 @@ export function Transcript({
   onSeek: (seconds: number) => void
   confidenceThreshold: number
   query: string
+  // speaker filters the transcript to one voice. Empty shows everyone.
+  speaker?: string | undefined
 }) {
   const container = useRef<HTMLDivElement>(null)
   const active = useRef(-1)
@@ -68,9 +71,24 @@ export function Transcript({
       {result.segments.map((segment, segmentIndex) => {
         const segmentWords = segment.words ?? []
         const first = offsets[segmentIndex] ?? 0
+        // Filtering hides rather than removes: the word indices the highlight
+        // walks are positions in the whole transcript, and renumbering them
+        // per filter would make the playing word jump to the wrong span.
+        if (speaker && segment.speaker !== speaker) return null
 
         return (
-          <p key={segment.id} className="text-[14px]">
+          <p key={segment.id} className="text-[14px]" data-speaker={segment.speaker ?? undefined}>
+            {segment.speaker && (
+              <span
+                className={cn(
+                  'mr-1.5 rounded-[3px] px-1 py-px align-middle',
+                  'text-[11px] font-medium tabular-nums',
+                  'bg-[var(--bg-subtle)] text-[var(--text-muted)]',
+                )}
+              >
+                {segment.speaker}
+              </span>
+            )}
             {segmentWords.length === 0
               ? segment.text
               : segmentWords.map((word, i) => (

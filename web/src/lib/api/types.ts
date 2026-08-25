@@ -21,6 +21,9 @@ export interface Word {
   end: number
   confidence?: number
   original?: string
+  speaker?: string | null
+  speaker_confidence?: number
+  channel?: number
 }
 
 export interface Segment {

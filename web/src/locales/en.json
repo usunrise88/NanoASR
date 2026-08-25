@@ -21,7 +21,7 @@
     "language": "Language",
     "languageAuto": "Detect automatically",
     "diarize": "Diarization",
-    "diarizeHint": "Speaker labelling; arrives in M5",
+    "diarizeHint": "Label who is speaking; needs the server to have diarization models",
     "punctuate": "Punctuation",
     "itn": "Normalise numbers and dates",
     "hotwords": "Hotwords",
@@ -33,8 +33,10 @@
     "noModelsHint": "Download one from the catalog — here, or on the models page.",
     "submitFailed": "Could not submit the job",
     "punctuateHint": "This model writes sentence marks and capitals itself",
-    "itnHint": "Spelled-out numbers and dates into digits; arrives in M5",
-    "later": "Arrives in M5"
+    "itnHint": "Spelled-out numbers, money and dates into digits",
+    "later": "Arrives in M5",
+    "numSpeakers": "Number of speakers",
+    "numSpeakersHint": "0 lets the server work it out from the audio"
   },
   "models": {
     "title": "Models",
@@ -104,7 +106,8 @@
     "pause": "Pause",
     "speed": "Speed",
     "peaks": "Building the waveform",
-    "peaksLong": "Long file — the waveform covers the first {{minutes}} minutes"
+    "peaksLong": "Long file — the waveform covers the first {{minutes}} minutes",
+    "allSpeakers": "All speakers"
   },
   "settings": {
     "title": "Settings",

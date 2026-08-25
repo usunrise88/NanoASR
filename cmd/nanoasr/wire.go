@@ -16,6 +16,8 @@ import (
 	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pipeline"
 	"github.com/usunrise88/nanoasr/internal/pool"
+	"github.com/usunrise88/nanoasr/internal/postproc"
+	postprocsherpa "github.com/usunrise88/nanoasr/internal/postproc/sherpa"
 	"github.com/usunrise88/nanoasr/internal/registry"
 	"github.com/usunrise88/nanoasr/internal/service"
 	"github.com/usunrise88/nanoasr/internal/spool"
@@ -26,12 +28,13 @@ import (
 
 // server is everything the HTTP layer needs, plus what has to be shut down.
 type server struct {
-	service  core.Service
-	models   core.ModelService
-	registry *registry.Remote
-	pool     *pool.Pool
-	vad      vad.Segmenter
-	diarizer diarize.Diarizer
+	service   core.Service
+	models    core.ModelService
+	registry  *registry.Remote
+	pool      *pool.Pool
+	vad       vad.Segmenter
+	diarizer  diarize.Diarizer
+	closePost func()
 
 	queue   *job.Queue
 	store   *sqlite.Store
@@ -78,11 +81,20 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		return nil, err
 	}
 
+	post, closePost, err := buildPostProc(ctx, cfg, reg, log)
+	if err != nil {
+		models.Close()
+		_ = segmenter.Close()
+		closeDiarizer(diarizer)
+		return nil, err
+	}
+
 	store, err := sqlite.Open(cfg.Storage.DBPath)
 	if err != nil {
 		models.Close()
 		_ = segmenter.Close()
 		closeDiarizer(diarizer)
+		closePost()
 		return nil, err
 	}
 
@@ -101,7 +113,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 			BatchMaxSize:         cfg.ASR.Batch.MaxSize,
 			BatchMaxSeconds:      cfg.ASR.Batch.MaxSeconds,
 			NumThreads:           cfg.ASR.NumThreads,
-		}).WithDiarizer(diarizer)
+		}).WithDiarizer(diarizer).WithPostProc(post)
 
 	hooks := webhook.New(webhook.Options{
 		Secret:       cfg.Jobs.WebhookSecret,
@@ -126,16 +138,17 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 	svc.Attach(queue, store)
 
 	return &server{
-		service:  svc,
-		models:   service.NewModels(reg, models),
-		registry: reg,
-		pool:     models,
-		vad:      segmenter,
-		diarizer: diarizer,
-		queue:    queue,
-		store:    store,
-		spool:    sp,
-		webhook:  hooks,
+		service:   svc,
+		models:    service.NewModels(reg, models),
+		registry:  reg,
+		pool:      models,
+		vad:       segmenter,
+		diarizer:  diarizer,
+		closePost: closePost,
+		queue:     queue,
+		store:     store,
+		spool:     sp,
+		webhook:   hooks,
 	}, nil
 }
 
@@ -324,6 +337,9 @@ func (s *server) Close() {
 		_ = s.vad.Close()
 	}
 	closeDiarizer(s.diarizer)
+	if s.closePost != nil {
+		s.closePost()
+	}
 	if s.pool != nil {
 		_ = s.pool.Close()
 	}
@@ -394,4 +410,51 @@ func closeDiarizer(d diarize.Diarizer) {
 	if d != nil {
 		_ = d.Close()
 	}
+}
+
+// buildPostProc assembles the optional text stages.
+//
+// The punctuation model is resolved through the registry like every other
+// model, and its pool is sized to the job concurrency for the same reason the
+// VAD pool is: an instance is stateful, and sharing one would serialise the
+// stage behind whichever job got there first.
+func buildPostProc(
+	ctx context.Context,
+	cfg config.Config,
+	reg *registry.Remote,
+	log *slog.Logger,
+) (*postproc.Factory, func(), error) {
+	f := &postproc.Factory{
+		ITNLocale:          cfg.PostProc.ITN.Locale,
+		PunctuationDefault: cfg.PostProc.Punctuation.Enabled,
+		ITNDefault:         cfg.PostProc.ITN.Enabled,
+	}
+	if cfg.PostProc.Punctuation.Model == "" {
+		return f, func() {}, nil
+	}
+
+	man, err := reg.Resolve(ctx, cfg.PostProc.Punctuation.Model)
+	if err != nil {
+		return nil, nil, fmt.Errorf("punctuation model %q: %w", cfg.PostProc.Punctuation.Model, err)
+	}
+	dir, err := reg.Dir(cfg.PostProc.Punctuation.Model)
+	if err != nil {
+		return nil, nil, err
+	}
+	path, err := man.FilePath(dir, "model")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	pooled, err := postprocsherpa.NewPool(path, cfg.ASR.NumThreads, cfg.Jobs.MaxConcurrent)
+	if err != nil {
+		return nil, nil, err
+	}
+	f.Punct = pooled
+
+	log.Info("punctuation ready",
+		"model", cfg.PostProc.Punctuation.Model,
+		"instances", cfg.Jobs.MaxConcurrent,
+		"note", "used only for models that do not punctuate themselves")
+	return f, func() { _ = pooled.Close() }, nil
 }

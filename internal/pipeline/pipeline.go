@@ -20,6 +20,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/diarize"
 	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pool"
+	"github.com/usunrise88/nanoasr/internal/postproc"
 	"github.com/usunrise88/nanoasr/internal/vad"
 	"github.com/usunrise88/nanoasr/internal/words"
 )
@@ -64,6 +65,14 @@ func (p *Pipeline) WithDiarizer(d diarize.Diarizer) *Pipeline {
 	return p
 }
 
+// WithPostProc attaches the optional text stages, for the same reason
+// WithDiarizer is separate: they are optional, server-wide, and built from
+// their own config block.
+func (p *Pipeline) WithPostProc(f *postproc.Factory) *Pipeline {
+	p.postproc = f
+	return p
+}
+
 func (o Options) withDefaults() Options {
 	if o.TargetSampleRate <= 0 {
 		o.TargetSampleRate = 16000
@@ -96,6 +105,7 @@ type Pipeline struct {
 	models    *pool.Pool
 	governor  *pool.Governor
 	diarizer  diarize.Diarizer
+	postproc  *postproc.Factory
 	opt       Options
 
 	// Supplied by Attach; nil on a server built without a queue.
@@ -184,7 +194,16 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 		result.Text = joinSegments(result.Segments)
 	}
 
-	warn = append(warn, pendingFeatures(req, lease.Recognizer.Capabilities())...)
+	// Post-processing runs after diarization: ITN merges words, and a merged
+	// word spanning two speakers could not be attributed afterwards.
+	caps := lease.Recognizer.Capabilities()
+	postWarn, err := runStage(&stages, "post", func() ([]core.Warning, error) {
+		return p.post(ctx, req, caps, result)
+	})
+	if err != nil {
+		return nil, err
+	}
+	warn = append(warn, postWarn...)
 	warn = append(warn, p.unsupportedOptions(req, lease)...)
 	result.Warnings = append(result.Warnings, warn...)
 

@@ -28,9 +28,8 @@ export function RunOptions({
 
   // What the server cannot do is switched off here rather than left on to
   // produce a warning nobody reads. Punctuation is the model's own capability,
-  // so it follows the manifest; the other two are not implemented at all yet,
-  // and an enabled switch that changes nothing about the result is a lie the
-  // user only discovers by comparing transcripts.
+  // so it follows the manifest: a model that writes its own marks needs no
+  // option, and one that does not cannot be made to.
   const canPunctuate = model?.capabilities.punctuation_builtin ?? false
 
   return (
@@ -97,18 +96,30 @@ export function RunOptions({
         />
         <Switch
           label={t('home.itn')}
-          checked={false}
-          disabled
+          checked={value.itn ?? false}
+          disabled={disabled ?? false}
           description={t('home.itnHint')}
           onChange={(v) => set('itn', v)}
         />
         <Switch
           label={t('home.diarize')}
-          checked={false}
-          disabled
+          checked={value.diarize ?? false}
+          disabled={disabled ?? false}
           description={t('home.diarizeHint')}
           onChange={(v) => set('diarize', v)}
         />
+        {(value.diarize ?? false) && (
+          <Field label={t('home.numSpeakers')} description={t('home.numSpeakersHint')}>
+            <Input
+              type="number"
+              min={0}
+              max={20}
+              value={String(value.num_speakers ?? 0)}
+              disabled={disabled ?? false}
+              onChange={(e) => set('num_speakers', Number(e.target.value) || 0)}
+            />
+          </Field>
+        )}
       </Stack>
     </Stack>
   )
