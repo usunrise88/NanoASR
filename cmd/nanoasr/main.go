@@ -1,6 +1,8 @@
 // Command nanoasr is the NanoASR server.
 //
+//	nanoasr init    [-config path]   write a config and fetch the default models
 //	nanoasr serve   [-config path]   run the HTTP server
+//	nanoasr key     [list|issue|remove]  manage the api keys in a config file
 //	nanoasr models  [list|pull id]   inspect and fetch models
 //	nanoasr version                  print versions, including the native libs
 package main
@@ -39,6 +41,10 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		err = serve(os.Args[2:])
+	case "init":
+		err = initCommand(os.Args[2:])
+	case "key", "keys":
+		err = keyCommand(os.Args[2:])
 	case "models":
 		err = models(os.Args[2:])
 	case "version":
@@ -58,9 +64,14 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `nanoasr — offline speech recognition server
 
+  nanoasr init    [-config FILE] [-data-dir DIR] [-addr ADDR] [-force]
   nanoasr serve   [-config FILE] [-addr ADDR]
-  nanoasr models  list | inspect DIR [--probe WAV]
+  nanoasr key     list | issue NAME [-admin] [-rps N] | remove NAME
+  nanoasr models  list | catalog | pull ID... | inspect DIR [--probe WAV]
   nanoasr version
+
+Start here: "nanoasr init" writes a configuration, issues an admin and a
+user key, and downloads the models a Russian deployment needs.
 
 Configuration precedence: flags > NANOASR_* env > config file > computed defaults.
 `)

@@ -1,0 +1,90 @@
+# NanoASR configuration, written by `nanoasr init` on {{.Host}}.
+#
+# Only the settings a deployment usually changes are here. Every other knob has
+# a default that is derived from this machine at startup; the full annotated
+# reference is configs/nanoasr.example.yaml in the source tree and the
+# "Развёртывание на Linux" section of the README.
+#
+# Precedence: flags > NANOASR_* env > this file > computed defaults.
+
+server:
+  addr: "{{.Addr}}"
+  max_upload_bytes: 104857600   # 100 MB
+
+auth:
+  # "open" is permitted only when addr binds a loopback address. Two keys were
+  # issued below: manage them with `nanoasr key issue` and `nanoasr key remove`.
+  mode: apikey
+  keys:
+    - name: admin
+      key: {{.AdminKey}}
+      admin: true
+      priority: interactive
+    - name: user
+      key: {{.UserKey}}
+      admin: false
+
+api:
+  dialects: [openai, native]
+
+ui:
+  enabled: true
+  path: /ui
+
+audio:
+  # Leave empty to run without ffmpeg: WAV/PCM still works, everything else is
+  # answered with 415 instead of failing at startup.
+  ffmpeg_path: ffmpeg
+  max_duration: 30m
+  channel_mode: downmix         # downmix | first | split
+
+vad:
+  enabled: true
+  model: {{.VADModel}}
+
+asr:
+  models_dir: {{.ModelsDir}}
+  default_model: {{.ASRModel}}
+  # 0 → derived from CPU count and RAM at startup.
+  inference_slots: 0
+  num_threads: 0
+
+jobs:
+  queue_size: 100
+  max_concurrent: 0             # 0 → auto
+  # Signs webhook deliveries as X-NanoASR-Signature. Empty means unsigned.
+  webhook_secret: ""
+  # Permits webhook_url pointing at loopback and private ranges. Leave false on
+  # anything reachable from outside this machine.
+  webhook_allow_private: false
+
+postproc:
+  # Russian punctuation comes from the recognition model itself, so this stage
+  # is only needed for models whose vocabulary carries no punctuation.
+  punctuation:
+    enabled: false
+    model: ""
+  itn:
+    enabled: false
+    locale: ru
+
+diarization:
+  enabled: {{.Diarize}}
+  segmentation_model: {{.SegModel}}
+  embedding_model: {{.EmbModel}}
+  clustering:
+    # 0 → cluster by threshold. Pass num_speakers on the request when the
+    # speaker count is known: it is by far the strongest signal there is.
+    num_clusters: 0
+    # Lower separates more readily; raise it if one speaker gets split in two.
+    threshold: {{.Threshold}}
+  min_duration_on: 0.3
+  min_duration_off: 0.5
+
+storage:
+  db_path: {{.DBPath}}
+  temp_dir: ""
+
+log:
+  level: info
+  format: json

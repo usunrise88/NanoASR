@@ -45,7 +45,13 @@ func (a *Auth) Redact() {
 		if secret == "" || strings.HasPrefix(secret, "sha256:") {
 			continue
 		}
-		sum := sha256.Sum256([]byte(secret))
-		a.Keys[i].Key = "sha256:" + hex.EncodeToString(sum[:])
+		a.Keys[i].Key = HashSecret(secret)
 	}
+}
+
+// HashSecret is the stored form of a credential: the digest the server
+// compares against, so that a configuration file need not hold anything usable.
+func HashSecret(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
