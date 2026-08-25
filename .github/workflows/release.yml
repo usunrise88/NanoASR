@@ -1,0 +1,176 @@
+name: release
+
+# Four artefacts per tag: Linux and Windows, each with and without the embedded
+# web UI. The UI is a compile-time embed, so "without" is a separate binary
+# rather than a flag — which is the whole reason this matrix exists.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.25"
+  NODE_VERSION: "22"
+
+jobs:
+  # Built once and shared: the same dist goes into both UI artefacts, so a
+  # Linux and a Windows download are serving byte-identical assets.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+  build:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            ui: "1"
+          - os: ubuntu-latest
+            goos: linux
+            ui: "0"
+          - os: windows-latest
+            goos: windows
+            ui: "1"
+          - os: windows-latest
+            goos: windows
+            ui: "0"
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      # cgo is not optional here — sherpa-onnx is C++ — so a runner without a
+      # C compiler has to grow one before anything else happens.
+      - name: ensure a C compiler
+        if: matrix.goos == 'windows'
+        run: |
+          if ! command -v gcc >/dev/null; then
+            choco install mingw -y --no-progress
+            echo "C:\ProgramData\mingw64\mingw64\bin" >> "$GITHUB_PATH"
+          fi
+      - name: compiler version
+        run: gcc --version
+
+      - uses: actions/download-artifact@v4
+        if: matrix.ui == '1'
+        with:
+          name: web-dist
+          path: internal/ui/dist
+
+      - name: build the archive
+        id: dist
+        run: |
+          echo "archive=$(VERSION='${{ inputs.tag || github.ref_name }}' \
+            GOOS='${{ matrix.goos }}' UI='${{ matrix.ui }}' ./scripts/dist.sh)" >> "$GITHUB_OUTPUT"
+
+      # A release nobody can run is worse than no release. Unpack what was just
+      # built and ask the binary what it is: the version has to be the tag, and
+      # the ui line has to match the variant — the failure this catches is a UI
+      # build that shipped the placeholder page, which looks fine until opened.
+      - name: smoke test the archive
+        run: |
+          mkdir -p check
+          case "${{ matrix.goos }}" in
+            linux)   tar -xzf "${{ steps.dist.outputs.archive }}" -C check
+                     bin=./nanoasr ;;
+            # 7z rather than unzip: Git-bash on a Windows runner does not
+            # necessarily carry unzip, and 7z is in the image.
+            windows) 7z x -ocheck -bso0 -bsp0 "${{ steps.dist.outputs.archive }}"
+                     bin=./nanoasr.exe ;;
+          esac
+          # Named rather than globbed: ./nanoasr* also matches nanoasr.yaml and
+          # nanoasr.service, which would be passed to the binary as arguments.
+          out="$(cd check && "$bin" version)"
+          echo "$out"
+          want_ui=$([ "${{ matrix.ui }}" = "1" ] && echo true || echo false)
+          grep -q "ui *${want_ui}$" <<<"$out" || { echo "ui line is not ${want_ui}" >&2; exit 1; }
+          grep -q "${{ inputs.tag || github.ref_name }}" <<<"$out" || { echo "version is not the tag" >&2; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-ui${{ matrix.ui }}
+          path: ${{ steps.dist.outputs.archive }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - run: ls -la artifacts
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          notes=$(cat <<'EOF'
+          Four archives, all self-contained apart from ffmpeg and the model
+          weights:
+
+          | file | for |
+          |---|---|
+          | `nanoasr-<tag>-linux-amd64.tar.gz` | Linux, web UI included |
+          | `nanoasr-<tag>-linux-amd64-noui.tar.gz` | Linux, headless |
+          | `nanoasr-<tag>-windows-amd64.zip` | Windows, web UI included |
+          | `nanoasr-<tag>-windows-amd64-noui.zip` | Windows, headless |
+
+          The native libraries travel inside the archive, so unpack the whole
+          thing rather than lifting the binary out: on Linux the RUNPATH points
+          at `./lib`, and on Windows the loader looks beside the `.exe`.
+
+          Then, in the unpacked directory:
+
+              ./nanoasr init
+              ./nanoasr serve -config nanoasr.yaml
+
+          `init` writes the configuration, issues an admin and a user key and
+          downloads the models. See README.md in the archive.
+          EOF
+          )
+          # Idempotent on purpose: re-running the workflow for a tag replaces
+          # the assets instead of failing on a release that already exists.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" artifacts/* --title "$TAG" --notes "$notes"
+          fi

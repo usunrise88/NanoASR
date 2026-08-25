@@ -11,7 +11,7 @@ LDFLAGS     := -X main.version=$(VERSION)
 DIST        := dist
 UI_DIST     := internal/ui/dist
 
-.PHONY: all web build build-noui dist docker lint test test-race test-integration \
+.PHONY: all web build build-noui dist dist-noui docker lint test test-race test-integration \
 	load models testdata golden-update run clean tidy help
 
 all: web build
@@ -31,13 +31,20 @@ build:
 build-noui:
 	$(GO) build -tags noui -ldflags "$(LDFLAGS)" -o $(DIST)/nanoasr ./cmd/nanoasr
 
-## dist: relocatable tarball with the native libraries beside the binary
+## dist: relocatable archive with the native libraries beside the binary
 #
 # Delegates to scripts/dist.sh so the RUNPATH incantation has exactly one
 # definition: quoting $ORIGIN correctly through make, sh and the linker is easy
 # to get subtly wrong, and a wrong one only shows up on the target machine.
+#
+# GOOS=windows and UI=0 select the other three release shapes; the release
+# workflow calls the same script with the same variables.
 dist: web
 	VERSION=$(VERSION) ./scripts/dist.sh
+
+## dist-noui: the same archive without the SPA (no web build needed)
+dist-noui:
+	VERSION=$(VERSION) UI=0 ./scripts/dist.sh
 
 ## docker: build the container image
 docker:
