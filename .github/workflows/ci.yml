@@ -87,6 +87,49 @@ jobs:
         # written — the whole M3 job suite never ran here.
         run: go test -tags integration ./... -v
 
+      # The browser half. It needs the same weights and the same audio, so it
+      # runs here rather than in the web job, which stays a few seconds.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: internal/ui/dist
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: serve the built UI
+        run: |
+          go build -o dist/nanoasr ./cmd/nanoasr
+          # Two servers: one open, one demanding a key, because "the SPA asks
+          # for a key when the server wants one" cannot be tested against a
+          # server that does not.
+          sed -e 's/^  mode: open/  mode: apikey/'               -e 's/^  keys: \[\].*/  keys: [{name: ui, key: sk-ci-key-0123456789}]/'               -e 's|^  addr: .*|  addr: "127.0.0.1:8081"|'               -e 's|^  db_path: .*|  db_path: ./.nanoasr-auth.db|'               configs/nanoasr.dev.yaml > /tmp/nanoasr-auth.yaml
+          ./dist/nanoasr serve -config configs/nanoasr.dev.yaml &
+          ./dist/nanoasr serve -config /tmp/nanoasr-auth.yaml &
+          for i in $(seq 60); do
+            if curl -sf localhost:8080/healthz >/dev/null && curl -sf localhost:8081/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "servers did not come up" >&2
+          exit 1
+      - run: npm run test:e2e
+        working-directory: web
+        env:
+          NANOASR_E2E_AUTH_URL: http://127.0.0.1:8081
+          NANOASR_E2E_KEY: sk-ci-key-0123456789
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-trace
+          path: web/test-results
+
   docker:
     runs-on: ubuntu-latest
     needs: [web, go]

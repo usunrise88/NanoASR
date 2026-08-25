@@ -5,6 +5,9 @@
 /web/dist/
 /web/node_modules/
 /web/node_modules/.tmp/
+# Playwright's run output: traces on failure, and a pointer to the last run.
+/web/test-results/
+/web/playwright-report/
 
 # The SPA is staged here by `make web` and embedded at compile time. The
 # placeholder page is committed so `go build` works in a fresh checkout.

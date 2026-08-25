@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // The suite runs in Node, but page.evaluate callbacks are compiled for the
+    // browser and reference document. Both libraries belong here and nowhere
+    // else: giving them to tsconfig.node.json would let a build script reach
+    // for the DOM by accident.
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.e2e.tsbuildinfo"
+  },
+  "include": ["e2e/**/*.ts"]
+}
