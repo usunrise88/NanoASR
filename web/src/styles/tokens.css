@@ -63,6 +63,14 @@
   /* A soft, non-black scrim: a black backdrop reads as an error state. */
   --backdrop: var(--slate-a8);
 
+  /* The waveform. These are read by the canvas rather than applied as classes,
+     because a canvas has no stylesheet — but they are tokens all the same, so
+     the player follows the theme instead of hard-coding two palettes. */
+  --wave-fill: var(--slate-8);
+  --wave-played: var(--indigo-9);
+  --wave-silence: var(--slate-4);
+  --wave-head: var(--slate-12);
+
   /* Spacing scale. The layout primitives accept these steps and nothing else. */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -83,6 +91,15 @@
 
 .dark {
   color-scheme: dark;
+}
+
+/* The waveform is drawn, so it cannot inherit; each token is redeclared for
+   dark rather than left to a filter that would grey the accent out. */
+.dark {
+  --wave-fill: var(--slate-8);
+  --wave-played: var(--indigo-9);
+  --wave-silence: var(--slate-3);
+  --wave-head: var(--slate-12);
 }
 
 html,
