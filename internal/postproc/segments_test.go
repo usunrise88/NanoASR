@@ -183,3 +183,55 @@ func TestApplyWithAnEmptyChainIsANoOp(t *testing.T) {
 		t.Errorf("segments = %+v", got)
 	}
 }
+
+// Under channel_mode=split the words on each leg belong to a different
+// speaker: an ITN rule like merge-every-pair must not glue a word from
+// channel 0 onto one from channel 1. ApplyWithChannels runs the chain per
+// leg and merges the streams back in stable (Start, Channel) order.
+func TestApplyWithChannelsDoesNotMergeAcrossChannels(t *testing.T) {
+	// Each segment holds the words from one leg, which is what buildSegments
+	// produces under channel_mode=split.
+	seg0 := seg(0.0, 1.0,
+		core.Word{Word: "двадцать", Start: 0.0, End: 0.4, Channel: 0},
+		core.Word{Word: "пять", Start: 0.5, End: 0.9, Channel: 0},
+	)
+	seg1 := seg(0.2, 1.1,
+		core.Word{Word: "рублей", Start: 0.2, End: 0.6, Channel: 1},
+		core.Word{Word: "итого", Start: 0.7, End: 1.1, Channel: 1},
+	)
+
+	got, err := ApplyWithChannels(context.Background(), Chain{mergePairs{}}, []core.Segment{seg0, seg1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Channel 0: двадцать + пять → "двадцатьпять".
+	// Channel 1: рублей + итого → "рублейитого".
+	// The two legs must not collapse into "двадцатьпятьрублейитого".
+	seen := map[string]bool{}
+	for _, s := range got {
+		if s.Text == "двадцатьпятьрублейитого" {
+			t.Fatalf("ITN crossed channels: %+v", got)
+		}
+		seen[s.Text] = true
+	}
+	if !seen["двадцатьпять"] || !seen["рублейитого"] {
+		t.Errorf("expected per-channel merges; got %+v", got)
+	}
+}
+
+// A single-channel result must still go through the chain untouched: the split
+// path is the exception, not the rule, and the ordinary case must not regress.
+func TestApplyWithChannelsSingleChannelIsTheOrdinaryApply(t *testing.T) {
+	segs := []core.Segment{
+		seg(0, 1, w("да", 0, 0.4)),
+		seg(2, 3, w("хорошо", 2, 2.5)),
+	}
+	got, err := ApplyWithChannels(context.Background(), Chain{upper{}}, segs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Text != "ДА" || got[1].Text != "ХОРОШО" {
+		t.Errorf("single-channel path altered the result: %+v", got)
+	}
+}

@@ -13,6 +13,10 @@ import (
 // It runs after diarization rather than before it. Diarization attributes words
 // by time, and ITN merges words — running the merge first would hand the
 // diarizer a word spanning two speakers with no way to split it back.
+//
+// Under channel_mode=split every leg is a separate conversation; the chain
+// then runs per leg via postproc.ApplyWithChannels so an ITN merge cannot
+// cross channels.
 func (p *Pipeline) post(
 	ctx context.Context,
 	req core.Request,
@@ -34,7 +38,7 @@ func (p *Pipeline) post(
 		return warn, nil
 	}
 
-	segs, err := postproc.Apply(ctx, chain, result.Segments)
+	segs, err := postproc.ApplyWithChannels(ctx, chain, result.Segments)
 	if err != nil {
 		// A stage that failed is a degradation, not a lost transcript: the
 		// words are already correct, only their spelling is not what was asked
