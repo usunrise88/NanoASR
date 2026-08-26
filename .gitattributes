@@ -1,0 +1,42 @@
+# Line endings are normalised to LF in the repository and on checkout.
+#
+# Not a style preference. Editing on Windows rewrites whole files with CRLF,
+# and git then reports every line of them as changed: one such edit produced a
+# 7,965-line diff over 831 lines of actual work, which buries the change and
+# destroys blame for every line it touches. eol=lf makes the working tree match
+# the repository on every platform, so an editor that rewrites endings produces
+# no diff at all.
+#
+# Everything here is text today. The binary declarations below are insurance:
+# a font or an image added to web/ later must never be normalised, and a
+# mistake in that direction corrupts the file silently.
+* text=auto eol=lf
+
+# Shell scripts and the systemd unit are read by tools that reject CR.
+*.sh            text eol=lf
+*.service       text eol=lf
+Makefile        text eol=lf
+Dockerfile      text eol=lf
+
+# Assets: never touched.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.svg           text eol=lf
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.otf           binary
+
+# Model weights and audio are downloaded rather than committed, but declaring
+# them costs nothing and a normalised .onnx or .wav is an unusable one.
+*.onnx          binary
+*.wav           binary
+*.mp3           binary
+*.opus          binary
+*.m4a           binary
+*.tar.gz        binary
+*.tar.bz2       binary
+*.zip           binary
