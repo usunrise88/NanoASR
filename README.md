@@ -509,10 +509,10 @@ turn boundaries, and fragments too short to be a turn are absorbed into their ne
 diarization:
   enabled: true
   segmentation_model: pyannote-segmentation-3
-  embedding_model: campplus-sv-voxceleb
+  embedding_model: campplus-sv-zh-en
   clustering:
     num_clusters: 0
-    threshold: 0.4
+    threshold: 0.85
   min_duration_on: 0.3
   min_duration_off: 0.5
 ```
@@ -533,22 +533,53 @@ is present, cutting by leaf count can separate the outlier instead. If fewer spe
 were separated than requested, the response carries the `diarization_fewer_speakers`
 warning.
 
-**The choice of embedding model** determines separation quality. `campplus-sv-zh-en` is
-trained on Chinese and English material and produces a single cluster for similar
-Russian voices at any threshold. The default is `campplus-sv-voxceleb`, trained on the
-multilingual VoxCeleb corpus. For highly similar voices, `wespeaker-voxceleb-resnet34`
-applies, at roughly twice the CPU cost.
+### What has been measured
 
-When every utterance is attributed to one speaker, apply the following measures in
-decreasing order of effectiveness:
+The repository carries a reference benchmark: `make diar-testdata` builds 16
+minutes of two-speaker Russian dialogue from the
+[Dialogs](https://huggingface.co/datasets/langswap/dialogs-ru-emotional-conversations)
+corpus with exact turn boundaries, and `make diar-eval` reports **DER** — the
+share of time attributed to the wrong speaker, missed, or invented.
 
-1. Use `channel_mode: split` if the speakers are separated by channel.
-2. Change the embedding model to `wespeaker-voxceleb-resnet34`.
-3. Lower `clustering.threshold` to 0.35.
-4. Set `num_speakers` when the speaker count is known exactly.
+The results that matter on that material:
+
+| Embedding model | Mode | Speakers found | DER |
+|---|---|---|---|
+| `campplus-sv-zh-en` | `num_speakers=2` | 2 | **2.9 %** |
+| `campplus-sv-zh-en` | threshold 0.85 | 6 | **5.9 %** |
+| `campplus-sv-zh-en` | threshold 0.50 | 36 | 71.6 % |
+| `campplus-sv-voxceleb` | `num_speakers=2` | 2 | 40.3 % |
+| `wespeaker-voxceleb-resnet34` | `num_speakers=2` | 2 | 47.5 % |
+
+Three things follow.
+
+**Segmentation works; clustering does not.** Missed speech is 0.8 % and false
+alarm 0.5 % in every configuration, and all the remaining error is speaker
+confusion. Clustering is the only part worth tuning.
+
+**sherpa-onnx's default threshold is far too low.** At 0.5 a two-person
+dialogue falls apart into 36 speakers. All three embeddings improve
+monotonically as the threshold rises, which is where the default of 0.85 comes
+from.
+
+**`num_speakers` is the strongest lever available.** A known speaker count
+gives 2.9 % against 5.9 % for the best threshold. Pass it whenever you have it.
+
+The measurement is one studio dialogue. It is a better starting point than the
+out-of-the-box values, not a universal constant: run `make diar-eval` against
+your own material.
+
+### When every utterance lands on one speaker
+
+1. Use `channel_mode: split` if the speakers are separated by channel — more
+   accurate than any clustering and cheaper.
+2. Pass `num_speakers` if the count is known.
+3. Lower `clustering.threshold` if two people merged into one; raise it if one
+   person was split into several.
 
 The sample rate of the diarization models is checked against
-`audio.target_sample_rate` at startup; a mismatch prevents the server from starting.
+`audio.target_sample_rate` at startup; a mismatch prevents the server from
+starting.
 
 ## Example requests
 
@@ -681,7 +712,7 @@ Russian speech:
 | `gigaam-v3-ctc-punct-ru` | Recognition, Russian, with punctuation and casing | 163 MB |
 | `silero-vad-v5` | Voice activity detection | 0.6 MB |
 | `pyannote-segmentation-3` | Speaker segmentation | 7 MB |
-| `campplus-sv-voxceleb` | Speaker embeddings | 30 MB |
+| `campplus-sv-zh-en` | Speaker embeddings | 28 MB |
 
 The default recognition model produces punctuation and capitalisation itself, so no
 separate punctuation model is required for Russian.

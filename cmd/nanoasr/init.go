@@ -25,7 +25,7 @@ const (
 	initASRModel = "gigaam-v3-ctc-punct-ru"
 	initVADModel = "silero-vad-v5"
 	initSegModel = "pyannote-segmentation-3"
-	initEmbModel = "campplus-sv-voxceleb"
+	initEmbModel = "campplus-sv-zh-en"
 )
 
 // initCommand writes a working configuration and fetches the weights it names.

@@ -76,15 +76,21 @@ func Default() Config {
 		},
 		Diarization: Diarization{
 			SegmentationModel: "pyannote-segmentation-3",
-			// VoxCeleb rather than the zh/en embedding: measured on two
-			// similar Russian voices, the zh/en model puts them in one cluster
-			// at every threshold, and no amount of tuning separates them. See
-			// the diarization notes in the README.
-			EmbeddingModel: "campplus-sv-voxceleb",
-			// 0.5 is sherpa-onnx's own default and is too permissive for two
-			// voices of the same language and register: it merged a measured
-			// two-speaker fixture into one speaker, and 0.4 did not.
-			Clustering:     Clustering{Threshold: 0.4},
+			// Measured on 16 minutes of two-speaker Russian dialogue with a
+			// reference (make diar-eval): this embedding gives 2.9% DER with a
+			// known speaker count and 5.9% without, against 40.3% and 46.0%
+			// for campplus-sv-voxceleb on the same audio. The corpus it was
+			// trained on turns out to matter far less than the earlier
+			// synthetic fixture suggested — that fixture was one voice
+			// pitch-shifted, which cannot measure speaker separation at all.
+			EmbeddingModel: "campplus-sv-zh-en",
+			// 0.85, not sherpa's 0.5. Threshold clustering over-splits badly:
+			// on the reference, 0.5 finds 36 speakers in a two-person dialogue
+			// (71.6% DER) and 0.85 finds 6 (5.9%). Every embedding tested
+			// improves monotonically towards a high threshold. Tuned on one
+			// studio dialogue, so it is a better starting point rather than a
+			// settled constant — re-run make diar-eval on your own material.
+			Clustering:     Clustering{Threshold: 0.85},
 			MinDurationOn:  0.3,
 			MinDurationOff: 0.5,
 		},

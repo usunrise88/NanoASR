@@ -78,7 +78,7 @@ diarization:
     # 0 → cluster by threshold. Pass num_speakers on the request when the
     # speaker count is known: it is by far the strongest signal there is.
     num_clusters: 0
-    # Lower separates more readily; raise it if one speaker gets split in two.
+    # Higher merges more readily; lower it if two people end up as one.
     threshold: {{.Threshold}}
   min_duration_on: 0.3
   min_duration_off: 0.5

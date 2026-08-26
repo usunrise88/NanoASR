@@ -135,13 +135,14 @@ postproc:
 diarization:
   enabled: false
   segmentation_model: pyannote-segmentation-3
-  embedding_model: campplus-sv-voxceleb
+  embedding_model: campplus-sv-zh-en
   clustering:
     num_clusters: 0             # 0 → cluster by threshold
-    # Lower separates more readily. 0.5 is sherpa-onnx's own default and merges
-    # two voices of the same language and register; pass num_speakers on the
-    # request whenever the count is known, it beats any threshold.
-    threshold: 0.4
+    # Higher merges more readily. sherpa-onnx defaults to 0.5, which on a
+    # measured two-speaker dialogue splits it into 36 speakers; 0.85 finds 6.
+    # A known speaker count beats any threshold: pass num_speakers when you
+    # have it.
+    threshold: 0.85
   # How short a turn may be before it is dropped, and how short a gap may be
   # before the turns around it are joined.
   min_duration_on: 0.3
