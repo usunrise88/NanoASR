@@ -50,3 +50,10 @@ func (p *Pipeline) post(
 	result.Text = joinSegments(segs)
 	return warn, nil
 }
+
+// punctuationUsesThreads reports whether a postproc run on this pipeline will
+// run the punctuator model. ITN is rule-based and does not contend for CPU
+// inference slots, so only the punctuator matters for the governor.
+func (p *Pipeline) punctuationUsesThreads() bool {
+	return p.postproc != nil && p.postproc.Punct != nil
+}

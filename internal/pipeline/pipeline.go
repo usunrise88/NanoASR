@@ -180,7 +180,14 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 
 	// Diarization is a second pass over the whole recording, so it runs after
 	// the transcript exists and rewrites it rather than being woven into it.
+	// The diarizer runs num_threads inference threads (wire.go), which sit
+	// outside the ASR governor and would otherwise oversubscribe the CPU
+	// when jobs overlap.
+	if err := p.governor.Acquire(ctx, p.opt.NumThreads); err != nil {
+		return nil, err
+	}
 	spk, err := runStage(&stages, "diarize", func() (diarizeResult, error) {
+		defer p.governor.Release(p.opt.NumThreads)
 		r, w, err := p.diarize(ctx, req, tracks, result.Segments)
 		warn = append(warn, w...)
 		return r, err
@@ -195,9 +202,19 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 	}
 
 	// Post-processing runs after diarization: ITN merges words, and a merged
-	// word spanning two speakers could not be attributed afterwards.
+	// word spanning two speakers could not be attributed afterwards. The
+	// punctuation stage inside the chain runs its own threads; only the
+	// chains that include a punctuation model need to claim the slots, so the
+	// chain-call below re-enters the governor rather than always paying for
+	// it.
 	caps := lease.Recognizer.Capabilities()
 	postWarn, err := runStage(&stages, "post", func() ([]core.Warning, error) {
+		if p.punctuationUsesThreads() {
+			if err := p.governor.Acquire(ctx, p.opt.NumThreads); err != nil {
+				return nil, err
+			}
+			defer p.governor.Release(p.opt.NumThreads)
+		}
 		return p.post(ctx, req, caps, result)
 	})
 	if err != nil {
@@ -299,8 +316,13 @@ func (p *Pipeline) recognise(ctx context.Context, rec asr.Recognizer, segments [
 		if err := p.governor.Acquire(ctx, p.opt.NumThreads); err != nil {
 			return nil, err
 		}
-		got, err := rec.Decode(ctx, batch, sampleRate)
-		p.governor.Release(p.opt.NumThreads)
+		// defer so a panic in Decode cannot leave the slots held forever
+		// (the recover middleware keeps the process alive; without defer the
+		// governor would quietly fill up across panics).
+		got, err := func() ([]asr.Recognition, error) {
+			defer p.governor.Release(p.opt.NumThreads)
+			return rec.Decode(ctx, batch, sampleRate)
+		}()
 		if err != nil {
 			return nil, err
 		}
