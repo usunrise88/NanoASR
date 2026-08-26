@@ -163,6 +163,12 @@ export interface JobFilter {
   since?: string
   limit?: number
   cursor?: string
+  /**
+   * The list screen does not need per-row transcripts — that is what the
+   * detail screen fetches. Setting includeResult=false makes a page of
+   * long jobs a fraction of its default payload.
+   */
+  includeResult?: boolean
 }
 
 /** A job that can still change is worth watching; one that cannot is not. */

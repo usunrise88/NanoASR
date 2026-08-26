@@ -259,6 +259,42 @@ func TestListScopesHistoryToTheCallingKey(t *testing.T) {
 	}
 }
 
+// include_result=false is what the history listing uses: every row carries
+// the full transcript by default and a page of long jobs is a JSON-round-trip
+// the UI does not need to render a list.
+func TestListSkipsTheResultColumnWhenAsked(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+
+	r := record("job_1", time.Now(), status(core.JobSucceeded))
+	r.Job.Result = &core.Result{Text: "full transcript the page does not need"}
+	if err := s.Create(ctx, r); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.Update(ctx, r); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	with, _, err := s.List(ctx, core.JobFilter{APIKeyID: "key-a"})
+	if err != nil {
+		t.Fatalf("List default: %v", err)
+	}
+	if len(with) != 1 || with[0].Result == nil || with[0].Result.Text != "full transcript the page does not need" {
+		t.Fatalf("default listing returned %+v, want the result blob", with)
+	}
+
+	without, _, err := s.List(ctx, core.JobFilter{APIKeyID: "key-a", OmitResult: true})
+	if err != nil {
+		t.Fatalf("List no-result: %v", err)
+	}
+	if len(without) != 1 || without[0].Result != nil {
+		t.Fatalf("no-result listing returned %+v, want Result nil", without)
+	}
+	if without[0].ID != "job_1" || without[0].Status != core.JobSucceeded {
+		t.Errorf("the rest of the row is wrong: %+v", without[0])
+	}
+}
+
 // In open mode nothing sets an api key, so unowned jobs must be visible to the
 // unowned filter rather than to nobody.
 func TestListWithoutAKeyMatchesUnownedJobs(t *testing.T) {

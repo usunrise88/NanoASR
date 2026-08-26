@@ -43,6 +43,10 @@ function JobsPage() {
     ...(status ? { status: [status as JobStatus] } : {}),
     ...(model ? { model } : {}),
     limit: 20,
+    // The history list does not need per-row transcripts: the detail screen
+    // fetches them on demand. Skipping them here keeps a page of long jobs
+    // a fraction of its default payload.
+    includeResult: false,
   }
   const history = useJobHistory(filter)
   const loading = useDelayedPending(history.isLoading)

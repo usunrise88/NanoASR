@@ -165,6 +165,14 @@ const selectColumns = `id, status, priority, model_id, model_rev, params_json, s
        api_key_id, filename, audio_bytes, audio_seconds, created_at, started_at,
        finished_at, error_code, error_message, result_json`
 
+// selectColumnsNoResult is what the history listing reads when the caller
+// asked with include_result=false: every row carries the full transcript by
+// default, and a page of long jobs is hundreds of megabytes of JSON for
+// nothing the UI needs to render a list.
+const selectColumnsNoResult = `id, status, priority, model_id, model_rev, params_json, source,
+       api_key_id, filename, audio_bytes, audio_seconds, created_at, started_at,
+       finished_at, error_code, error_message`
+
 func (s *Store) Get(ctx context.Context, id string) (job.Record, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM jobs WHERE id=?`, id)
 	r, err := scanRecord(row)
@@ -226,7 +234,11 @@ func (s *Store) List(ctx context.Context, f core.JobFilter) ([]core.Job, string,
 	}
 
 	// One extra row answers "is there a next page" without a second count query.
-	query := `SELECT ` + selectColumns + ` FROM jobs WHERE ` + strings.Join(where, " AND ") +
+	cols := selectColumns
+	if f.OmitResult {
+		cols = selectColumnsNoResult
+	}
+	query := `SELECT ` + cols + ` FROM jobs WHERE ` + strings.Join(where, " AND ") +
 		` ORDER BY created_at DESC, id DESC LIMIT ?`
 	rows, err := s.db.QueryContext(ctx, query, append(args, limit+1)...)
 	if err != nil {
@@ -236,8 +248,14 @@ func (s *Store) List(ctx context.Context, f core.JobFilter) ([]core.Job, string,
 
 	out := make([]core.Job, 0, limit)
 	var next string
+	var scan func(scanner) (job.Record, error)
+	if f.OmitResult {
+		scan = scanRecordSummary
+	} else {
+		scan = scanRecord
+	}
 	for rows.Next() {
-		r, err := scanRecord(rows)
+		r, err := scan(rows)
 		if err != nil {
 			return nil, "", fmt.Errorf("sqlite: list jobs: %w", err)
 		}
@@ -355,6 +373,57 @@ func scanRecord(sc scanner) (job.Record, error) {
 			return job.Record{}, fmt.Errorf("decode result of %s: %w", r.Job.ID, err)
 		}
 		r.Job.Result = &res
+	}
+	if params != "" {
+		if err := json.Unmarshal([]byte(params), &r.Params); err != nil {
+			return job.Record{}, fmt.Errorf("decode params of %s: %w", r.Job.ID, err)
+		}
+	}
+	return r, nil
+}
+
+// scanRecordSummary is scanRecord without the result column. It is the
+// counterpart of selectColumnsNoResult and leaves Job.Result nil: the detail
+// endpoint can fetch the full record on demand.
+func scanRecordSummary(sc scanner) (job.Record, error) {
+	var (
+		r          job.Record
+		status     string
+		priority   int
+		params     string
+		source     string
+		apiKeyID   sql.NullString
+		filename   sql.NullString
+		createdAt  int64
+		startedAt  sql.NullInt64
+		finishedAt sql.NullInt64
+		errCode    sql.NullString
+		errMessage sql.NullString
+	)
+	err := sc.Scan(&r.Job.ID, &status, &priority, &r.Job.ModelID, &r.Job.ModelRev,
+		&params, &source, &apiKeyID, &filename, &r.AudioBytes, &r.AudioSeconds,
+		&createdAt, &startedAt, &finishedAt, &errCode, &errMessage)
+	if err != nil {
+		return job.Record{}, err
+	}
+
+	r.Job.Status = core.JobStatus(status)
+	r.Job.Source = core.Source(source)
+	r.Job.Filename = filename.String
+	r.Job.CreatedAt = time.UnixMilli(createdAt)
+	r.Priority = job.Priority(priority)
+	r.APIKeyID = apiKeyID.String
+
+	if startedAt.Valid {
+		t := time.UnixMilli(startedAt.Int64)
+		r.Job.StartedAt = &t
+	}
+	if finishedAt.Valid {
+		t := time.UnixMilli(finishedAt.Int64)
+		r.Job.FinishedAt = &t
+	}
+	if errCode.Valid {
+		r.Job.Error = core.Errorf(core.Code(errCode.String), "%s", errMessage.String)
 	}
 	if params != "" {
 		if err := json.Unmarshal([]byte(params), &r.Params); err != nil {

@@ -434,6 +434,17 @@ func parseFilter(r *http.Request) (core.JobFilter, error) {
 		}
 		f.Since = &t
 	}
+	// Default false (i.e. include the result): callers that have always
+	// received full transcripts must keep doing so. include_result=false is
+	// what the UI asks for when the row is just a list entry.
+	if v := q.Get("include_result"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return f, core.Errorf(core.CodeInvalidRequest,
+				"include_result must be a boolean").WithParam("include_result")
+		}
+		f.OmitResult = !b
+	}
 	return f, nil
 }
 

@@ -136,6 +136,7 @@ export function listJobs(filter: JobFilter = {}): Promise<JobPage> {
   if (filter.since) q.set('since', filter.since)
   if (filter.limit) q.set('limit', String(filter.limit))
   if (filter.cursor) q.set('cursor', filter.cursor)
+  if (filter.includeResult === false) q.set('include_result', 'false')
 
   const query = q.toString()
   return request<JobPage>(`/jobs${query ? `?${query}` : ''}`)

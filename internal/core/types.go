@@ -219,6 +219,13 @@ type JobFilter struct {
 
 	APIKeyID string
 	Admin    bool
+
+	// OmitResult controls whether the per-row Result blob is unmarshalled.
+	// The history page can carry hundreds of long transcripts; a UI that just
+	// needs the list of jobs asks with OmitResult: true. Zero (the default)
+	// means include, to preserve the original behaviour for callers that set
+	// the other filter fields directly without going through the API layer.
+	OmitResult bool
 }
 
 // JobPage is one page of history plus the cursor that continues it. The cursor
