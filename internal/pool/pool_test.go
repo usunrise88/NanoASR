@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -117,6 +118,33 @@ func TestEvictionSkipsLeasedAndPinned(t *testing.T) {
 	}
 }
 
+func TestReleaseEvictsWhenOverLimit(t *testing.T) {
+	p, recs := newTestPool(t, Options{MaxResidentModels: 2, MaxModelRSSMB: 100000})
+
+	la, err := p.Acquire(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lb, err := p.Acquire(context.Background(), "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pool is at its model-count limit; loading "c" pushes it over.
+	lc, err := p.Acquire(context.Background(), "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lc.Release()
+
+	// Once "a" goes idle the pool must reclaim it right away, without
+	// waiting for another load.
+	la.Release()
+	if !recs["a@1"].isClosed() {
+		t.Fatal("releasing the LRU did not trigger eviction")
+	}
+	lb.Release()
+}
+
 func TestReloadKeepsInFlightRequestAlive(t *testing.T) {
 	p, recs := newTestPool(t, Options{MaxResidentModels: 4, MaxModelRSSMB: 100000})
 
@@ -169,6 +197,223 @@ func TestSweepUnloadsIdleModels(t *testing.T) {
 	}
 	if !recs["a@1"].isClosed() {
 		t.Fatal("swept model was not closed")
+	}
+}
+
+// gatedLoader lets a test decide when each load finishes and with what
+// outcome, so the interleavings between an in-flight load and Reload/Unload
+// can be made deterministic.
+type gatedLoader struct {
+	mu      sync.Mutex
+	started chan int
+	gates   []chan error
+	recs    []*fakeRec
+}
+
+func newGatedLoader() *gatedLoader {
+	return &gatedLoader{started: make(chan int)}
+}
+
+func (g *gatedLoader) load(_ context.Context, m registry.Manifest, _ string, _ asr.Variant) (asr.Recognizer, error) {
+	g.mu.Lock()
+	idx := len(g.gates)
+	gate := make(chan error, 1)
+	g.gates = append(g.gates, gate)
+	r := &fakeRec{id: m.Key()}
+	g.recs = append(g.recs, r)
+	g.mu.Unlock()
+
+	g.started <- idx
+	if err := <-gate; err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (g *gatedLoader) finish(idx int, err error) { g.gates[idx] <- err }
+
+func (g *gatedLoader) rec(idx int) *fakeRec {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.recs[idx]
+}
+
+func TestUnloadDuringLoadDoesNotLeakOrResurrect(t *testing.T) {
+	g := newGatedLoader()
+	p := New(fakeReg{rev: "1"}, g.load, Options{MaxResidentModels: 2, MaxModelRSSMB: 4000})
+	defer func() { _ = p.Close() }()
+
+	acquireDone := make(chan error, 1)
+	go func() {
+		l, err := p.Acquire(context.Background(), "a")
+		if l != nil {
+			l.Release()
+		}
+		acquireDone <- err
+	}()
+
+	<-g.started // the load is in flight, the placeholder is serving as "a"
+	if err := p.Unload("a"); err != nil {
+		t.Fatalf("Unload of a loading model: %v", err)
+	}
+	g.finish(0, nil)
+
+	if err := <-acquireDone; err == nil {
+		t.Fatal("Acquire succeeded although the model was unloaded mid-load")
+	}
+	if !g.rec(0).isClosed() {
+		t.Fatal("the recogniser built for a retired placeholder was never closed")
+	}
+	if got := len(p.List()); got != 0 {
+		t.Fatalf("pool lists %d models after unload-during-load, want 0", got)
+	}
+}
+
+func TestReloadDuringLoadServesTheFreshInstance(t *testing.T) {
+	g := newGatedLoader()
+	p := New(fakeReg{rev: "1"}, g.load, Options{MaxResidentModels: 4, MaxModelRSSMB: 100000})
+	defer func() { _ = p.Close() }()
+
+	type acquired struct {
+		lease *Lease
+		err   error
+	}
+	acquireDone := make(chan acquired, 1)
+	go func() {
+		l, err := p.Acquire(context.Background(), "a")
+		acquireDone <- acquired{l, err}
+	}()
+
+	<-g.started // call 0: the Acquire's load is in flight
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- p.Reload(context.Background(), "a", "") }()
+	<-g.started // call 1: the Reload's load is in flight
+
+	// The Reload finishes first and retires the Acquire's placeholder.
+	g.finish(1, nil)
+	if err := <-reloadDone; err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	g.finish(0, nil)
+
+	a := <-acquireDone
+	if a.err != nil {
+		t.Fatalf("Acquire: %v", a.err)
+	}
+	defer a.lease.Release()
+	if a.lease.Recognizer != g.rec(1) {
+		t.Fatal("Acquire did not land on the instance Reload installed")
+	}
+	if !g.rec(0).isClosed() {
+		t.Fatal("the recogniser built for the retired placeholder was never closed")
+	}
+}
+
+func TestFailedLoadAfterReloadKeepsTheFreshEntry(t *testing.T) {
+	g := newGatedLoader()
+	p := New(fakeReg{rev: "1"}, g.load, Options{MaxResidentModels: 4, MaxModelRSSMB: 100000})
+	defer func() { _ = p.Close() }()
+
+	acquireDone := make(chan error, 1)
+	go func() {
+		l, err := p.Acquire(context.Background(), "a")
+		if l != nil {
+			l.Release()
+		}
+		acquireDone <- err
+	}()
+
+	<-g.started // call 0: the Acquire's load is in flight
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- p.Reload(context.Background(), "a", "") }()
+	<-g.started // call 1: the Reload's load is in flight
+
+	g.finish(1, nil) // Reload succeeds and installs its entry under "a"
+	if err := <-reloadDone; err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	g.finish(0, errors.New("weights unreadable")) // the older load now fails
+
+	if err := <-acquireDone; err == nil {
+		t.Fatal("Acquire returned nil after its load failed")
+	}
+	// The failing load must not take the fresh entry down with it.
+	l, err := p.Acquire(context.Background(), "a")
+	if err != nil {
+		t.Fatalf("the freshly reloaded model is gone: %v", err)
+	}
+	defer l.Release()
+	if l.Recognizer != g.rec(1) {
+		t.Fatal("the entry left behind is not the one Reload installed")
+	}
+	if g.rec(1).isClosed() {
+		t.Fatal("the fresh recogniser was closed by someone else's failed load")
+	}
+}
+
+func TestCloseWaitsForOutstandingLeases(t *testing.T) {
+	p, recs := newTestPool(t, Options{MaxResidentModels: 2, MaxModelRSSMB: 4000})
+
+	l, err := p.Acquire(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A close that runs while a lease is outstanding must not pull the
+	// recogniser out from under the holder, and it must return once the
+	// holder releases.
+	closeDone := make(chan struct{})
+	go func() {
+		_ = p.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while a lease was still outstanding")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	l.Release()
+
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after the lease was released")
+	}
+	if !recs["a@1"].isClosed() {
+		t.Fatal("the model was not freed after Close drained the lease")
+	}
+}
+
+func TestCloseSkipsNativeCloseOnStragglers(t *testing.T) {
+	// With a one-millisecond drain timeout, a lease that outlives Close is
+	// left for the process to take down; the recogniser is not closed under
+	// it, which would crash any handler still decoding.
+	p, recs := newTestPool(t, Options{MaxResidentModels: 2, MaxModelRSSMB: 4000})
+	p.closeDrainTimeoutForTest = 1 * time.Millisecond
+
+	l, err := p.Acquire(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closed := make(chan struct{})
+	go func() { _ = p.Close(); close(closed) }()
+	<-closed
+
+	if recs["a@1"].isClosed() {
+		t.Fatal("Close freed a recogniser a handler still holds")
+	}
+	l.Release()
+}
+
+func TestAcquireAfterCloseReturnsAnError(t *testing.T) {
+	p, _ := newTestPool(t, Options{MaxResidentModels: 2, MaxModelRSSMB: 4000})
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Acquire(context.Background(), "a"); err == nil {
+		t.Fatal("Acquire after Close returned a lease")
 	}
 }
 

@@ -30,6 +30,13 @@ type Options struct {
 	MaxVariants int
 }
 
+// closeDrainTimeout bounds how long Close waits for outstanding leases before
+// letting the operating system reclaim whatever is still pinned. It is
+// generous for the batch case (a 30-minute recording can plausibly survive
+// this long) and short for the outage case (an orchestrator will SIGKILL long
+// before this matters).
+const closeDrainTimeout = 30 * time.Second
+
 // Pool keeps loaded models alive, bounded by count and by memory, and performs
 // hot swaps without interrupting in-flight work (SPEC §7.4).
 //
@@ -43,9 +50,23 @@ type Pool struct {
 	current  map[string]*entry // model id → serving entry
 	draining []*entry
 
+	closed        bool
+	closeDeadline time.Time
+
+	// closeDrainTimeoutForTest overrides closeDrainTimeout in tests so the
+	// straggler path can be exercised in milliseconds rather than minutes.
+	closeDrainTimeoutForTest time.Duration
+
 	reg  registry.Registry
 	load Loader
 	opt  Options
+}
+
+func (p *Pool) closeDrainTimeout() time.Duration {
+	if p.closeDrainTimeoutForTest > 0 {
+		return p.closeDrainTimeoutForTest
+	}
+	return closeDrainTimeout
 }
 
 type entry struct {
@@ -128,6 +149,11 @@ func (p *Pool) AcquireVariant(ctx context.Context, id string, v asr.Variant) (*L
 
 	for {
 		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return nil, core.Errorf(core.CodeModelUnavailable,
+				"model pool is closed")
+		}
 		e, ok := p.current[key]
 		if ok {
 			switch e.state {
@@ -141,7 +167,14 @@ func (p *Pool) AcquireVariant(ctx context.Context, id string, v asr.Variant) (*L
 				p.mu.Unlock()
 				select {
 				case <-ready:
-					continue // re-check: it may have failed or been swapped
+					// A load failure — or a retirement mid-load — is
+					// terminal for the waiters too: looping back to load
+					// again would resurrect a model an explicit Unload or
+					// Reload just retired.
+					if e.loadErr != nil {
+						return nil, e.loadErr
+					}
+					continue // re-check: it may have been swapped
 				case <-ctx.Done():
 					return nil, timeoutErr(ctx, id)
 				}
@@ -166,11 +199,38 @@ func (p *Pool) AcquireVariant(ctx context.Context, id string, v asr.Variant) (*L
 		p.mu.Lock()
 		if err != nil {
 			placeholder.loadErr = err
-			delete(p.current, key)
+			// Remove our own placeholder only: a Reload that landed while we
+			// were loading has already installed its fresh entry under this
+			// key, and deleting that would lose a model its caller was told
+			// is ready.
+			if p.current[key] == placeholder {
+				delete(p.current, key)
+			}
 			close(placeholder.ready)
 			p.cond.Broadcast()
 			p.mu.Unlock()
 			return nil, err
+		}
+		if p.current[key] != placeholder {
+			// The placeholder was retired while the load was in flight
+			// (Reload, Unload or pool Close). Close the recogniser we just
+			// built — it belongs to no entry, and nothing else ever will —
+			// then serve from the fresh entry a Reload left behind, if any.
+			_ = rec.Close()
+			if fresh, ok := p.current[key]; ok && fresh.state == core.ModelReady {
+				fresh.refs++
+				fresh.lastUsed = time.Now()
+				close(placeholder.ready)
+				p.cond.Broadcast()
+				p.mu.Unlock()
+				return &Lease{Recognizer: fresh.rec, Manifest: fresh.manifest, pool: p, e: fresh}, nil
+			}
+			placeholder.loadErr = core.Errorf(core.CodeModelUnavailable,
+				"model %s was unloaded while it was loading", id)
+			close(placeholder.ready)
+			p.cond.Broadcast()
+			p.mu.Unlock()
+			return nil, placeholder.loadErr
 		}
 		placeholder.rec = rec
 		placeholder.manifest = man
@@ -222,6 +282,13 @@ func (p *Pool) release(e *entry) {
 	if e.state == core.ModelDraining && e.refs == 0 {
 		p.closeLocked(e)
 		p.removeDrainingLocked(e)
+	}
+	// The pool can be over its budget right after a load completes (its
+	// own evictLocked runs at that point but cannot evict entries it just
+	// created). Reclaim now while we are still under the lock and the
+	// condition is fresh.
+	if p.overLimitLocked() {
+		p.evictLocked()
 	}
 	p.cond.Broadcast()
 }
@@ -434,20 +501,60 @@ func (p *Pool) List() []core.ModelInfo {
 	return out
 }
 
-// Close unloads everything. In-flight leases are not waited for: callers must
-// drain the queue before shutting the pool down.
+// Close unloads everything.
+//
+// In-flight leases are given a bounded time to finish first: the caller drains
+// the queue and the HTTP server before this, but a synchronous request can
+// outlive its shutdown grace, and freeing a recogniser its handler is still
+// decoding on is a use-after-free in native code. Whatever is still leased
+// after the timeout is left to the operating system — the process that calls
+// Close is exiting, and an unfreed model at exit beats a segfault during it.
 func (p *Pool) Close() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.closed = true
+	timeout := p.closeDrainTimeout()
+	p.closeDeadline = time.Now().Add(timeout)
+
+	timer := time.AfterFunc(timeout, func() {
+		p.mu.Lock()
+		p.cond.Broadcast()
+		p.mu.Unlock()
+	})
+	for p.leasesOutstandingLocked() && time.Now().Before(p.closeDeadline) {
+		p.cond.Wait()
+	}
+	timer.Stop()
+
 	for id, e := range p.current {
-		p.closeLocked(e)
+		if e.refs == 0 {
+			p.closeLocked(e)
+		}
 		delete(p.current, id)
 	}
-	for _, e := range p.draining {
-		p.closeLocked(e)
-	}
+	draining := p.draining
 	p.draining = nil
+	for _, e := range draining {
+		if e.refs == 0 {
+			p.closeLocked(e)
+		}
+	}
+	p.cond.Broadcast()
+	p.mu.Unlock()
 	return nil
+}
+
+func (p *Pool) leasesOutstandingLocked() bool {
+	for _, e := range p.current {
+		if e.refs > 0 {
+			return true
+		}
+	}
+	for _, e := range p.draining {
+		if e.refs > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func timeoutErr(ctx context.Context, id string) error {
