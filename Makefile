@@ -12,7 +12,7 @@ DIST        := dist
 UI_DIST     := internal/ui/dist
 
 .PHONY: all web build build-noui dist dist-noui docker lint test test-race test-integration \
-	load models testdata golden-update run clean tidy help
+	load models testdata diar-testdata diar-eval golden-update run clean tidy help
 
 all: web build
 
@@ -64,6 +64,18 @@ models:
 ## testdata: download and derive the integration test audio
 testdata:
 	./scripts/fetch-testdata.sh
+
+## diar-testdata: build the Russian diarization benchmark and its reference
+diar-testdata:
+	./scripts/fetch-diar-eval.sh
+
+## diar-eval: diarization error rate over a grid of embedding models and thresholds
+#
+# Needs diar-testdata and the diarization models. Asserts nothing: DER depends
+# on the recording, and a threshold here would pass on one dialog and fail on
+# the next. It prints a table to read while tuning.
+diar-eval:
+	$(GO) test -tags integration ./internal/pipeline/ -run TestDiarizationErrorRate -v -timeout 40m
 
 ## test: unit tests
 test:

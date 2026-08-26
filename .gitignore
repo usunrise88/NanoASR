@@ -18,6 +18,9 @@
 
 # Local state
 /.models/
+# Corpus downloads for the diarization benchmark, fetched by
+# scripts/fetch-diar-eval.sh and cached so a rebuild costs nothing.
+/.cache/
 # Audio is fetched by scripts/fetch-testdata.sh: it has its own licensing and
 # every derived form is reproducible. The golden transcript IS committed.
 /testdata/audio/
