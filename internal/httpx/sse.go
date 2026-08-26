@@ -17,15 +17,22 @@ import (
 // EventSource protocol ignores lines starting with a colon.
 const heartbeat = 15 * time.Second
 
+// writeDeadline caps each individual write to the response. It is set per
+// write rather than on http.Server: a slow client that stops reading would
+// otherwise pin a goroutine and a job-hub subscription forever, because the
+// request context does not interrupt a blocked HTTP/1.1 write.
+const writeDeadline = 30 * time.Second
+
 // Stream writes server-sent events.
 //
 // Two endpoints need this — job transitions and model download progress — and
 // both need the same unglamorous details right: the flush after every event,
 // the headers that stop intermediaries from buffering, and a heartbeat.
 type Stream struct {
-	w       http.ResponseWriter
-	flusher http.Flusher
-	ticker  *time.Ticker
+	w        http.ResponseWriter
+	flusher  http.Flusher
+	ticker   *time.Ticker
+	deadline time.Duration
 }
 
 // NewStream sets the headers and returns a writer, or an error if the response
@@ -47,7 +54,8 @@ func NewStream(w http.ResponseWriter) (*Stream, error) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	return &Stream{w: w, flusher: flusher, ticker: time.NewTicker(heartbeat)}, nil
+	return &Stream{w: w, flusher: flusher, ticker: time.NewTicker(heartbeat),
+		deadline: writeDeadline}, nil
 }
 
 // Send writes one event. id may be empty; name defaults to "message".
@@ -57,7 +65,7 @@ func (s *Stream) Send(id, name string, payload any) error {
 		return fmt.Errorf("sse: encode %s: %w", name, err)
 	}
 
-	if _, err := s.w.Write([]byte(frame(id, name, body))); err != nil {
+	if err := s.write([]byte(frame(id, name, body))); err != nil {
 		return err
 	}
 	s.flusher.Flush()
@@ -88,10 +96,27 @@ func frame(id, name string, body []byte) string {
 
 // Comment writes a no-op line. Used as the heartbeat.
 func (s *Stream) Comment(text string) error {
-	if _, err := fmt.Fprintf(s.w, ": %s\n\n", text); err != nil {
+	if err := s.write([]byte(": " + text + "\n\n")); err != nil {
 		return err
 	}
 	s.flusher.Flush()
+	return nil
+}
+
+// write sets a per-call deadline and then writes. A client that stops reading
+// cannot pin the goroutine past this deadline: a blocked HTTP/1.1 write does
+// not observe request context cancellation, but SetWriteDeadline does.
+func (s *Stream) write(p []byte) error {
+	rc := http.NewResponseController(s.w)
+	if err := rc.SetWriteDeadline(time.Now().Add(s.deadline)); err != nil {
+		// The writer did not support deadlines; fall through and let the
+		// kernel buffer fill — the same as before this safety net existed.
+		_, werr := s.w.Write(p)
+		return werr
+	}
+	if _, err := s.w.Write(p); err != nil {
+		return err
+	}
 	return nil
 }
 
