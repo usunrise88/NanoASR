@@ -197,6 +197,10 @@ func serve(args []string) error {
 		return err
 	}
 
+	// Whether the UI mounted decides whether its path is exempt from
+	// authentication below. Exempting a path that serves nothing is not a hole,
+	// but it is a standing invitation to become one.
+	uiMounted := false
 	if cfg.UI.Enabled {
 		h, err := ui.Handler(cfg.UI.Path)
 		if err != nil {
@@ -204,6 +208,7 @@ func serve(args []string) error {
 		} else {
 			mux.Handle(cfg.UI.Path+"/", h)
 			log.Info("ui mounted", "path", cfg.UI.Path)
+			uiMounted = true
 		}
 	}
 
@@ -225,10 +230,14 @@ func serve(args []string) error {
 		if err != nil {
 			return err
 		}
+		public := []string{"/healthz", "/readyz"}
+		if uiMounted {
+			public = append(public, cfg.UI.Path)
+		}
 		// Health probes cannot present a credential, and a browser does not
 		// send a bearer token when loading a script tag. Everything else is
 		// authenticated.
-		mw = append(mw, httpx.Auth(keys, "/healthz", "/readyz", cfg.UI.Path))
+		mw = append(mw, httpx.Auth(keys, public...))
 
 		// Rate limiting comes after Auth because there is nothing to attribute
 		// a rate to until the key is known, and unauthenticated traffic is
@@ -242,8 +251,7 @@ func serve(args []string) error {
 		// The key store now holds the digests, so drop the plaintext from the
 		// configuration that /api/v1/config serves.
 		cfg.Auth.Redact()
-		log.Info("authentication enabled", "keys", keys.Names(),
-			"public", []string{"/healthz", "/readyz", cfg.UI.Path})
+		log.Info("authentication enabled", "keys", keys.Names(), "public", public)
 	}
 
 	httpSrv := &http.Server{

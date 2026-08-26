@@ -23,7 +23,7 @@ web:
 	rm -rf $(UI_DIST)
 	cp -r web/dist $(UI_DIST)
 
-## build: build the server binary (requires web, or ships the placeholder page)
+## build: build the server binary (run `make web` first, or it starts headless)
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(DIST)/nanoasr ./cmd/nanoasr
 

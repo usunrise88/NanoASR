@@ -10,7 +10,9 @@
 /web/playwright-report/
 
 # The SPA is staged here by `make web` and embedded at compile time. The
-# placeholder page is committed so `go build` works in a fresh checkout.
+# placeholder page is committed so `go build` works in a fresh checkout; a
+# binary that embeds only the placeholder reports ui=false and serves no UI,
+# rather than answering 200 with a page apologising for itself.
 /internal/ui/dist/*
 !/internal/ui/dist/index.html
 
