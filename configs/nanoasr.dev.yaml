@@ -7,7 +7,7 @@
 server:
   addr: "127.0.0.1:8080"
   read_header_timeout: 10s
-  max_upload_bytes: 104857600   # 100 MB
+  max_upload_bytes: 1073741824  # 1 GiB, sized against audio.max_duration
   shutdown_grace: 30s
 
 auth:

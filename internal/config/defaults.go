@@ -16,8 +16,12 @@ func Default() Config {
 		Server: Server{
 			Addr:              ":8080",
 			ReadHeaderTimeout: Dur(10 * time.Second),
-			MaxUploadBytes:    100 << 20,
-			ShutdownGrace:     Dur(30 * time.Second),
+			// One gibibyte, sized against Audio.MaxDuration rather than
+			// picked round: four hours of 16 kHz mono WAV is about 440 MB, and
+			// a smaller cap would make the duration limit unreachable for
+			// anything that is not already compressed.
+			MaxUploadBytes: 1 << 30,
+			ShutdownGrace:  Dur(30 * time.Second),
 		},
 		Auth: Auth{Mode: "apikey"},
 		API:  API{Dialects: []string{"openai", "native"}},

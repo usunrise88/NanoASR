@@ -7,7 +7,10 @@
 server:
   addr: ":8080"
   read_header_timeout: 10s
-  max_upload_bytes: 104857600   # 100 MB
+  # 1 GiB. Sized against audio.max_duration rather than picked round: four
+  # hours of 16 kHz mono WAV is about 440 MB, and a shorter limit would make
+  # max_duration unreachable for anything that is not already compressed.
+  max_upload_bytes: 1073741824
   shutdown_grace: 30s
 
 auth:

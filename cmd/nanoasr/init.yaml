@@ -9,7 +9,7 @@
 
 server:
   addr: "{{.Addr}}"
-  max_upload_bytes: 104857600   # 100 MB
+  max_upload_bytes: 1073741824  # 1 GiB — four hours of 16 kHz mono WAV is ~440 MB
 
 auth:
   # "open" is permitted only when addr binds a loopback address. Two keys were
