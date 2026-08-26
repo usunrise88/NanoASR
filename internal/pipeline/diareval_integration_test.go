@@ -106,6 +106,9 @@ func TestDiarizationErrorRate(t *testing.T) {
 					if err != nil {
 						t.Fatalf("diarize: %v", err)
 					}
+					if share := envFloat("DIAR_MIN_SHARE", 0); share > 0 {
+						turns = dropTinyClusters(turns, share)
+					}
 					got := scoreDER(ref, turns)
 
 					label := fmt.Sprintf("%.2f", threshold)
@@ -135,6 +138,39 @@ func envList(key string, fallback []string) []string {
 		}
 	}
 	return out
+}
+
+// dropTinyClusters removes speakers holding less than share of the speech.
+// An experiment, not a policy: threshold clustering invents a handful of
+// clusters that hold seconds, and whether discarding them helps is a question
+// for the reference rather than for taste.
+func dropTinyClusters(turns []diarize.Turn, share float64) []diarize.Turn {
+	total := 0.0
+	per := map[int]float64{}
+	for _, t := range turns {
+		d := t.End - t.Start
+		per[t.Speaker] += d
+		total += d
+	}
+	out := turns[:0:0]
+	for _, t := range turns {
+		if per[t.Speaker]/total >= share {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func envFloat(key string, fallback float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }
 
 func envFloats(key string, fallback []float32) []float32 {
