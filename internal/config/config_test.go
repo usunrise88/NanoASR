@@ -96,6 +96,36 @@ func TestValidateRejectsUnusableAuth(t *testing.T) {
 			want: "loopback",
 		},
 		{
+			// SplitHostPort(":8080") yields an empty host, and http.Server
+			// treats it as "every interface" — it must not read as loopback.
+			name: "open mode on a wildcard address",
+			body: "auth:\n  mode: open\nserver:\n  addr: \":8080\"\n",
+			want: "loopback",
+		},
+		{
+			name: "private webhooks on a wildcard address",
+			body: "auth:\n  mode: apikey\n  keys: [{name: k, key: sk-test-0123456789}]\n" +
+				"server:\n  addr: \":8080\"\njobs:\n  webhook_allow_private: true\n",
+			want: "loopback",
+		},
+		{
+			// ui.path prefixes the auth exemption list; "/" would exempt the
+			// whole server.
+			name: "ui at the root",
+			body: "auth:\n  mode: apikey\n  keys: [{name: k, key: sk-test-0123456789}]\nui:\n  path: \"/\"\n",
+			want: "ui.path",
+		},
+		{
+			name: "ui shadowing the native api",
+			body: "auth:\n  mode: apikey\n  keys: [{name: k, key: sk-test-0123456789}]\nui:\n  path: \"/api\"\n",
+			want: "ui.path",
+		},
+		{
+			name: "ui without a leading slash",
+			body: "auth:\n  mode: apikey\n  keys: [{name: k, key: sk-test-0123456789}]\nui:\n  path: \"ui\"\n",
+			want: "ui.path",
+		},
+		{
 			name: "unknown mode",
 			body: "auth:\n  mode: mtls\n",
 			want: "must be apikey or open",

@@ -191,6 +191,22 @@ func (c *Config) Validate() error {
 	if len(c.API.Dialects) == 0 && !c.UI.Enabled {
 		return fmt.Errorf("no api dialects enabled and ui disabled: server would serve nothing")
 	}
+	if c.UI.Enabled {
+		// ui.path is an auth exemption prefix: requests under it are served
+		// without a key. A root or API-overlapping path would therefore
+		// disable authentication for the whole server or a whole dialect.
+		p := c.UI.Path
+		if p == "" || p[0] != '/' || p == "/" {
+			return fmt.Errorf("ui.path must be an absolute path below the root, got %q", p)
+		}
+		for _, reserved := range []string{"/api", "/v1", "/asr", "/asr_task", "/detect-language",
+			"/healthz", "/readyz"} {
+			if p == reserved || strings.HasPrefix(reserved, p+"/") || strings.HasPrefix(p, reserved+"/") {
+				return fmt.Errorf("ui.path %q overlaps the reserved path %q: "+
+					"requests under ui.path are not authenticated", p, reserved)
+			}
+		}
+	}
 	if c.Audio.MaxSplitChannels < 1 {
 		return fmt.Errorf("audio.max_split_channels must be at least 1, got %d", c.Audio.MaxSplitChannels)
 	}
@@ -254,12 +270,19 @@ func (c *Config) validateDiarization() error {
 	return nil
 }
 
+// isLoopback answers whether addr binds only this machine. It fails closed: an
+// empty host (":8080") is what http.Server listens on every interface with, and
+// so are the unspecified addresses, and the checks that call this (open auth,
+// private webhooks) exist precisely to keep those binds from being trusted.
 func isLoopback(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
 	}
-	if host == "" || host == "localhost" {
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))

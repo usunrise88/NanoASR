@@ -82,6 +82,19 @@ func TestPublicPrefixMatchesOnSegmentBoundary(t *testing.T) {
 	}
 }
 
+// A prefix of "/" (or one that trims to it) would match every request and
+// silently disable authentication; it must be ignored.
+func TestRootPublicPrefixExemptsNothing(t *testing.T) {
+	h := authedServer(t, "/")
+
+	if got := request(t, h, "/ui", "").Code; got != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 — a root public prefix must exempt nothing", got)
+	}
+	if got := request(t, h, "/v1/models", "").Code; got != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 — a root public prefix must exempt nothing", got)
+	}
+}
+
 func TestAuthChallengesWithBearerScheme(t *testing.T) {
 	h := authedServer(t)
 	w := request(t, h, "/v1/models", "")

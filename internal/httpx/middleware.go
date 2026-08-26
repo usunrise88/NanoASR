@@ -179,13 +179,15 @@ func denyAdmin(w http.ResponseWriter, _ *http.Request) {
 }
 
 // isPublicPath matches a prefix exactly, or as a path segment boundary, so
-// "/ui" exempts "/ui" and "/ui/app.js" but never "/uisecret".
+// "/ui" exempts "/ui" and "/ui/app.js" but never "/uisecret". A prefix that
+// trims to nothing ("" or "/") is ignored: it would match every request and
+// silently disable authentication server-wide.
 func isPublicPath(path string, prefixes []string) bool {
 	for _, p := range prefixes {
+		p = strings.TrimSuffix(p, "/")
 		if p == "" {
 			continue
 		}
-		p = strings.TrimSuffix(p, "/")
 		if path == p || strings.HasPrefix(path, p+"/") {
 			return true
 		}
