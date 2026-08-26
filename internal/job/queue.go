@@ -539,6 +539,12 @@ func (q *Queue) failRecovered(ctx context.Context, rec Record, reason string) {
 	}
 }
 
+// shutdownHardCap bounds how long Shutdown waits after the caller's grace has
+// elapsed. Diarization is non-cancellable by design, so a runner can stay
+// parked in sherpa-onnx past the operator's deadline; the process is going
+// down and we would rather return to the caller than hang forever.
+const shutdownHardCap = 10 * time.Second
+
 // Shutdown stops accepting work and waits for what is in flight.
 //
 // Jobs still queued stay queued in the database: their audio is on disk, and the
@@ -565,8 +571,12 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		q.cancelRunning()
-		<-done
-		return ctx.Err()
+		select {
+		case <-done:
+			return ctx.Err()
+		case <-time.After(shutdownHardCap):
+			return ctx.Err()
+		}
 	}
 }
 

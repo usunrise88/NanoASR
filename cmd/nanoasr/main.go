@@ -128,6 +128,15 @@ func serve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// A second SIGINT or SIGTERM during a stuck shutdown must fall through to
+	// the default disposition (terminate) — otherwise an uncooperative runner
+	// (diarization is uncancellable) turns a graceful exit into a hang only a
+	// SIGKILL from the operator can break.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
 	srv, err := build(ctx, cfg, log)
 	if err != nil {
 		return err
@@ -139,6 +148,7 @@ func serve(args []string) error {
 		return err
 	}
 	go srv.purgeHistory(ctx, cfg.Jobs.HistoryTTL.Duration, log)
+	go srv.purgePool(ctx, cfg.ASR.IdleTTL.Duration, log)
 
 	if cfg.Jobs.WebhookSecret == "" {
 		log.Warn("webhook deliveries are unsigned",

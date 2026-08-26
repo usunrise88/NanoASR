@@ -186,6 +186,33 @@ func (s *server) resume(ctx context.Context, log *slog.Logger) error {
 	return nil
 }
 
+// purgePool enforces asr.idle_ttl. The configured TTL is otherwise dead
+// configuration: Sweep exists but nothing was calling it, and a model loaded
+// once stayed resident forever (a configured pool ceiling without a clock is
+// a memory ceiling on paper only).
+func (s *server) purgePool(ctx context.Context, idleTTL time.Duration, log *slog.Logger) {
+	if idleTTL <= 0 {
+		return
+	}
+	period := idleTTL / 2
+	if period > time.Minute {
+		period = time.Minute
+	}
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t := <-ticker.C:
+			if n := s.pool.Sweep(t); n > 0 {
+				log.Info("evicted idle models", "n", n, "idle_ttl", idleTTL)
+			}
+		}
+	}
+}
+
 // purgeHistory deletes finished jobs past their TTL, hourly.
 //
 // Not a cron and not a separate binary: history is the only thing that grows
