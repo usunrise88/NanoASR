@@ -54,7 +54,7 @@ audio:
   # is answered with 415 instead of failing at startup.
   ffmpeg_path: ffmpeg
   ffmpeg_timeout: 120s
-  max_duration: 30m
+  max_duration: 4h             # per-job upper bound; 0 → no limit
   target_sample_rate: 16000
   channel_mode: downmix         # downmix | first | split
   # split decodes every channel in full, so memory scales with the channel

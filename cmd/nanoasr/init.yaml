@@ -37,7 +37,7 @@ audio:
   # Leave empty to run without ffmpeg: WAV/PCM still works, everything else is
   # answered with 415 instead of failing at startup.
   ffmpeg_path: ffmpeg
-  max_duration: 30m
+  max_duration: 4h
   channel_mode: downmix         # downmix | first | split
 
 vad:

@@ -23,9 +23,14 @@ func Default() Config {
 		API:  API{Dialects: []string{"openai", "native"}},
 		UI:   UI{Enabled: true, Path: "/ui"},
 		Audio: Audio{
-			FFmpegPath:       "ffmpeg",
-			FFmpegTimeout:    Dur(120 * time.Second),
-			MaxDuration:      Dur(30 * time.Minute),
+			FFmpegPath:    "ffmpeg",
+			FFmpegTimeout: Dur(120 * time.Second),
+			// The default is four hours rather than the more common thirty
+			// minutes because long-running transcription is the workload this
+			// server is for — recordings of meetings, lectures and calls. A
+			// 30-minute clip is the easy case; the painful one is the two-hour
+			// interview that has to be split and rejoined elsewhere.
+			MaxDuration:      Dur(4 * time.Hour),
 			TargetSampleRate: 16000,
 			ChannelMode:      "downmix",
 			// Two: the workload split exists for is a telephony A/B leg pair.
