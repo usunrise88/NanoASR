@@ -9,8 +9,10 @@ COPY web/ ./
 RUN npm run build
 
 # ---- server ----------------------------------------------------------------
-# cgo is required: sherpa-onnx is a C++ library behind a C API.
-FROM golang:1.24-bookworm AS build
+# cgo is required: sherpa-onnx is a C++ library behind a C API. The version
+# tracks the go directive in go.mod, because the image pins GOTOOLCHAIN=local:
+# an older toolchain here does not download a newer one, it refuses to build.
+FROM golang:1.25-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

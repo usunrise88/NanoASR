@@ -292,7 +292,7 @@ NANOASR_AUTH_KEYS=sk-... docker compose -f deploy/docker-compose.yml up -d
 
 ### Building from source
 
-Requires Go 1.24+, a C/C++ compiler (cgo is mandatory — sherpa-onnx is written in C++)
+Requires Go 1.25+, a C/C++ compiler (cgo is mandatory — sherpa-onnx is written in C++)
 and Node 22+ for the web interface.
 
 ```bash
