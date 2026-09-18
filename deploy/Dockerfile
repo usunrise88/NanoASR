@@ -9,20 +9,24 @@ COPY web/ ./
 RUN npm run build
 
 # ---- server ----------------------------------------------------------------
-# cgo is required: sherpa-onnx is a C++ library behind a C API.
-FROM golang:1.24-bookworm AS build
+# cgo is required: sherpa-onnx is a C++ library behind a C API. The version
+# tracks the go directive in go.mod, because the image pins GOTOOLCHAIN=local:
+# an older toolchain here does not download a newer one, it refuses to build.
+FROM golang:1.25-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 COPY --from=web /src/web/dist ./internal/ui/dist
 ARG VERSION=dev
+# The shared libraries are copied out in the same step that builds, and not in
+# one of its own, because the module cache is a cache mount rather than part of
+# the image: outside a step that mounts it, /go/pkg/mod is an empty directory.
+# Keeping both outputs in one layer also survives a cache hit that skips the
+# build entirely.
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 go build -ldflags "-X main.version=${VERSION}" -o /out/nanoasr ./cmd/nanoasr
-
-# The shared libraries live in the module cache; copy them next to the binary
-# so the runtime image does not need Go at all.
-RUN mkdir -p /out/lib && \
+    CGO_ENABLED=1 go build -ldflags "-X main.version=${VERSION}" -o /out/nanoasr ./cmd/nanoasr && \
+    mkdir -p /out/lib && \
     cp "$(go env GOMODCACHE)"/github.com/k2-fsa/sherpa-onnx-go-linux@*/lib/x86_64-unknown-linux-gnu/*.so /out/lib/
 
 # ---- runtime ---------------------------------------------------------------

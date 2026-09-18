@@ -90,6 +90,81 @@
 
 ## Установка
 
+### Одной командой
+
+Linux, служба systemd:
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash
+```
+
+Windows, служба, в PowerShell:
+
+```powershell
+irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+```
+
+Каждый из скриптов определяет последний релиз, сверяет загруженное с опубликованным
+`sha256sums.txt`, распаковывает архив, пишет конфигурацию с двумя ключами API,
+загружает модели по умолчанию и оставляет работающую службу; ключи и адрес выводятся в
+конце. Повторный запуск — это обновление на месте: служба сначала останавливается,
+конфигурация и модели сохраняются.
+
+| | Linux | Windows |
+|---|---|---|
+| Бинарь и библиотеки | `/opt/nanoasr` | `C:\Program Files\NanoASR` |
+| Конфигурация, модели, база задач | `/var/lib/nanoasr` | `C:\ProgramData\NanoASR` |
+| Служба | `systemctl status nanoasr` | `Get-Service NanoASR` |
+| Журнал | `journalctl -u nanoasr -f` | `C:\ProgramData\NanoASR\logs\nanoasr.log` |
+
+Ни один из скриптов ничего не меняет, пока не проверит то, что может проверить:
+архитектуру, glibc против musl, запущен ли systemd, права администратора. В Windows
+скрипт сам запрашивает повышение прав и продолжает работу в окне, где они есть; в Linux
+привилегированные шаги выполняются через `sudo` по одному — скрипту, пришедшему по
+конвейеру, нечего перезапускать от имени root. ffmpeg устанавливается, если его нет, а
+система предлагает очевидный способ: без него принимаются только WAV и сырой PCM.
+
+Параметры задаются флагами, а для формы с конвейером, которая флаги принять не может, —
+переменными окружения:
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --addr 0.0.0.0:8080
+NANOASR_ADDR=0.0.0.0:8080 curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash
+```
+
+```powershell
+$env:NANOASR_ADDR = "0.0.0.0:8080"
+irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+```
+
+| Linux | Windows | Переменная | |
+|---|---|---|---|
+| `--version TAG` | `-Version TAG` | `NANOASR_VERSION` | установить конкретный релиз |
+| `--addr HOST:PORT` | `-Addr HOST:PORT` | `NANOASR_ADDR` | адрес прослушивания, по умолчанию `127.0.0.1:8080` |
+| `--prefix DIR` | `-Prefix DIR` | `NANOASR_PREFIX` | куда кладётся бинарь |
+| `--data-dir DIR` | `-DataDir DIR` | `NANOASR_DATA_DIR` | куда кладутся модели и база задач |
+| `--no-ui` | `-NoUI` | `NANOASR_UI=0` | сборка без веб-интерфейса |
+| `--no-download` | `-NoDownload` | `NANOASR_DOWNLOAD=0` | написать конфигурацию, модели не загружать |
+| `--no-ffmpeg` | `-NoFfmpeg` | `NANOASR_FFMPEG=0` | не трогать ffmpeg |
+| `--no-start` | `-NoStart` | `NANOASR_START=0` | установить всё, ничего не запускать |
+| `--uninstall` | `-Uninstall` | `NANOASR_UNINSTALL=1` | остановить и удалить установку |
+| `--purge` | `-Purge` | `NANOASR_PURGE=1` | вместе с предыдущим — удалить и данные |
+
+`--help` и `-Help` перечисляют остальное. Удаление сохраняет каталог данных — модели,
+базу задач и спул, — если не добавлен `--purge`:
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --uninstall
+```
+
+```powershell
+$env:NANOASR_UNINSTALL = 1
+irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+```
+
+Адрес, отличный от локального, в Windows понимается буквально: установщик открывает
+этот порт TCP в брандмауэре и сообщает об этом. В Linux брандмауэр не затрагивается.
+
 ### Готовые сборки
 
 Архивы публикуются на [странице релизов](https://github.com/usunrise88/NanoASR/releases).
@@ -115,8 +190,9 @@ cd ~/nanoasr
 
 ### Служба systemd
 
-Файл `nanoasr.service` входит в состав Linux-архива. Разметка каталогов: бинарь и
-конфигурация в `/opt/nanoasr`, модели, база задач и спул — в `/var/lib/nanoasr`.
+То же самое делает `install.sh`; ниже — как сделать это вручную. Файл `nanoasr.service`
+входит в состав Linux-архива. Разметка каталогов: бинарь и конфигурация в
+`/opt/nanoasr`, модели, база задач и спул — в `/var/lib/nanoasr`.
 
 ```bash
 sudo useradd -r -s /usr/sbin/nologin nanoasr
@@ -159,6 +235,45 @@ systemctl status nanoasr
 journalctl -u nanoasr -n 50 --no-pager
 ```
 
+### Служба Windows
+
+То же самое делает `install.ps1`. Службу регистрирует сам бинарь, поэтому для установки
+вручную ничего, кроме него, не нужно:
+
+```powershell
+nanoasr.exe init -config C:\ProgramData\NanoASR\nanoasr.yaml -data-dir C:\ProgramData\NanoASR
+nanoasr.exe --install
+```
+
+`--install` создаёт службу, ставит её на автозапуск (с задержкой: она читает гигабайты
+весов, и ничто её не ждёт), перезапускает при сбое через 5, 15 и 60 секунд и запускает.
+Конфигурацию, с которой сервер не стартует, он регистрировать отказывается — в
+`nanoasr.yaml` из архива ключей нет, а служба, которая устанавливается, стартует и тут
+же завершается, нигде себя не объясняет, — и печатает команду `init`, которая пишет
+рабочую.
+
+| | |
+|---|---|
+| `nanoasr --install` | зарегистрировать и запустить: `-config FILE`, `-log-file FILE`, `-name NAME`, `-manual`, `-no-start`, `-account`, `-password` |
+| `nanoasr --uninstall` | остановить и удалить службу; конфигурация, модели и база остаются |
+| `nanoasr --start`, `--stop`, `--restart` | как называются |
+| `nanoasr --status` | состояние, идентификатор процесса, тип запуска, учётная запись и зарегистрированная командная строка |
+
+У каждой команды есть и форма `nanoasr service install`. Всё, кроме `--status`, меняет
+диспетчер служб и требует PowerShell с правами администратора; команда говорит об этом
+сама, а не падает с ошибкой доступа тремя уровнями ниже. Повторный `--install` поверх
+существующей службы обновляет её на месте — это то, что нужно при переезде в новый
+каталог.
+
+У службы Windows нет консоли, поэтому всё, что сервер пишет в стандартный поток ошибок,
+пропадает. Служба всегда регистрируется с `-log-file`, по умолчанию
+`C:\ProgramData\NanoASR\logs\nanoasr.log`; файл ротируется на 64 МБ и хранит одно
+предыдущее поколение. Причина, по которой служба завершилась, записывается туда до
+выхода процесса.
+
+Служба работает от LocalSystem, если `-account` не называет другую учётную запись — у
+неё уже должно быть право «Вход в качестве службы», эта команда его не выдаёт.
+
 ### Docker
 
 ```bash
@@ -174,7 +289,7 @@ NANOASR_AUTH_KEYS=sk-... docker compose -f deploy/docker-compose.yml up -d
 
 ### Сборка из исходников
 
-Требуется Go 1.24+, компилятор C/C++ (cgo обязателен — sherpa-onnx написан на C++) и
+Требуется Go 1.25+, компилятор C/C++ (cgo обязателен — sherpa-onnx написан на C++) и
 Node 22+ для сборки веб-интерфейса.
 
 ```bash
@@ -191,6 +306,18 @@ ffmpeg опционален. Без него доступны WAV и PCM, вкл
 
 Веса моделей, база задач и спул лежат в каталоге данных и переживают обновление любым
 из способов. Версию после обновления показывает `nanoasr version` и ответ `/healthz`.
+
+**Одной командой.** Повторный запуск установщика — это обновление: он останавливает
+службу, заменяет бинарь и библиотеки, сохраняет конфигурацию и модели и запускает
+службу снова.
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash
+```
+
+```powershell
+irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+```
 
 **Архив и systemd.** Архив содержит собственный `nanoasr.yaml`, поэтому распаковка
 поверх каталога перезаписала бы рабочую конфигурацию — её нужно исключить:
@@ -209,7 +336,8 @@ sudo systemctl start nanoasr
 
 **Архив без systemd, включая Windows.** Остановить процесс, распаковать архив поверх
 каталога, сохранив свою конфигурацию, запустить снова. В Windows следует заменить
-`nanoasr.exe` и файлы `*.dll` вместе — библиотеки и бинарь версионируются совместно.
+`nanoasr.exe` и файлы `*.dll` вместе — библиотеки и бинарь версионируются совместно; а
+если установка переехала, `nanoasr.exe --install` переводит службу на новое место.
 
 **Docker.** Пересборка образа с сохранением тома данных:
 
