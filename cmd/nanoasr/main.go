@@ -4,6 +4,7 @@
 //	nanoasr serve   [-config path]   run the HTTP server
 //	nanoasr key     [list|issue|remove]  manage the api keys in a config file
 //	nanoasr models  [list|pull id]   inspect and fetch models
+//	nanoasr service [install|...]    register the Windows service (also: --install)
 //	nanoasr version                  print versions, including the native libs
 package main
 
@@ -12,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -34,6 +36,19 @@ import (
 var version = "dev"
 
 func main() {
+	// Asked before the arguments are looked at: a service control manager
+	// starts this process with the registered command line and no console, and
+	// a process that serves without reporting in over the SCM pipe is killed
+	// thirty seconds later as unresponsive. Everywhere else this is false and
+	// the dispatch below runs as it always has.
+	if handled, err := runAsService(); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "nanoasr:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -41,18 +56,26 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "serve":
-		err = serve(os.Args[2:])
+		err = serve(context.Background(), os.Args[2:])
 	case "init":
 		err = initCommand(os.Args[2:])
 	case "key", "keys":
 		err = keyCommand(os.Args[2:])
 	case "models":
 		err = models(os.Args[2:])
+	case "service":
+		err = serviceCommand(os.Args[2:])
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
 		usage()
 	default:
+		// `nanoasr --install` is how a Windows program that registers itself is
+		// invoked, so the service verbs answer to that spelling too.
+		if verb, ok := serviceFlag(os.Args[1]); ok {
+			err = serviceCommand(append([]string{verb}, os.Args[2:]...))
+			break
+		}
 		usage()
 		os.Exit(2)
 	}
@@ -66,13 +89,17 @@ func usage() {
 	fmt.Fprint(os.Stderr, `nanoasr — offline speech recognition server
 
   nanoasr init    [-config FILE] [-data-dir DIR] [-addr ADDR] [-force]
-  nanoasr serve   [-config FILE] [-addr ADDR]
+  nanoasr serve   [-config FILE] [-addr ADDR] [-log-file FILE]
   nanoasr key     list | issue NAME [-admin] [-rps N] | remove NAME
   nanoasr models  list | catalog | pull ID... | inspect DIR [--probe WAV]
+  nanoasr service install | uninstall | start | stop | restart | status
   nanoasr version
 
 Start here: "nanoasr init" writes a configuration, issues an admin and a
 user key, and downloads the models a Russian deployment needs.
+
+On Windows, "nanoasr --install" registers the service that runs it at boot;
+on Linux the same job is done by the nanoasr.service unit in the archive.
 
 Configuration precedence: flags > NANOASR_* env > config file > computed defaults.
 `)
@@ -88,12 +115,31 @@ func printVersion() {
 	fmt.Printf("ui          %v\n", ui.Enabled)
 }
 
-func serve(args []string) error {
+func serve(ctx context.Context, args []string) (rerr error) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("config", os.Getenv("NANOASR_CONFIG"), "path to nanoasr.yaml")
 	addr := fs.String("addr", "", "listen address (overrides config)")
+	logPath := fs.String("log-file", os.Getenv("NANOASR_LOG_FILE"), "append the log here instead of writing it to stderr")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	logw, closeLog, err := openLog(*logPath)
+	if err != nil {
+		return err
+	}
+	defer closeLog()
+
+	// Every failure below is reported by returning, and the caller prints it to
+	// stderr — a handle that goes nowhere when the control manager started this
+	// process. Without this, a service that refuses to start, because the port
+	// is taken or a model is missing, leaves nothing to read anywhere.
+	if logw != os.Stderr {
+		defer func() {
+			if rerr != nil {
+				slog.New(slog.NewJSONHandler(logw, nil)).Error("nanoasr is stopping", "err", rerr.Error())
+			}
+		}()
 	}
 
 	cfg, err := config.Load(*cfgPath)
@@ -108,7 +154,7 @@ func serve(args []string) error {
 		}
 	}
 
-	log := newLogger(cfg.Log)
+	log := newLogger(cfg.Log, logw)
 	so, ort := sherpa.Versions()
 	log.Info("starting nanoasr",
 		"version", version, "sherpa_onnx", so, "onnxruntime", ort,
@@ -125,7 +171,10 @@ func serve(args []string) error {
 			"note", "resident models plus decoded PCM of every concurrent job")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// Derived from the caller's context rather than from Background: under a
+	// Windows service the stop comes from the control manager and cancels that
+	// one, and there are no signals to wait for.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// A second SIGINT or SIGTERM during a stuck shutdown must fall through to
@@ -424,7 +473,7 @@ func keySpecs(keys []config.APIKey) []httpx.KeySpec {
 	return out
 }
 
-func newLogger(c config.Log) *slog.Logger {
+func newLogger(c config.Log, w io.Writer) *slog.Logger {
 	level := slog.LevelInfo
 	switch c.Level {
 	case "debug":
@@ -436,7 +485,7 @@ func newLogger(c config.Log) *slog.Logger {
 	}
 	opts := &slog.HandlerOptions{Level: level}
 	if c.Format == "text" {
-		return slog.New(slog.NewTextHandler(os.Stderr, opts))
+		return slog.New(slog.NewTextHandler(w, opts))
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	return slog.New(slog.NewJSONHandler(w, opts))
 }
