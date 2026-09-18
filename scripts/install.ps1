@@ -286,10 +286,16 @@ function Wait-ForHealth {
 }
 
 function Install-NanoASR {
-    if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+    # PROCESSOR_ARCHITECTURE describes the PowerShell host, not the machine: a
+    # 32-bit host on 64-bit Windows says x86 and puts the truth in the other
+    # variable. Reading only the first would refuse to install on a machine that
+    # is perfectly able to run this.
+    $arch = $env:PROCESSOR_ARCHITEW6432
+    if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
+    if ($arch -eq 'ARM64') {
         Warn "this is an ARM64 machine; the x64 build runs under emulation and will be slow"
-    } elseif ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
-        throw "the published builds are x86-64 and this is $env:PROCESSOR_ARCHITECTURE"
+    } elseif ($arch -ne 'AMD64') {
+        throw "the published builds are x86-64 and this is $arch"
     }
 
     if (-not $Version) {

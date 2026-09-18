@@ -105,27 +105,42 @@ func (w *windowsService) Execute(_ []string, r <-chan svc.ChangeRequest, changes
 // drain waits for the server to finish shutting down, telling the control
 // manager that progress is still being made.
 //
-// Without the running checkpoint the SCM gives up after its own timeout and
+// Without the rising checkpoint the SCM gives up after its own timeout and
 // reports a service that did not stop, which is a lie whenever a long file is
-// still being written out.
+// still being written out. With it, the wait is bounded here instead: the
+// systemd unit gives a stuck shutdown 45 seconds before killing it, and there
+// is no second signal to fall through to on Windows.
+//
+// The exit code is zero whatever the server returned. A stop was asked for and
+// the process is stopping; reporting failure would be read by the
+// restart-on-failure policy as a crash, and an operator who ran Stop-Service
+// would watch the service come back.
 func (w *windowsService) drain(done <-chan error, changes chan<- svc.Status) uint32 {
 	const hint = 5 * time.Second
 	checkpoint := uint32(1)
-	changes <- svc.Status{State: svc.StopPending, CheckPoint: checkpoint, WaitHint: uint32(hint.Milliseconds())}
+	report := func() {
+		changes <- svc.Status{State: svc.StopPending, CheckPoint: checkpoint, WaitHint: uint32(hint.Milliseconds())}
+	}
+	report()
 
 	tick := time.NewTicker(hint / 2)
 	defer tick.Stop()
+	deadline := time.After(serviceStopTimeout)
 	for {
 		select {
 		case err := <-done:
 			if err != nil {
+				// serve has already written this to the log file; stderr is
+				// for the case where the service was started from a console.
 				fmt.Fprintln(os.Stderr, "nanoasr:", err)
-				return 1
 			}
+			return 0
+		case <-deadline:
+			fmt.Fprintf(os.Stderr, "nanoasr: shutdown did not finish within %s; exiting anyway\n", serviceStopTimeout)
 			return 0
 		case <-tick.C:
 			checkpoint++
-			changes <- svc.Status{State: svc.StopPending, CheckPoint: checkpoint, WaitHint: uint32(hint.Milliseconds())}
+			report()
 		}
 	}
 }
@@ -275,7 +290,7 @@ func installService(name, cfgPath, logPath, account, password string, manual, no
 	fmt.Printf("binary      %s\n", commandLine(exe, args...))
 	fmt.Printf("config      %s\n", cfgPath)
 	fmt.Printf("log         %s\n", logPath)
-	fmt.Printf("start       %s\n", map[bool]string{true: "manual", false: "automatic (delayed)"}[manual])
+	fmt.Printf("start       %s\n", startDescription(startType, conf.DelayedAutoStart))
 	fmt.Printf("account     %s\n", accountNote(account))
 
 	if noStart {
@@ -416,7 +431,7 @@ func statusService(name string) error {
 	// service is actually using, which is the question behind most of the ones
 	// that end up here.
 	if conf, err := s.Config(); err == nil {
-		fmt.Printf("start    %s\n", startTypeName(conf.StartType))
+		fmt.Printf("start    %s\n", startDescription(conf.StartType, conf.DelayedAutoStart))
 		fmt.Printf("account  %s\n", accountNote(conf.ServiceStartName))
 		fmt.Printf("command  %s\n", conf.BinaryPathName)
 	}
@@ -614,6 +629,15 @@ func stateName(s svc.State) string {
 		return "paused"
 	}
 	return fmt.Sprintf("state %d", s)
+}
+
+// startDescription reports the start type together with the delayed-start
+// flag, which is a separate setting beside it rather than a type of its own.
+func startDescription(t uint32, delayed bool) string {
+	if t == mgr.StartAutomatic && delayed {
+		return "automatic (delayed)"
+	}
+	return startTypeName(t)
 }
 
 func startTypeName(t uint32) string {
