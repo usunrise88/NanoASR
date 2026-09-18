@@ -30,6 +30,9 @@ WITH_FFMPEG="${NANOASR_FFMPEG:-1}"
 START="${NANOASR_START:-1}"
 ACTION=install
 PURGE=0
+# The piped form cannot pass a flag either, so these two have variables as well.
+if [[ "${NANOASR_UNINSTALL:-}" == "1" ]]; then ACTION=uninstall; fi
+if [[ "${NANOASR_PURGE:-}" == "1" ]]; then PURGE=1; fi
 
 UNIT_DIR=/etc/systemd/system
 SUDO=""
@@ -66,7 +69,8 @@ Install NanoASR as a systemd service.
 
 Each option has an environment variable: NANOASR_VERSION, NANOASR_PREFIX,
 NANOASR_DATA_DIR, NANOASR_ADDR, NANOASR_USER, NANOASR_SERVICE, NANOASR_UI=0,
-NANOASR_DOWNLOAD=0, NANOASR_FFMPEG=0, NANOASR_START=0. A flag wins over one.
+NANOASR_DOWNLOAD=0, NANOASR_FFMPEG=0, NANOASR_START=0, NANOASR_UNINSTALL=1,
+NANOASR_PURGE=1. A flag wins over one.
 EOF
 }
 
@@ -179,12 +183,15 @@ fetch() { curl -fSL -# --retry 4 --retry-delay 2 --connect-timeout 20 -o "$2" "$
 # the bytes came from GitHub; this says that all of them arrived. A release from
 # before the checksums were published is not a reason to refuse.
 verify() {
-  local dir="$1" file="$2" line
+  local dir="$1" file="$2" line pattern
   if ! fetch "$BASE/sha256sums.txt" "$dir/sha256sums.txt" 2>/dev/null; then
     warn "$VERSION publishes no sha256sums.txt, so $file was not verified"
     return
   fi
-  line="$(grep -E "[[:space:]][*]?${file}\$" "$dir/sha256sums.txt" || true)"
+  # The name is matched literally: it is full of dots, and a dot in a pattern
+  # matches anything, which is not what a checksum lookup may do.
+  pattern="$(printf '%s' "$file" | sed 's/[^[:alnum:]_-]/\\&/g')"
+  line="$(grep -E "[[:space:]][*]?${pattern}\$" "$dir/sha256sums.txt" || true)"
   [[ -n "$line" ]] || die "sha256sums.txt does not mention $file"
   (cd "$dir" && printf '%s\n' "$line" | sha256sum -c --quiet -) || die "$file failed its checksum"
   say "checksum ok"
@@ -232,7 +239,11 @@ ensure_ffmpeg() {
 config_has_keys() {
   [[ -f "$CONFIG" ]] || return 1
   local out
-  out="$("$PREFIX/nanoasr" key list -config "$CONFIG" 2>/dev/null)" || return 1
+  # Through $SUDO because the configuration holds API keys and is written 0600
+  # to the service account: an unprivileged read fails, and a failed read that
+  # was taken to mean "no keys" would overwrite a working configuration with a
+  # fresh one on every upgrade.
+  out="$($SUDO "$PREFIX/nanoasr" key list -config "$CONFIG" 2>/dev/null)" || return 1
   [[ "$out" != *"no keys in"* ]]
 }
 

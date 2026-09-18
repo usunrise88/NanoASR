@@ -90,6 +90,82 @@ Key implementation properties:
 
 ## Installation
 
+### One command
+
+Linux, as a systemd service:
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash
+```
+
+Windows, as a service, in PowerShell:
+
+```powershell
+irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+```
+
+Either one resolves the latest release, verifies the download against the published
+`sha256sums.txt`, unpacks it, writes a configuration with two API keys, downloads the
+default models and leaves a running service behind; the keys and the URL are printed at
+the end. Run it again and it upgrades in place: the service is stopped first, and the
+configuration and the models are kept.
+
+| | Linux | Windows |
+|---|---|---|
+| Binary and libraries | `/opt/nanoasr` | `C:\Program Files\NanoASR` |
+| Configuration, models, database | `/var/lib/nanoasr` | `C:\ProgramData\NanoASR` |
+| Service | `systemctl status nanoasr` | `Get-Service NanoASR` |
+| Log | `journalctl -u nanoasr -f` | `C:\ProgramData\NanoASR\logs\nanoasr.log` |
+
+Neither script changes anything before it has checked what it can: the architecture,
+glibc against musl, whether systemd is running, administrative rights. On Windows the
+script elevates itself and continues in the window that has the rights; on Linux the
+privileged steps go through `sudo` one at a time, because a script that arrived through
+a pipe has nothing to re-execute as root. ffmpeg is installed when it is missing and the
+system has an obvious way to install it — without it only WAV and raw PCM are accepted.
+
+Options are flags, and, for the piped form that cannot take flags, environment
+variables:
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --addr 0.0.0.0:8080
+NANOASR_ADDR=0.0.0.0:8080 curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash
+```
+
+```powershell
+$env:NANOASR_ADDR = "0.0.0.0:8080"
+irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+```
+
+| Linux | Windows | Environment | |
+|---|---|---|---|
+| `--version TAG` | `-Version TAG` | `NANOASR_VERSION` | install a particular release |
+| `--addr HOST:PORT` | `-Addr HOST:PORT` | `NANOASR_ADDR` | listen address, default `127.0.0.1:8080` |
+| `--prefix DIR` | `-Prefix DIR` | `NANOASR_PREFIX` | where the binary goes |
+| `--data-dir DIR` | `-DataDir DIR` | `NANOASR_DATA_DIR` | where the models and the database go |
+| `--no-ui` | `-NoUI` | `NANOASR_UI=0` | the build without the web interface |
+| `--no-download` | `-NoDownload` | `NANOASR_DOWNLOAD=0` | write the configuration, fetch no models |
+| `--no-ffmpeg` | `-NoFfmpeg` | `NANOASR_FFMPEG=0` | leave ffmpeg alone |
+| `--no-start` | `-NoStart` | `NANOASR_START=0` | install everything, start nothing |
+| `--uninstall` | `-Uninstall` | `NANOASR_UNINSTALL=1` | stop and remove the installation |
+| `--purge` | `-Purge` | `NANOASR_PURGE=1` | with the above, also delete the data |
+
+`--help` and `-Help` list the rest. Uninstalling keeps the data directory — the models,
+the job database and the spool — unless `--purge` is given as well:
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --uninstall
+```
+
+```powershell
+$env:NANOASR_UNINSTALL = 1
+irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+```
+
+A binding address that is not the loopback is taken at face value on Windows: the
+installer opens that TCP port in the firewall and says so. On Linux nothing touches the
+firewall.
+
 ### Release archives
 
 Archives are published on the [releases page](https://github.com/usunrise88/NanoASR/releases).
@@ -115,8 +191,9 @@ cd ~/nanoasr
 
 ### systemd service
 
-The Linux archive contains a `nanoasr.service` unit. The directory layout is the binary
-and configuration in `/opt/nanoasr`, and models, job database and spool in
+This is what `install.sh` does, for anyone who would rather do it themselves. The Linux
+archive contains a `nanoasr.service` unit. The directory layout is the binary and
+configuration in `/opt/nanoasr`, and models, job database and spool in
 `/var/lib/nanoasr`.
 
 ```bash
@@ -160,6 +237,45 @@ is explained in the journal:
 journalctl -u nanoasr -n 50 --no-pager
 ```
 
+### Windows service
+
+This is what `install.ps1` does. The service is registered by the binary itself, so an
+installation done by hand needs nothing but the binary:
+
+```powershell
+nanoasr.exe init -config C:\ProgramData\NanoASR\nanoasr.yaml -data-dir C:\ProgramData\NanoASR
+nanoasr.exe --install
+```
+
+`--install` creates the service, sets it to start at boot (delayed, because it reads
+gigabytes of weights and nothing upstream is waiting for it), restarts it on failure
+after 5, 15 and 60 seconds, and starts it. It refuses to register a configuration the
+server would not start with — the `nanoasr.yaml` in the archive has no keys in it, and a
+service that installs, starts and exits explains itself nowhere — and prints the `init`
+command that writes a working one.
+
+| | |
+|---|---|
+| `nanoasr --install` | register and start: `-config FILE`, `-log-file FILE`, `-name NAME`, `-manual`, `-no-start`, `-account`, `-password` |
+| `nanoasr --uninstall` | stop and remove the service; the configuration, models and database stay |
+| `nanoasr --start`, `--stop`, `--restart` | as they say |
+| `nanoasr --status` | state, process id, start type, account and the registered command line |
+
+Every verb is also spelled `nanoasr service install` and so on. Everything except
+`--status` changes the service control manager and has to run elevated; the command
+says so itself instead of failing with an access error from three layers down. Running
+`--install` again over an existing service updates it in place, which is what an upgrade
+to a new directory needs.
+
+A Windows service has no console, so anything the server writes to standard error is
+discarded. The service is therefore always registered with a `-log-file`, by default
+`C:\ProgramData\NanoASR\logs\nanoasr.log`, which rolls over at 64 MB and keeps one
+previous generation. The reason a service exits is written there before the process
+ends.
+
+The service runs as LocalSystem unless `-account` names another one, which has to hold
+"Log on as a service" already — this does not grant it.
+
 ### Docker
 
 ```bash
@@ -195,6 +311,18 @@ Model weights, the job database and the spool live in the data directory and sur
 update by any of the methods below. The version after an update is reported by
 `nanoasr version` and by the `/healthz` response.
 
+**One command.** Running the installer again is an upgrade: it stops the service,
+replaces the binary and the libraries, keeps the configuration and the models, and
+starts it again.
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash
+```
+
+```powershell
+irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+```
+
 **Archive with systemd.** The archive ships its own `nanoasr.yaml`, so unpacking over
 the directory would overwrite the working configuration; exclude it:
 
@@ -212,8 +340,9 @@ web interface — is the same procedure: only the binary changes.
 
 **Archive without systemd, including Windows.** Stop the process, unpack the archive
 over the directory while keeping your configuration, and start it again. On Windows,
-replace `nanoasr.exe` and the `*.dll` files together: the binary and the libraries are
-versioned as a unit.
+replace `nanoasr.exe` and the `*.dll` files together — the binary and the libraries are
+versioned as a unit — and if the installation moved, `nanoasr.exe --install` points the
+service at the new location.
 
 **Docker.** Rebuild the image, keeping the data volume:
 
