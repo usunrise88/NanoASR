@@ -145,13 +145,44 @@ jobs:
           path: artifacts
           merge-multiple: true
       - run: ls -la artifacts
+
+      # The installers ship as release assets so that the one-liners in the
+      # README always point at a script and the archives it knows how to
+      # install: /releases/latest/download/install.sh resolves to whichever
+      # release is current, and that script then installs exactly it.
+      - name: stage the installers and the checksums
+        run: |
+          cp scripts/install.sh scripts/install.ps1 artifacts/
+          # Named rather than globbed so that sha256sums.txt cannot end up
+          # listing itself, which is how a checksum file becomes unverifiable.
+          (cd artifacts && sha256sum nanoasr-* install.sh install.ps1 > sha256sums.txt)
+          cat artifacts/sha256sums.txt
+
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           notes=$(cat <<'EOF'
-          Four archives, all self-contained apart from ffmpeg and the model
+          ## Install
+
+          Linux, as a systemd service:
+
+              curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash
+
+          Windows, as a service, in PowerShell:
+
+              irm https://github.com/${{ github.repository }}/releases/latest/download/install.ps1 | iex
+
+          Either one works out the release, verifies what it downloads against
+          `sha256sums.txt`, writes a configuration with two API keys, downloads
+          the models and leaves a running service behind. Run it again to
+          upgrade; the configuration and the models are kept. `--uninstall`
+          (`-Uninstall` in PowerShell) undoes it.
+
+          ## Archives
+
+          Four of them, all self-contained apart from ffmpeg and the model
           weights:
 
           | file | for |
@@ -171,7 +202,8 @@ jobs:
               ./nanoasr serve -config nanoasr.yaml
 
           `init` writes the configuration, issues an admin and a user key and
-          downloads the models. See README.md in the archive.
+          downloads the models. On Windows, `nanoasr.exe --install` registers
+          the service. See README.md in the archive.
           EOF
           )
           # Idempotent on purpose: re-running the workflow for a tag replaces
