@@ -94,6 +94,20 @@ func sampleResult() *core.Result {
 	}
 }
 
+// undiarizedResult is the same transcript without speaker labels, which is what
+// the replaced service actually returns: it runs whisperx with an empty
+// HF_TOKEN, so its /asr and /asr_task do not publish diarize at all.
+func undiarizedResult() *core.Result {
+	res := sampleResult()
+	for i := range res.Segments {
+		res.Segments[i].Speaker = nil
+		for j := range res.Segments[i].Words {
+			res.Segments[i].Words[j].Speaker = nil
+		}
+	}
+	return res
+}
+
 // --- harness ----------------------------------------------------------------
 
 func newServer(t *testing.T, svc core.Service, models core.ModelService) *httptest.Server {
@@ -178,7 +192,7 @@ func query(pairs ...string) url.Values {
 // The default output is txt served as text/plain with the two headers this
 // contract promises. All three are what a borrowed client keys off.
 func TestASRDefaultsToPlainText(t *testing.T) {
-	svc := &fakeService{result: sampleResult()}
+	svc := &fakeService{result: undiarizedResult()}
 	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", nil)
 
 	if resp.StatusCode != http.StatusOK {
@@ -305,7 +319,7 @@ func TestASRJSONAlwaysCarriesWords(t *testing.T) {
 // txt is one line per segment. A client splitting the body on newlines to get
 // utterances must not receive one enormous utterance.
 func TestASRTextIsOneLinePerSegment(t *testing.T) {
-	res := sampleResult()
+	res := undiarizedResult()
 	res.Segments = append(res.Segments, core.Segment{
 		ID: 1, Start: 2.5, End: 4.0, Text: "  как дела  ",
 	})
@@ -317,18 +331,62 @@ func TestASRTextIsOneLinePerSegment(t *testing.T) {
 	}
 }
 
-// The reference emits no TSV header, unlike whisper's own writer. A client
-// reading the first line as data would take the header for a segment.
-func TestASRTSVHasNoHeader(t *testing.T) {
-	svc := &fakeService{result: sampleResult()}
+// Every TSV writer the reference can reach prints "start end text" first —
+// whisperx's, faster-whisper's and whisper's own. A client that skips the first
+// line as a header would lose a segment if we left it out.
+func TestASRTSVCarriesTheHeaderRow(t *testing.T) {
+	svc := &fakeService{result: undiarizedResult()}
 	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", query("output", outputTSV))
 
-	body := bodyOf(t, resp)
-	if strings.HasPrefix(body, "start\t") {
-		t.Errorf("TSV starts with a header row:\n%s", body)
-	}
-	if got, want := body, "500\t2040\tПривет, мир\n"; got != want {
+	if got, want := bodyOf(t, resp), "start\tend\ttext\n500\t2040\tПривет, мир\n"; got != want {
 		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+// Timings arrive as float32 and widen to float64, so without the rounding the
+// reference applies a word would be printed as 0.9200000166893005. The value is
+// the same to within a microsecond; the bytes a client compares are not.
+func TestASRJSONRoundsTimingsLikeTheReference(t *testing.T) {
+	res := undiarizedResult()
+	res.Segments[0].Words[0].Start = float64(float32(0.92))
+	res.Segments[0].Words[0].End = float64(float32(1.16))
+	res.Segments[0].Words[0].Confidence = float64(float32(0.8137))
+	res.Segments[0].Start = float64(float32(0.92))
+
+	svc := &fakeService{result: res}
+	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", query("output", outputJSON))
+
+	body := bodyOf(t, resp)
+	for _, want := range []string{`"start":0.92`, `"end":1.16`, `"score":0.814`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body is missing %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "0.9200000") {
+		t.Errorf("body carries the float32 expansion:\n%s", body)
+	}
+}
+
+// The reference dumps with ensure_ascii=False and no escaping of its own, so a
+// transcript containing an ampersand travels as one.
+func TestASRJSONDoesNotEscapeHTML(t *testing.T) {
+	res := undiarizedResult()
+	res.Segments[0].Text = "Иванов & Ко <АО>"
+	res.Segments[0].Words[0].Word = "Иванов"
+	res.Segments[0].Words[1].Word = "&"
+
+	svc := &fakeService{result: res}
+	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", query("output", outputJSON))
+
+	body := bodyOf(t, resp)
+	if strings.Contains(body, `\u0026`) || strings.Contains(body, `\u003c`) {
+		t.Errorf("body escaped characters the reference leaves alone:\n%s", body)
+	}
+	if !strings.Contains(body, "Иванов & Ко <АО>") {
+		t.Errorf("body lost the literal text:\n%s", body)
+	}
+	if strings.HasSuffix(body, "\n") {
+		t.Errorf("body ends with a newline json.dump would not write: %q", body)
 	}
 }
 
@@ -368,17 +426,25 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-func TestASRRejectsAnUnknownOutput(t *testing.T) {
-	svc := &fakeService{result: sampleResult()}
+// The reference declares an output enum and never enforces it: the value
+// reaches a writer that picks by name and falls through to plain text. A
+// request it answered must not become an error here.
+func TestASRRendersAnUnknownOutputAsText(t *testing.T) {
+	svc := &fakeService{result: undiarizedResult()}
 	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", query("output", "docx"))
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, bodyOf(t, resp))
 	}
-	var env errorEnvelope
-	decodeBody(t, resp, &env)
-	if !strings.Contains(env.Detail.Message, "docx") || env.Detail.Param != "output" {
-		t.Errorf("detail = %+v", env.Detail)
+	// The filename keeps the extension that was asked for, as upstream's does.
+	if cd := resp.Header.Get("Content-Disposition"); cd != `attachment; filename="call.wav.docx"` {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+	if w := resp.Header.Get(warningsHeader); !strings.Contains(w, "output_unknown_rendered_as_txt") {
+		t.Errorf("%s = %q, want the fallback named", warningsHeader, w)
+	}
+	if got, want := bodyOf(t, resp), "Привет, мир\n"; got != want {
+		t.Errorf("body = %q, want the txt rendering %q", got, want)
 	}
 }
 
@@ -451,11 +517,74 @@ func TestInertParametersWarnOnlyWhenSent(t *testing.T) {
 	}
 }
 
+// A parameter this dialect can reject is rejected the way FastAPI would: 422
+// with a list, not this contract's object-shaped detail.
 func TestASRRejectsAMalformedBoolean(t *testing.T) {
 	svc := &fakeService{result: sampleResult()}
 	resp := post(t, newServer(t, svc, fakeModels{}), "/asr", "call.wav", query("diarize", "maybe"))
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", resp.StatusCode)
+	}
+	var env validationEnvelope
+	decodeBody(t, resp, &env)
+	if len(env.Detail) != 1 {
+		t.Fatalf("detail = %+v, want one entry", env.Detail)
+	}
+	if got, want := env.Detail[0].Loc, []string{"query", "diarize"}; !equalStrings(got, want) {
+		t.Errorf("loc = %v, want %v", got, want)
+	}
+}
+
+// The reference answers a request with no file with pydantic's own 422, and a
+// client that reads detail[0].msg off it finds nothing if we send an object.
+func TestMissingAudioFileIsAValidationError(t *testing.T) {
+	svc := &fakeService{result: sampleResult()}
+	srv := newServer(t, svc, fakeModels{})
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/asr", &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", resp.StatusCode)
+	}
+	var env validationEnvelope
+	decodeBody(t, resp, &env)
+	if len(env.Detail) != 1 {
+		t.Fatalf("detail = %+v, want one entry", env.Detail)
+	}
+	got := env.Detail[0]
+	if !equalStrings(got.Loc, []string{"body", uploadField}) ||
+		got.Msg != "field required" || got.Type != missingFieldType {
+		t.Errorf("detail = %+v, want pydantic's missing-field shape", got)
+	}
+}
+
+// The output is now caller-chosen too, and it lands in the same quoted header
+// value the filename does.
+func TestContentDispositionEscapesTheOutput(t *testing.T) {
+	got := contentDisposition("call.wav", `"; attachment; filename="evil.sh`)
+	if strings.Count(got, `"`) != 2 {
+		t.Errorf("Content-Disposition has an unbalanced quote: %q", got)
+	}
+	// The five real formats must still travel unescaped.
+	for _, output := range []string{outputTXT, outputVTT, outputSRT, outputTSV, outputJSON} {
+		want := `attachment; filename="call.wav.` + output + `"`
+		if got := contentDisposition("call.wav", output); got != want {
+			t.Errorf("contentDisposition(%q) = %q, want %q", output, got, want)
+		}
 	}
 }
 
@@ -671,7 +800,10 @@ func TestSplitTaskID(t *testing.T) {
 		{"job_abc~srt", "job_abc", outputSRT},
 		{"job_abc~json", "job_abc", outputJSON},
 		{"job_abc", "job_abc", defaultOutput},
-		{"job_abc~docx", "job_abc~docx", defaultOutput},
+		// An output this dialect accepts but does not recognise rides the task
+		// id like any other, so polling answers in the submitted format.
+		{"job_abc~docx", "job_abc", "docx"},
+		{"job_abc~", "job_abc~", defaultOutput},
 	} {
 		id, output := splitTaskID(tc.in)
 		if id != tc.id || output != tc.output {
