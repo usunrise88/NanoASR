@@ -1,0 +1,1 @@
+{"segments": [{"start": 3600.0, "end": 3601.5, "text": "около часа", "words": [{"word": "около", "start": 3600.0, "end": 3600.4, "score": 0.5}, {"word": "часа", "start": 3600.6, "end": 3601.5, "score": 0.5}]}], "word_segments": [{"word": "около", "start": 3600.0, "end": 3600.4, "score": 0.5}, {"word": "часа", "start": 3600.6, "end": 3601.5, "score": 0.5}], "language": "ru"}

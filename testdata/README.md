@@ -11,3 +11,7 @@ Rules:
   suite fail on an unrelated model update.
 - Regenerate with `make golden-update`, never by hand.
 - Only clips that may be redistributed under the repository licence.
+
+`golden/era-whisperx/` is the exception to the regeneration rule: those files come
+from whisperX's own writers, not from this pipeline, and pin the era dialect's
+renderings to the service it replaces. Its README says how to produce them.

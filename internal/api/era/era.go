@@ -4,9 +4,17 @@
 //
 // The contract is reproduced as it is published: /asr and /detect-language from
 // the upstream project, /asr_task and /asr_task/{task_id} from the Era fork.
-// Paths, parameter names, response envelopes, the Asr-Engine and
-// Content-Disposition headers and the text/plain body of every output format are
-// all as found there.
+// Paths, parameter names, response envelopes, the Content-Disposition header and
+// the text/plain body of every output format are all as found there.
+//
+// Which body, exactly, depends on the engine the reference was configured with,
+// because its writers differ per engine. The one reproduced here is whisperx,
+// which is what the deployed service runs: its published schema offers
+// min_speakers and max_speakers (whisperx only) and offers neither vad_filter
+// nor word_timestamps (faster-whisper only), and its tracebacks name
+// app/asr_models/mbain_whisperx_engine.py. That decides the json document
+// ({segments, word_segments, language}, words carrying "score"), the subtitle
+// cue breaks and the speaker labels.
 //
 // Deliberate divergences, each documented where it happens:
 //   - GET / does not redirect to /docs. There is no Swagger UI to redirect to,
@@ -23,6 +31,16 @@
 //     a table of it in memory that a restart would lose.
 //   - every endpoint is authenticated like the rest of the server; upstream has
 //     no authentication at all.
+//   - Asr-Engine reports nanoasr. The reference echoes its ASR_ENGINE setting
+//     there, so the replaced service answers whisperx; claiming to be whisperx
+//     is the one statement in this contract a client cannot check.
+//
+// Where the reference is lenient, so is this: an output outside the published
+// enum is rendered as txt rather than refused, because its enum is documentation
+// that nothing enforces. Where it is strict, the shape is matched too: a
+// parameter this dialect does reject comes back as FastAPI's 422 with a list of
+// {loc, msg, type}, not as the object-shaped detail a raised HTTPException
+// carries.
 //
 // Warnings have no field in this contract, so they travel in the
 // X-NanoASR-Warnings header rather than not travelling at all.
@@ -226,13 +244,9 @@ func (*Adapter) asrTaskByID(svc core.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, output := splitTaskID(r.PathValue("task_id"))
 		// An explicit output wins, so a client that stored only the job id can
-		// still ask for the format it wants.
+		// still ask for the format it wants. Unknown values render as txt here
+		// too, for the reason parseParams gives.
 		if v := value(r, "output"); v != "" {
-			if !validOutput(v) {
-				writeError(w, invalid("output",
-					"output %q is not one of txt, vtt, srt, tsv, json", v))
-				return
-			}
 			output = v
 		}
 
@@ -273,9 +287,14 @@ func (*Adapter) asrTaskByID(svc core.Service) http.HandlerFunc {
 
 // splitTaskID takes the output format back off a task id. A bare job id is
 // accepted too and falls back to the default output.
+//
+// The suffix is not checked against the enum: an output this dialect accepts
+// but does not recognise is carried through the task id as faithfully as a
+// recognised one, so polling answers in the same format the submission was
+// answered in.
 func splitTaskID(taskID string) (id, output string) {
 	id, format, found := strings.Cut(taskID, taskIDSeparator)
-	if found && validOutput(format) {
+	if found && format != "" {
 		return id, format
 	}
 	return taskID, defaultOutput

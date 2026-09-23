@@ -55,12 +55,20 @@ func parseParams(r *http.Request, source core.AudioSource) (params, error) {
 		},
 	}
 
+	// An output the enum does not list is not refused. The reference declares
+	// the enum in its OpenAPI document and then never enforces it — FastAPI's
+	// Query(enum=...) only documents — so the request reaches a writer that
+	// picks by name and falls through to plain text. Rejecting it here would
+	// turn a request the replaced service answered into a 422.
 	if v := value(r, "output"); v != "" {
-		if !validOutput(v) {
-			return p, invalid("output",
-				"output %q is not one of txt, vtt, srt, tsv, json", v)
-		}
 		p.output = v
+		if !validOutput(v) {
+			p.warn = append(p.warn, core.Warning{
+				Code: "output_unknown_rendered_as_txt",
+				Message: "output " + v + " is not one of txt, vtt, srt, tsv, json; " +
+					"the transcript was rendered as txt",
+			})
+		}
 	}
 
 	// translate is refused rather than approximated: answering a translation

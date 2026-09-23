@@ -512,12 +512,34 @@ query string: `encode`, `task`, `language`, `initial_prompt`, `vad_filter`,
 `output` formats: `txt` (default), `vtt`, `srt`, `tsv`, `json`. All are served as
 `text/plain` with the `Asr-Engine` and `Content-Disposition` headers.
 
-The bodies follow the reference service rather than the native result: `txt` is one
-line per segment, `tsv` carries no header row, and `json` is
-`{"segments": [{"start", "end", "text", "words": [{"word", "start", "end", "score"}]}],
-"word_segments": [...], "language": "..."}`. Words are always present, whether or not
-`word_timestamps` was sent. Models that report no per-word confidence produce a `score`
-of 0 and the `word_confidence_unavailable` warning.
+The reference service renders these formats differently depending on which engine it
+was configured with. What is reproduced here is **whisperx**, the engine the deployed
+service runs.
+
+The bodies follow that service rather than the native result:
+
+- `txt` — one line per segment, prefixed `[spk_0]: ` when diarization ran.
+- `tsv` — a `start`, `end`, `text` header row, then integer milliseconds per segment.
+- `srt` and `vtt` — cues are built from words, not segments. Segment boundaries do not
+  break a cue: words accumulate until the gap between two consecutive word onsets
+  exceeds three seconds, and the cue spans the widest interval its words cover. SubRip
+  numbers its cues and always writes the hours; WebVTT omits them below the first hour.
+- `json` —
+  `{"segments": [{"start", "end", "text", "words": [{"word", "start", "end", "score"}]}],
+  "word_segments": [...], "language": "..."}`, with `start`, `end` and `score` rounded to
+  three decimals as whisperx's aligner rounds them.
+
+Words are always present, whether or not `word_timestamps` was sent, because the
+reference aligns every request. Models that report no per-word confidence produce a
+`score` of 0 and the `word_confidence_unavailable` warning. A model that produces no
+token timings at all yields one word per segment spanning the whole segment, reported as
+the `word_timestamps_unavailable` warning.
+
+Errors take the two shapes this contract has. A request the endpoint signature rejects —
+a missing `audio_file`, a malformed parameter — is `422` with FastAPI's list:
+`{"detail": [{"loc": ["body", "audio_file"], "msg": "field required", "type":
+"value_error.missing"}]}`. Everything else keeps the object the reference raises by hand:
+`{"detail": {"message": "task not found"}}`, with additive `code` and `param` fields.
 
 Differences from the original service:
 
@@ -528,8 +550,15 @@ Differences from the original service:
 | `encode`, `vad_filter` | Accepted, no effect: both are server settings here |
 | `min_speakers`, `max_speakers` | Reduced to an exact speaker count; a range is dropped |
 | `task_id` | Job identifier with the requested output format appended |
+| `Asr-Engine` | Reports `nanoasr`; the reference echoes its `ASR_ENGINE`, i.e. `whisperx` |
 | `GET /` | Not served: the redirect to `/docs` is not implemented |
 | Authentication | Required, as for every other dialect |
+
+An `output` outside the published enum is rendered as `txt` rather than refused: the
+reference declares that enum in its OpenAPI document and never enforces it, so a request
+it answered is answered here too. The subtitle line-width settings the reference reads
+from its environment (`SUBTITLE_MAX_LINE_WIDTH`, `SUBTITLE_MAX_LINE_COUNT`) are
+reproduced at their defaults, which is what decides the three-second cue break above.
 
 This contract has no field for warnings, so applied limitations are reported in the
 `X-NanoASR-Warnings` header as a list of codes.
