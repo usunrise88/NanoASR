@@ -1,0 +1,5 @@
+# Artifacts and derived data: hundreds of megabytes, downloaded rather than committed.
+models/
+*.npy
+*.onnx
+venv/

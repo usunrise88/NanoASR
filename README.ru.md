@@ -184,7 +184,7 @@ irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 |
 в Windows загрузчик ищет DLL рядом с исполняемым файлом.
 
 ```bash
-tar -xzf nanoasr-v1.0.0-linux-amd64.tar.gz -C ~/nanoasr
+tar -xzf nanoasr-v1.0.5-linux-amd64.tar.gz -C ~/nanoasr
 cd ~/nanoasr
 ```
 
@@ -197,7 +197,7 @@ cd ~/nanoasr
 ```bash
 sudo useradd -r -s /usr/sbin/nologin nanoasr
 sudo mkdir -p /opt/nanoasr /var/lib/nanoasr
-sudo tar -xzf nanoasr-v1.0.1-linux-amd64.tar.gz -C /opt/nanoasr
+sudo tar -xzf nanoasr-v1.0.5-linux-amd64.tar.gz -C /opt/nanoasr
 sudo chown -R nanoasr:nanoasr /opt/nanoasr /var/lib/nanoasr
 ```
 

@@ -185,7 +185,7 @@ Unpack it in full: on Linux the binary's `RUNPATH` points at `./lib`, and on Win
 loader looks for the DLLs next to the executable.
 
 ```bash
-tar -xzf nanoasr-v1.0.0-linux-amd64.tar.gz -C ~/nanoasr
+tar -xzf nanoasr-v1.0.5-linux-amd64.tar.gz -C ~/nanoasr
 cd ~/nanoasr
 ```
 
@@ -199,7 +199,7 @@ configuration in `/opt/nanoasr`, and models, job database and spool in
 ```bash
 sudo useradd -r -s /usr/sbin/nologin nanoasr
 sudo mkdir -p /opt/nanoasr /var/lib/nanoasr
-sudo tar -xzf nanoasr-v1.0.1-linux-amd64.tar.gz -C /opt/nanoasr
+sudo tar -xzf nanoasr-v1.0.5-linux-amd64.tar.gz -C /opt/nanoasr
 sudo chown -R nanoasr:nanoasr /opt/nanoasr /var/lib/nanoasr
 ```
 
