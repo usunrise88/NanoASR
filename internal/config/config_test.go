@@ -200,7 +200,7 @@ func TestAutotuneStaysWithinMemory(t *testing.T) {
 	}
 	// A ten-minute file is ~115 MB of float32; the estimate must account for
 	// every concurrent job, not just the models.
-	if est := cfg.PeakMemoryEstimateMB(); est <= cfg.ASR.MaxModelRSSMB {
+	if est := cfg.PeakMemoryEstimateMB(0); est <= cfg.ASR.MaxModelRSSMB {
 		t.Errorf("peak estimate %d MB ignores decoded audio", est)
 	}
 }

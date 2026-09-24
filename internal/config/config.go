@@ -198,15 +198,34 @@ type ITN struct {
 	Locale  string `yaml:"locale"`
 }
 
+// Diarization backends.
+const (
+	// DiarizationSortformer is Nemotron-3-Diarization: one end-to-end model
+	// that labels up to eight speakers with no clustering.
+	DiarizationSortformer = "sortformer"
+	// DiarizationSherpa is sherpa-onnx's pipeline: pyannote segmentation,
+	// speaker embeddings and clustering. It is the one that can be told the
+	// exact number of speakers.
+	DiarizationSherpa = "sherpa"
+)
+
 type Diarization struct {
-	Enabled           bool       `yaml:"enabled"`
+	Enabled bool `yaml:"enabled"`
+	// Backend is sortformer or sherpa. The keys below it apply to one each.
+	Backend string `yaml:"backend"`
+
+	// Model is the sortformer backend's catalog id.
+	Model string `yaml:"model"`
+
+	// The sherpa backend's models and clustering.
 	SegmentationModel string     `yaml:"segmentation_model"`
 	EmbeddingModel    string     `yaml:"embedding_model"`
 	Clustering        Clustering `yaml:"clustering"`
 	// MinDurationOn and MinDurationOff smooth the segmentation output: how
 	// short a turn may be before it is discarded, and how short a gap may be
 	// before the two turns around it are joined. SPEC §5.7 names both; they
-	// had no key until M5.
+	// had no key until M5. Sherpa only: Sortformer's output is thresholded as
+	// its reference does, and diarize.Split already smooths at the word level.
 	MinDurationOn  float32 `yaml:"min_duration_on"`
 	MinDurationOff float32 `yaml:"min_duration_off"`
 }

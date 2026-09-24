@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/usunrise88/nanoasr/internal/asr"
@@ -184,5 +185,76 @@ func TestDiarizeWarnsWhenNotConfigured(t *testing.T) {
 	}
 	if !hasWarning(got.Warnings, "diarization_unavailable") {
 		t.Errorf("warnings %+v should say diarization is not configured", got.Warnings)
+	}
+}
+
+// failingDiarizer is a backend whose model cannot be had.
+type failingDiarizer struct{ err error }
+
+func (d failingDiarizer) Process(context.Context, audio.PCM, int) ([]diarize.Turn, error) {
+	return nil, d.err
+}
+func (failingDiarizer) Close() error { return nil }
+
+// A diarizer that cannot load its model costs the request its speakers, not
+// its transcript; anything else it fails with still fails the job.
+func TestDiarizeDegradesWhenTheModelIsUnavailable(t *testing.T) {
+	h := twoSpeakerHarness(t, failingDiarizer{core.Errorf(core.CodeCapabilityUnavailable,
+		"diarization model m is not available; run `nanoasr models pull m`")})
+	got, err := h.pipeline.Transcribe(context.Background(),
+		core.Request{Audio: &fakeSource{}, Diarize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWarning(got.Warnings, "diarization_unavailable") || len(got.Segments) == 0 {
+		t.Errorf("want the transcript and a diarization_unavailable warning, got %+v", got)
+	}
+
+	h = twoSpeakerHarness(t, failingDiarizer{core.Errorf(core.CodeInternal, "the graph failed")})
+	if _, err := h.pipeline.Transcribe(context.Background(),
+		core.Request{Audio: &fakeSource{}, Diarize: true}); err == nil {
+		t.Error("an internal diarizer failure was swallowed")
+	}
+}
+
+// countless is a backend that decides the speaker count itself.
+type countless struct{ fakeDiarizer }
+
+func (*countless) TakesSpeakerCount() bool { return false }
+func (*countless) Advice() string          { return "diarization.backend: sherpa takes an exact count" }
+
+// A backend that cannot be told the count gets a warning in both directions,
+// with its own advice rather than another backend's.
+func TestDiarizeWarnsWhenTheCountDiffers(t *testing.T) {
+	d := &countless{fakeDiarizer{turns: []diarize.Turn{
+		{Start: 0, End: 1.6, Speaker: 0},
+		{Start: 1.9, End: 4, Speaker: 1},
+	}}}
+	for _, tc := range []struct {
+		asked int
+		code  string
+	}{
+		{1, "diarization_more_speakers"},
+		{3, "diarization_fewer_speakers"},
+	} {
+		h := twoSpeakerHarness(t, d)
+		got, err := h.pipeline.Transcribe(context.Background(),
+			core.Request{Audio: &fakeSource{}, Diarize: true, NumSpeakers: tc.asked})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found *core.Warning
+		for i := range got.Warnings {
+			if got.Warnings[i].Code == tc.code {
+				found = &got.Warnings[i]
+			}
+		}
+		if found == nil {
+			t.Errorf("asked for %d of 2: no %s in %+v", tc.asked, tc.code, got.Warnings)
+			continue
+		}
+		if !strings.Contains(found.Message, "backend: sherpa") || strings.Contains(found.Message, "embedding_model") {
+			t.Errorf("advice is not the backend's own: %q", found.Message)
+		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/usunrise88/nanoasr/internal/config"
@@ -36,6 +37,33 @@ func pullModels(cfg config.Config, ids []string) error {
 		}
 	}
 	return nil
+}
+
+// configuredModels is every model the configuration would load: what an
+// upgrade has to fetch before the server first needs it. Installed models cost
+// nothing to pull again.
+func configuredModels(cfg config.Config) []string {
+	ids := []string{cfg.ASR.DefaultModel}
+	if cfg.VAD.Enabled {
+		ids = append(ids, cfg.VAD.Model)
+	}
+	if cfg.PostProc.Punctuation.Enabled {
+		ids = append(ids, cfg.PostProc.Punctuation.Model)
+	}
+	if cfg.Diarization.Enabled {
+		if cfg.Diarization.Backend == config.DiarizationSherpa {
+			ids = append(ids, cfg.Diarization.SegmentationModel, cfg.Diarization.EmbeddingModel)
+		} else {
+			ids = append(ids, cfg.Diarization.Model)
+		}
+	}
+	out := ids[:0]
+	for _, id := range ids {
+		if id != "" && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func pullOne(ctx context.Context, reg *registry.Remote, id string) error {

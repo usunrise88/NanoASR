@@ -155,7 +155,8 @@ func parseParams(r *http.Request, source core.AudioSource) (params, error) {
 // shortcut: sherpa-onnx cuts a single dendrogram either at a height or at
 // exactly N leaves, so a range has nothing to cut at. Reducing it to threshold
 // clustering is also frequently the better answer (SPEC decision №39), which is
-// why this is a warning and not a refusal.
+// why this is a warning and not a refusal. The sortformer backend takes no
+// count at all; the pipeline warns when what it found differs from one.
 func (p *params) applySpeakerRange(minSpeakers, maxSpeakers int) {
 	switch {
 	case minSpeakers <= 0 && maxSpeakers <= 0:
@@ -165,9 +166,9 @@ func (p *params) applySpeakerRange(minSpeakers, maxSpeakers int) {
 	default:
 		p.warn = append(p.warn, core.Warning{
 			Code: "speaker_range_reduced",
-			Message: "clustering takes an exact speaker count or none at all, so a " +
+			Message: "diarization takes an exact speaker count or none at all, so a " +
 				"min/max range was dropped; send min_speakers and max_speakers " +
-				"equal to force a count",
+				"equal to ask for a count",
 		})
 	}
 }

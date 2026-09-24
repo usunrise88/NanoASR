@@ -41,6 +41,11 @@ type runner interface {
 	Close() error
 }
 
+// StepActivationsMB is what one step in flight adds to the resident set on
+// top of the loaded sessions, measured on the fp32 graphs at a full-size step
+// (TestMeasureConcurrency).
+const StepActivationsMB = 40
+
 // ortRunner runs the two graphs through onnxruntime.
 //
 // One instance serves every concurrent job. onnxruntime's Run is thread-safe on

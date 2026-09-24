@@ -106,6 +106,15 @@ postproc:
 
 diarization:
   enabled: true
+  # sortformer: Nemotron-3-Diarization, one model that labels up to eight
+  # speakers by itself (1.4% DER on the measured dialogue, with no speaker
+  # count). It cannot be told the count; num_speakers only draws a warning
+  # when the answer differs.
+  # sherpa: pyannote segmentation, speaker embeddings and clustering (5.9%
+  # without a count, 2.9% with) — the backend that takes num_speakers.
+  backend: sortformer
+  model: nemotron-3-diarization
+  # Everything below is for backend: sherpa.
   segmentation_model: pyannote-segmentation-3
   embedding_model: campplus-sv-zh-en
   clustering:

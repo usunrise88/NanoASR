@@ -81,6 +81,7 @@ func TestDiarizationErrorRate(t *testing.T) {
 	t.Logf("fixture %s: %.1f min, %d reference turns, %d speakers",
 		filepath.Base(wavPath), pcm.Duration()/60, len(ref), countSpeakers(ref))
 
+	// Sortformer has nothing to sweep: one row, the model as shipped.
 	t.Run("sortformer", func(t *testing.T) {
 		d := newSortformerFor(t)
 		start := time.Now()
@@ -91,7 +92,7 @@ func TestDiarizationErrorRate(t *testing.T) {
 		took := time.Since(start)
 		got := scoreDER(ref, turns)
 		t.Logf("%-30s %6s %8s %6d %6.1f%% %6.1f%% %6.1f%% %6.1f%%  (%.1f s, RTF %.4f)",
-			"sortformer", "—", "—", got.hypSpeakers, 100*got.rate(),
+			"sortformer "+os.Getenv("DIAR_MODEL"), "—", "—", got.hypSpeakers, 100*got.rate(),
 			100*got.miss/got.refSpeech, 100*got.falseAlarm/got.refSpeech,
 			100*got.confusion/got.refSpeech, took.Seconds(), took.Seconds()/pcm.Duration())
 	})
@@ -448,18 +449,34 @@ func frameOf(sec float64) int {
 	return int(sec / derFrame)
 }
 
+// newSortformerFor builds the sortformer backend over the registry's copy of
+// DIAR_MODEL: nemotron-3-diarization unless it names another, such as the
+// -int8 entry.
 func newSortformerFor(t *testing.T) *sortformer.Diarizer {
 	t.Helper()
-	dir := os.Getenv("SORTFORMER_MODEL_DIR")
-	if dir == "" {
-		t.Skip("set SORTFORMER_MODEL_DIR")
+	id := os.Getenv("DIAR_MODEL")
+	if id == "" {
+		id = "nemotron-3-diarization"
+	}
+	reg := newRegistryFor(t)
+	man, err := reg.Resolve(t.Context(), id)
+	if err != nil {
+		t.Skipf("model %s is absent; run ./scripts/fetch-dev-models.sh (%v)", id, err)
+	}
+	dir, err := reg.Dir(id)
+	if err != nil {
+		t.Skipf("model %s is not installed; run ./scripts/fetch-dev-models.sh (%v)", id, err)
+	}
+	path := func(role string) string {
+		p, err := man.FilePath(dir, role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
 	}
 	files := sortformer.Files{
-		Embed:      filepath.Join(dir, "embed.onnx"),
-		Step:       filepath.Join(dir, "step.onnx"),
-		MelFilters: filepath.Join(dir, "mel_filters.bin"),
-		Silence:    filepath.Join(dir, "silence_embeds.bin"),
-		Config:     filepath.Join(repoRoot(t), "testdata", "golden", "sortformer", "reference.json"),
+		Embed: path("embed"), Step: path("step"), MelFilters: path("mel_filters"),
+		Silence: path("silence_embeds"), Config: path("config"),
 	}
 	d, err := sortformer.New(sortformer.Options{
 		Resolve:    func(context.Context) (sortformer.Files, error) { return files, nil },
@@ -469,5 +486,9 @@ func newSortformerFor(t *testing.T) *sortformer.Diarizer {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
+	// what a server does at startup, so timings are of the pass, not the load
+	if err := d.Preload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	return d
 }

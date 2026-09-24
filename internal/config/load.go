@@ -248,6 +248,17 @@ func (c *Config) validateDiarization() error {
 	if !c.Diarization.Enabled {
 		return nil
 	}
+	switch c.Diarization.Backend {
+	case DiarizationSortformer:
+		if c.Diarization.Model == "" {
+			return fmt.Errorf("diarization.backend is sortformer but diarization.model is empty")
+		}
+		return nil
+	case DiarizationSherpa:
+	default:
+		return fmt.Errorf("diarization.backend must be %s or %s, got %q",
+			DiarizationSortformer, DiarizationSherpa, c.Diarization.Backend)
+	}
 	if c.Diarization.SegmentationModel == "" || c.Diarization.EmbeddingModel == "" {
 		return fmt.Errorf("diarization.enabled is true but segmentation_model or embedding_model is empty; " +
 			"diarization needs both a segmentation and an embedding model")

@@ -5,6 +5,7 @@ package sortformer
 import (
 	"context"
 	"math"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,8 +20,22 @@ func testFiles(t testing.TB) Files {
 		Step:       filepath.Join(dir, "step.onnx"),
 		MelFilters: filepath.Join(dir, "mel_filters.bin"),
 		Silence:    filepath.Join(dir, "silence_embeds.bin"),
-		Config:     filepath.Join(goldenDir, "reference.json"),
+		Config:     configFile(dir),
 	}
+}
+
+// configFile is the model's config.json, or for a bare export directory the
+// golden reference it is packed from.
+func configFile(dir string) string {
+	if p := filepath.Join(dir, "config.json"); fileExists(p) {
+		return p
+	}
+	return filepath.Join(goldenDir, "reference.json")
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // The whole pass over real speech — front end, embeddings, chunk loop, speaker

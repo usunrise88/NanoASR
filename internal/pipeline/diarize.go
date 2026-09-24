@@ -46,7 +46,7 @@ func (p *Pipeline) diarize(
 		return diarizeResult{segments: segs}, []core.Warning{{
 			Code: "diarization_unavailable",
 			Message: "diarization is not configured on this server; " +
-				"set diarization.enabled with a segmentation and an embedding model",
+				"set diarization.enabled",
 		}}, nil
 	}
 	if len(segs) == 0 {
@@ -55,6 +55,16 @@ func (p *Pipeline) diarize(
 
 	turns, err := p.diarizer.Process(ctx, tracks[0], req.NumSpeakers)
 	if err != nil {
+		// A diarizer whose model is not on disk and cannot be fetched says so
+		// with this code. The transcript does not depend on it, so the request
+		// gets the transcript and the reason, not a failure; strict mode still
+		// rejects it for the _unavailable warning.
+		if ce := core.AsError(err); ce.Code == core.CodeCapabilityUnavailable && ctx.Err() == nil {
+			return diarizeResult{segments: segs}, []core.Warning{{
+				Code:    "diarization_unavailable",
+				Message: ce.Message,
+			}}, nil
+		}
 		return diarizeResult{}, nil, err
 	}
 	if len(turns) == 0 {
@@ -77,20 +87,36 @@ func (p *Pipeline) diarize(
 	speakers := diarize.Speakers(split)
 
 	// A caller who said how many people are on the recording has told us what
-	// the answer should look like, so getting fewer is worth saying out loud.
-	// Silence here is what makes "everything is spk_0" look like a bug in the
-	// server rather than what it is: two voices the embedding model cannot
-	// tell apart. Not an _unavailable code — the transcript is fine, and
+	// the answer should look like, so getting a different number is worth
+	// saying out loud. Silence here is what makes "everything is spk_0" look
+	// like a bug in the server rather than what it is: two voices the backend
+	// cannot tell apart. Not an _unavailable code — the transcript is fine, and
 	// strict mode should not reject it.
 	var warn []core.Warning
-	if req.NumSpeakers > 1 && len(speakers) < req.NumSpeakers {
+	takesCount, advice := false, ""
+	if t, ok := p.diarizer.(diarize.Tuning); ok {
+		takesCount, advice = t.TakesSpeakerCount(), t.Advice()
+	}
+	withAdvice := func(msg string) string {
+		if advice == "" {
+			return msg
+		}
+		return msg + "; " + advice
+	}
+	switch {
+	case req.NumSpeakers > 1 && len(speakers) < req.NumSpeakers:
 		warn = append(warn, core.Warning{
 			Code: "diarization_fewer_speakers",
-			Message: fmt.Sprintf(
-				"asked for %d speakers, separated %d from %d turns; "+
-					"a different diarization.embedding_model or a lower "+
-					"diarization.clustering.threshold separates similar voices better",
-				req.NumSpeakers, len(speakers), len(turns)),
+			Message: withAdvice(fmt.Sprintf("asked for %d speakers, separated %d from %d turns",
+				req.NumSpeakers, len(speakers), len(turns))),
+		})
+	// A backend that was told the count and found more is doing what it was
+	// told as well as it can; one that could not be told is the case to flag.
+	case req.NumSpeakers > 0 && len(speakers) > req.NumSpeakers && !takesCount:
+		warn = append(warn, core.Warning{
+			Code: "diarization_more_speakers",
+			Message: withAdvice(fmt.Sprintf("asked for %d speakers, found %d",
+				req.NumSpeakers, len(speakers))),
 		})
 	}
 	return diarizeResult{segments: split, speakers: speakers}, warn, nil

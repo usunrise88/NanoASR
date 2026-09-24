@@ -128,6 +128,19 @@ func (m *model) run(ctx context.Context, x []float32, sink logitSink) error {
 	return runOffline(ctx, m.r, m.params, frames, src, sink)
 }
 
+// Preload fetches and loads the model now rather than on the first request
+// that needs it. The server calls it in the background at startup, so it
+// neither delays startup nor fails it.
+func (d *Diarizer) Preload(ctx context.Context) error {
+	d.life.RLock()
+	defer d.life.RUnlock()
+	if d.closed {
+		return core.Errorf(core.CodeInternal, "diarizer is closed")
+	}
+	_, err := d.load(ctx)
+	return err
+}
+
 // load builds the model the first time it is needed. A failure is not
 // remembered: the next request tries again, so a download that failed once, or
 // a model pulled after the server started, does not need a restart.
@@ -282,7 +295,18 @@ func (d *Diarizer) Close() error {
 	return err
 }
 
-var _ diarize.Diarizer = (*Diarizer)(nil)
+// TakesSpeakerCount is false: the model decides how many speakers there are.
+func (d *Diarizer) TakesSpeakerCount() bool { return false }
+
+func (d *Diarizer) Advice() string {
+	return fmt.Sprintf("this diarizer decides the speaker count itself and labels at most %d; "+
+		"diarization.backend: sherpa takes an exact count", numSpeakers)
+}
+
+var (
+	_ diarize.Diarizer = (*Diarizer)(nil)
+	_ diarize.Tuning   = (*Diarizer)(nil)
+)
 
 // turnTracker turns 10 ms logits into speaker turns as they arrive, the way
 // the reference's extract_speaker_dict does: a speaker is active in a frame

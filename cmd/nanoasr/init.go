@@ -22,8 +22,10 @@ var initTemplate string
 // downloads, and a default that silently changes which two gigabytes an
 // operator fetches would be worse than one they can read in the source.
 const (
-	initASRModel = "gigaam-v3-ctc-punct-ru"
-	initVADModel = "silero-vad-v5"
+	initASRModel  = "gigaam-v3-ctc-punct-ru"
+	initVADModel  = "silero-vad-v5"
+	initDiarModel = "nemotron-3-diarization"
+	// Named in the configuration for backend: sherpa, not downloaded.
 	initSegModel = "pyannote-segmentation-3"
 	initEmbModel = "campplus-sv-zh-en"
 )
@@ -41,7 +43,7 @@ func initCommand(args []string) error {
 	dataDir := fs.String("data-dir", "", "where models and the database live (default: /var/lib/nanoasr if writable, else ./nanoasr-data)")
 	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
 	model := fs.String("model", initASRModel, "default recognition model")
-	noDiarize := fs.Bool("no-diarize", false, "skip the two speaker models")
+	noDiarize := fs.Bool("no-diarize", false, "turn diarization off and skip its model")
 	noDownload := fs.Bool("no-download", false, "write the configuration but download nothing")
 	force := fs.Bool("force", false, "overwrite an existing configuration file")
 	if _, err := parseFlags(fs, args); err != nil {
@@ -84,6 +86,7 @@ func initCommand(args []string) error {
 		"SegModel":  quoteIfEmpty(pick(!*noDiarize, initSegModel)),
 		"EmbModel":  quoteIfEmpty(pick(!*noDiarize, initEmbModel)),
 		"Diarize":   strconv.FormatBool(!*noDiarize),
+		"DiarModel": initDiarModel,
 		"Threshold": defaultThreshold(),
 	})
 	if err != nil {
@@ -123,7 +126,7 @@ func initCommand(args []string) error {
 func initModels(asr string, diarize bool) []string {
 	ids := []string{asr, initVADModel}
 	if diarize {
-		ids = append(ids, initSegModel, initEmbModel)
+		ids = append(ids, initDiarModel)
 	}
 	return ids
 }

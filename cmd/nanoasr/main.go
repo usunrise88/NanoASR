@@ -91,7 +91,7 @@ func usage() {
   nanoasr init    [-config FILE] [-data-dir DIR] [-addr ADDR] [-force]
   nanoasr serve   [-config FILE] [-addr ADDR] [-log-file FILE]
   nanoasr key     list | issue NAME [-admin] [-rps N] | remove NAME
-  nanoasr models  list | catalog | pull ID... | inspect DIR [--probe WAV]
+  nanoasr models  list | catalog | pull ID... | pull -configured | inspect DIR [--probe WAV]
   nanoasr service install | uninstall | start | stop | restart | status
   nanoasr version
 
@@ -164,13 +164,6 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		"max_concurrent", cfg.Jobs.MaxConcurrent,
 		"max_resident_models", cfg.ASR.MaxResidentModels)
 
-	// Sizing is derived from the host when the operator has not measured their
-	// hardware yet, so say out loud what that implies before it becomes an OOM.
-	if est := cfg.PeakMemoryEstimateMB(); est > 0 {
-		log.Info("estimated peak memory", "mb", est,
-			"note", "resident models plus decoded PCM of every concurrent job")
-	}
-
 	// Derived from the caller's context rather than from Background: under a
 	// Windows service the stop comes from the control manager and cancels that
 	// one, and there are no signals to wait for.
@@ -179,7 +172,7 @@ func serve(ctx context.Context, args []string) (rerr error) {
 
 	// A second SIGINT or SIGTERM during a stuck shutdown must fall through to
 	// the default disposition (terminate) — otherwise an uncooperative runner
-	// (diarization is uncancellable) turns a graceful exit into a hang only a
+	// (a sherpa diarization pass is uncancellable) turns a graceful exit into a hang only a
 	// SIGKILL from the operator can break.
 	go func() {
 		<-ctx.Done()
@@ -191,7 +184,15 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		return err
 	}
 	defer srv.Close()
+
+	// Sizing is derived from the host when the operator has not measured their
+	// hardware yet, so say out loud what that implies before it becomes an OOM.
+	if est := cfg.PeakMemoryEstimateMB(srv.diarizerMB); est > 0 {
+		log.Info("estimated peak memory", "mb", est,
+			"note", "resident models, the diarizer and decoded PCM of every concurrent job")
+	}
 	srv.preload(ctx, cfg.ASR.DefaultModel, log)
+	go srv.preloadDiarizer(ctx, log)
 
 	if err := srv.resume(ctx, log); err != nil {
 		return err
@@ -353,6 +354,7 @@ func models(args []string) error {
 
 	fs := flag.NewFlagSet("models "+sub, flag.ExitOnError)
 	cfgPath := fs.String("config", os.Getenv("NANOASR_CONFIG"), "path to nanoasr.yaml")
+	configured := fs.Bool("configured", false, "pull: every model the configuration uses")
 	ids, err := parseFlags(fs, args)
 	if err != nil {
 		return err
@@ -366,6 +368,9 @@ func models(args []string) error {
 	switch sub {
 	case "list":
 	case "pull":
+		if *configured {
+			ids = append(ids, configuredModels(cfg)...)
+		}
 		return pullModels(cfg, ids)
 	case "catalog":
 		return showCatalog(cfg)
