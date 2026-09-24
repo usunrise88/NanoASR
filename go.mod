@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/k2-fsa/sherpa-onnx-go v1.13.6
+	github.com/yalue/onnxruntime_go v1.31.0
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.57.0

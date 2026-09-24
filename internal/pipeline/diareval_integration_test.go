@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/diarize"
 	diarizesherpa "github.com/usunrise88/nanoasr/internal/diarize/sherpa"
+	"github.com/usunrise88/nanoasr/internal/diarize/sortformer"
 )
 
 // Diarization error rate against a reference, on Russian dialogue.
@@ -78,6 +80,24 @@ func TestDiarizationErrorRate(t *testing.T) {
 
 	t.Logf("fixture %s: %.1f min, %d reference turns, %d speakers",
 		filepath.Base(wavPath), pcm.Duration()/60, len(ref), countSpeakers(ref))
+
+	t.Run("sortformer", func(t *testing.T) {
+		d := newSortformerFor(t)
+		start := time.Now()
+		turns, err := d.Process(context.Background(), pcm, 0)
+		if err != nil {
+			t.Fatalf("diarize: %v", err)
+		}
+		took := time.Since(start)
+		got := scoreDER(ref, turns)
+		t.Logf("%-30s %6s %8s %6d %6.1f%% %6.1f%% %6.1f%% %6.1f%%  (%.1f s, RTF %.4f)",
+			"sortformer", "—", "—", got.hypSpeakers, 100*got.rate(),
+			100*got.miss/got.refSpeech, 100*got.falseAlarm/got.refSpeech,
+			100*got.confusion/got.refSpeech, took.Seconds(), took.Seconds()/pcm.Duration())
+	})
+	if os.Getenv("DIAR_BACKEND") == "sortformer" {
+		return
+	}
 
 	// The grid is the question this test was written to answer: which of these
 	// choices is doing the work, and which was superstition. Narrow it with
@@ -426,4 +446,28 @@ func frameOf(sec float64) int {
 		return 0
 	}
 	return int(sec / derFrame)
+}
+
+func newSortformerFor(t *testing.T) *sortformer.Diarizer {
+	t.Helper()
+	dir := os.Getenv("SORTFORMER_MODEL_DIR")
+	if dir == "" {
+		t.Skip("set SORTFORMER_MODEL_DIR")
+	}
+	files := sortformer.Files{
+		Embed:      filepath.Join(dir, "embed.onnx"),
+		Step:       filepath.Join(dir, "step.onnx"),
+		MelFilters: filepath.Join(dir, "mel_filters.bin"),
+		Silence:    filepath.Join(dir, "silence_embeds.bin"),
+		Config:     filepath.Join(repoRoot(t), "testdata", "golden", "sortformer", "reference.json"),
+	}
+	d, err := sortformer.New(sortformer.Options{
+		Resolve:    func(context.Context) (sortformer.Files, error) { return files, nil },
+		NumThreads: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	return d
 }
