@@ -20,8 +20,8 @@ reported in the `stats.stages_ms` field of the response.
                                   ┌──────────────┐
 file ──► decode ──► vad ──► asr ──►   assemble   ──► diarize ──► post ──► result
          │          │       │      │              │   │           │
-    ffmpeg or   Silero  sherpa-onnx  tokens    pyannote +    punctuation,
-    native      VAD v5  in batches   into words embeddings   ITN, hotwords
+    ffmpeg or   Silero  sherpa-onnx  tokens    Sortformer    punctuation,
+    native      VAD v5  in batches   into words or sherpa    ITN, hotwords
     WAV/PCM             per segment  with timings
 ```
 
@@ -391,7 +391,7 @@ otherwise. The chosen path is printed.
 | `-data-dir DIR` | Directory for models and the database |
 | `-addr ADDR` | Listen address, `127.0.0.1:8080` by default |
 | `-model ID` | Default recognition model |
-| `-no-diarize` | Skip the diarization models |
+| `-no-diarize` | Turn diarization off and skip its model |
 | `-no-download` | Write the configuration only |
 | `-force` | Overwrite an existing configuration file |
 
@@ -655,17 +655,28 @@ models use `char` or subwords without a vocabulary file. A catalog entry carryin
 
 ## Diarization
 
-Diarization runs as a second pass over the whole recording: a segmentation model finds
-turn boundaries, an embedding model converts fragments into voice vectors, and
-clustering groups the fragments belonging to one speaker.
+Diarization runs as a second pass over the whole recording and has two backends.
 
-The result carries `speaker` and `speaker_confidence` on both words and segments, along
-with a `speakers[]` summary of speech duration and segment counts. Segments are split at
-turn boundaries, and fragments too short to be a turn are absorbed into their neighbours.
+**`sortformer`** (the default) is [Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization):
+one end-to-end model that labels up to eight speakers straight from the audio, in order of
+first appearance. There is no clustering, so there is nothing to tune — and no way to tell
+it the speaker count.
+
+**`sherpa`** is sherpa-onnx's pipeline: a segmentation model finds turn boundaries, an
+embedding model turns fragments into voice vectors, and clustering groups them. It is the
+backend that takes an exact speaker count.
+
+Either way, the result carries `speaker` and `speaker_confidence` on both words and
+segments, along with a `speakers[]` summary of speech duration and segment counts. Segments
+are split at turn boundaries, and fragments too short to be a turn are absorbed into their
+neighbours.
 
 ```yaml
 diarization:
   enabled: true
+  backend: sortformer            # or sherpa
+  model: nemotron-3-diarization  # sortformer: the catalog entry
+  # sherpa only:
   segmentation_model: pyannote-segmentation-3
   embedding_model: campplus-sv-zh-en
   clustering:
@@ -675,21 +686,39 @@ diarization:
   min_duration_off: 0.5
 ```
 
-| Setting | Purpose |
-|---|---|
-| `segmentation_model` | Model that finds turn boundaries |
-| `embedding_model` | Model that produces voice vectors |
-| `clustering.num_clusters` | Fixed speaker count; `0` clusters by threshold |
-| `clustering.threshold` | Cosine distance threshold when the speaker count is unknown |
-| `min_duration_on` | Minimum turn duration, seconds |
-| `min_duration_off` | Minimum gap between turns, seconds |
+| Setting | Backend | Purpose |
+|---|---|---|
+| `backend` | | `sortformer` or `sherpa` |
+| `model` | sortformer | `nemotron-3-diarization`, or `nemotron-3-diarization-int8` |
+| `segmentation_model` | sherpa | Model that finds turn boundaries |
+| `embedding_model` | sherpa | Model that produces voice vectors |
+| `clustering.num_clusters` | sherpa | Fixed speaker count; `0` clusters by threshold |
+| `clustering.threshold` | sherpa | Cosine distance threshold when the speaker count is unknown |
+| `min_duration_on` | sherpa | Minimum turn duration, seconds |
+| `min_duration_off` | sherpa | Minimum gap between turns, seconds |
 
-The `num_speakers` request parameter sets the speaker count for a single file. It does
-not guarantee that many speakers: clustering builds a complete-linkage dendrogram and
-cuts it either at a height (`threshold`) or at a given number of leaves. When an outlier
-is present, cutting by leaf count can separate the outlier instead. If fewer speakers
-were separated than requested, the response carries the `diarization_fewer_speakers`
-warning.
+The sortformer model (~180 MB download, ~500 MB resident) is fetched and loaded in the
+background when the server starts, or by `nanoasr models pull -configured`. A server that
+cannot fetch it still starts; diarized requests then get their transcript and a
+`diarization_unavailable` warning naming the command that fixes it. One copy serves every
+concurrent job, and a cancelled request stops its pass within a fraction of a second, which
+sherpa cannot do.
+
+`nemotron-3-diarization-int8` quantizes the model's weights to int8: the same DER on the
+benchmark below and a pass ~1.5x faster, but only on CPUs with VNNI (AVX-512 VNNI or
+AVX-VNNI); elsewhere it can be slower. It is opt-in.
+
+**The speaker count.** The `num_speakers` request parameter sets the count for a single
+file. With `sherpa` it cuts the clustering at that many speakers — which does not
+guarantee that many: the dendrogram is cut at a given number of leaves, and an outlier can
+take one of them. With `sortformer` it is not an input at all: the model decides, and the
+response carries `diarization_fewer_speakers` or `diarization_more_speakers` when its
+answer differs from the one asked for. More than eight speakers needs `backend: sherpa`.
+
+**Upgrading from 1.0.4 or earlier.** A configuration without `backend` gets `sortformer`.
+The `clustering` and `min_duration_*` keys are then ignored, and the server says so at
+startup if they differ from the defaults. `backend: sherpa` restores the previous
+behaviour exactly. The installers fetch the new model during the upgrade.
 
 ### What has been measured
 
@@ -697,43 +726,39 @@ The repository carries a reference benchmark: `make diar-testdata` builds 16
 minutes of two-speaker Russian dialogue from the
 [Dialogs](https://huggingface.co/datasets/langswap/dialogs-ru-emotional-conversations)
 corpus with exact turn boundaries, and `make diar-eval` reports **DER** — the
-share of time attributed to the wrong speaker, missed, or invented.
+share of time attributed to the wrong speaker, missed, or invented. Timings are
+four cores of a 2.8 GHz Xeon.
 
-The results that matter on that material:
+| Backend | Configuration | Speakers found | DER | Time for 16 min |
+|---|---|---|---|---|
+| `sortformer` | `nemotron-3-diarization` | 2 | **1.4 %** | 32 s |
+| `sortformer` | `nemotron-3-diarization-int8` | 2 | **1.4 %** | 21 s |
+| `sherpa` | `campplus-sv-zh-en`, `num_speakers=2` | 2 | 2.9 % | 134 s |
+| `sherpa` | `campplus-sv-zh-en`, threshold 0.85 | 6 | 5.9 % | 136 s |
+| `sherpa` | `campplus-sv-zh-en`, threshold 0.50 | 36 | 71.6 % | |
+| `sherpa` | `campplus-sv-voxceleb`, `num_speakers=2` | 2 | 40.3 % | |
+| `sherpa` | `wespeaker-voxceleb-resnet34`, `num_speakers=2` | 2 | 47.5 % | |
 
-| Embedding model | Mode | Speakers found | DER |
-|---|---|---|---|
-| `campplus-sv-zh-en` | `num_speakers=2` | 2 | **2.9 %** |
-| `campplus-sv-zh-en` | threshold 0.85 | 6 | **5.9 %** |
-| `campplus-sv-zh-en` | threshold 0.50 | 36 | 71.6 % |
-| `campplus-sv-voxceleb` | `num_speakers=2` | 2 | 40.3 % |
-| `wespeaker-voxceleb-resnet34` | `num_speakers=2` | 2 | 47.5 % |
+Sortformer's 1.4 % is all missed speech at turn edges; it confuses no speakers and is
+told nothing. With sherpa, segmentation works — missed speech 0.8 % and false alarm 0.5 %
+in every configuration — and all the remaining error is clustering: sherpa-onnx's default
+threshold of 0.5 splits a two-person dialogue into 36 speakers, every embedding improves
+as the threshold rises (hence the default of 0.85), and a known `num_speakers` is its
+strongest lever.
 
-Three things follow.
-
-**Segmentation works; clustering does not.** Missed speech is 0.8 % and false
-alarm 0.5 % in every configuration, and all the remaining error is speaker
-confusion. Clustering is the only part worth tuning.
-
-**sherpa-onnx's default threshold is far too low.** At 0.5 a two-person
-dialogue falls apart into 36 speakers. All three embeddings improve
-monotonically as the threshold rises, which is where the default of 0.85 comes
-from.
-
-**`num_speakers` is the strongest lever available.** A known speaker count
-gives 2.9 % against 5.9 % for the best threshold. Pass it whenever you have it.
-
-The measurement is one studio dialogue. It is a better starting point than the
-out-of-the-box values, not a universal constant: run `make diar-eval` against
-your own material.
+The measurement is one studio dialogue. It is a better starting point than guessing, not
+a universal constant: run `make diar-eval` against your own material, with
+`DIAR_BACKEND=sortformer` or `DIAR_MODEL=nemotron-3-diarization-int8` to pick the row.
 
 ### When every utterance lands on one speaker
 
 1. Use `channel_mode: split` if the speakers are separated by channel — more
-   accurate than any clustering and cheaper.
-2. Pass `num_speakers` if the count is known.
-3. Lower `clustering.threshold` if two people merged into one; raise it if one
-   person was split into several.
+   accurate than any diarization and cheaper.
+2. With `sherpa`: pass `num_speakers` if the count is known; lower
+   `clustering.threshold` if two people merged into one, raise it if one person
+   was split into several.
+3. With `sortformer`: there is nothing to tune; try `backend: sherpa` with
+   `num_speakers` for voices it cannot tell apart.
 
 The sample rate of the diarization models is checked against
 `audio.target_sample_rate` at startup; a mismatch prevents the server from
@@ -862,15 +887,18 @@ is bounded by `asr.max_resident_models` and `asr.max_model_rss_mb`.
 
 ### Default models
 
-`nanoasr init` downloads four models, which together cover the full processing cycle for
+`nanoasr init` downloads three models, which together cover the full processing cycle for
 Russian speech:
 
 | Identifier | Purpose | Size |
 |---|---|---|
 | `gigaam-v3-ctc-punct-ru` | Recognition, Russian, with punctuation and casing | 163 MB |
 | `silero-vad-v5` | Voice activity detection | 0.6 MB |
-| `pyannote-segmentation-3` | Speaker segmentation | 7 MB |
-| `campplus-sv-zh-en` | Speaker embeddings | 28 MB |
+| `nemotron-3-diarization` | Diarization | 176 MB |
+
+The `sherpa` backend's models (`pyannote-segmentation-3`, `campplus-sv-zh-en`) are named in
+the configuration but fetched only when that backend is chosen:
+`nanoasr models pull -configured`.
 
 The default recognition model produces punctuation and capitalisation itself, so no
 separate punctuation model is required for Russian.
@@ -885,6 +913,8 @@ separate punctuation model is required for Russian.
 | `gigaam-v2-rnnt-ru` | Recognition, transducer | ru | 172 MB | Unconfirmed |
 | `zipformer-small-en` | Recognition, transducer | en | 112 MB | Permitted |
 | `silero-vad-v5` | Voice activity detection | multi | 0.6 MB | Permitted |
+| `nemotron-3-diarization` | Diarization | multi | 176 MB | Permitted |
+| `nemotron-3-diarization-int8` | Diarization, int8 | multi | 89 MB | Permitted |
 | `pyannote-segmentation-3` | Speaker segmentation | multi | 7 MB | Permitted |
 | `campplus-sv-voxceleb` | Speaker embeddings | multi | 30 MB | Permitted |
 | `campplus-sv-zh-en` | Speaker embeddings | multi | 28 MB | Permitted |

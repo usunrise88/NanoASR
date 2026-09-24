@@ -1,10 +1,13 @@
 # Nemotron-3-Diarization: conversion, verification and CPU measurements
 
-Research tooling for putting NVIDIA's Sortformer diarization model behind
-`internal/diarize.Diarizer`. Nothing here ships: no Go code depends on it, and
-`make test` does not run it. It is committed because the measurements below
-decide how that work is done, and because a claim nobody can re-run decays into
-folklore within a release or two.
+Research tooling behind `internal/diarize/sortformer`, the Go diarizer built on
+NVIDIA's Sortformer model. No Go code imports it and `make test` does not run
+it, but three of these scripts produce what ships or what the Go tests check:
+`export_onnx.py` and `quantize_int8.py` make the graphs, `package_model.sh`
+packs the catalog's archives, and `golden_sortformer.py` writes
+`testdata/golden/sortformer`. The rest is committed because the measurements
+below decided how the work was done, and because a claim nobody can re-run
+decays into folklore within a release or two.
 
 Python, not Go, on purpose. Conversion happens once on a developer machine; the
 runtime stays onnxruntime on CPU, as it already is for every `nemo_ctc` model
@@ -33,6 +36,10 @@ From `transformers`, not from NeMo, via
 | `step_int8.onnx` | the same, dynamically quantized |
 | `mel_filters.bin` | float32 `[128, 257]` Slaney mel filterbank |
 | `silence_embeds.bin` | float32 `[512]` learned silence embedding |
+
+`export_onnx.py` repeats that export with the model and `transformers`
+revisions pinned, and its output is byte-identical to the published graphs —
+so the archives in the catalog are ones we produced, not ones we downloaded.
 
 `export_from_nemo.py` is the route we did **not** take, kept as the reason why.
 Exporting from NeMo requires its `main` branch (the released `nemo_toolkit`
@@ -64,31 +71,32 @@ be quietly wrong.
 ## What the measurements say
 
 Four cores, Xeon 2.8 GHz with `avx512_vnni`, one step of
-`[cache 264 | FIFO 40 | chunk 340 | right context 40]` = 684 frames.
+`[cache 264 | FIFO 40 | chunk 340 | right context 40]` = 684 frames, which
+advances the recording by one 340-frame chunk, 27.2 s. RTF below is always
+time per step over those 27.2 s.
 
-| mode | RTF | peak RSS | quality |
+| mode | step | RTF | peak RSS |
 |---|---|---|---|
-| chunked fp32, the published offline config | 0.0233 | 841 MB | the chunked path itself |
-| **one window fp32** | **0.0116** | 841 MB | no speaker-cache approximation |
-| one window int8 per-channel | 0.0083 | 320 MB | see below |
-| *this server's current diarization* | *0.073* | | |
+| fp32, Python onnxruntime 1.30 | 645 ms | 0.0237 | 841 MB |
+| fp32, Go, the bundled onnxruntime 1.27.1 | 707 ms | 0.0260 | ~500 MB |
+| int8 per-channel, Go | 477 ms | 0.0175 | ~210 MB |
+| *sherpa diarization, the previous default* | | *0.14* | |
 
-**The win is structural, not arithmetic.** A chunked step reads 684 frames to
-advance 340: half the work is context it re-reads. One window pays none of it,
-and skips the speaker cache — a lossy approximation of the attention the model
-would rather have — entirely. Graph optimization in onnxruntime changes nothing
-here (685 ms vs 687 ms with `ORT_DISABLE_ALL`): the graph is already flat.
+Graph optimization in onnxruntime changes nothing here (685 ms vs 687 ms with
+`ORT_DISABLE_ALL`): the graph is already flat. Letting idle onnxruntime threads
+sleep instead of spin (`session.intra_op.allow_spinning=0`) costs 10%.
 
-Cost grows quadratically with the window, so one window stops winning around
-four minutes of audio:
-
-| T | audio | fp32 one window | fp32 chunked |
-|---|---|---|---|
-| 684 | 54.7s | 0.0116 | 0.0269 |
-| 1536 | 122.9s | 0.0149 | 0.0192 |
-| 3072 | 245.8s | 0.0213 | 0.0240 |
-
-RoPE caps a window at `pos_emb_max_len` 5000 frames, i.e. 400 s.
+**Correction: one window is not the reference.** An earlier version of this
+README reported "one window fp32" at RTF 0.0116 as the main win, and said the
+speaker cache was only needed above four minutes. Both were wrong. 0.0116 was
+the same 684-frame step divided by the 54.7 s it spans rather than the 27.2 s
+it advances — and the int8 figure had the same double denominator (0.0083 vs
+0.0165). More importantly, the reference's offline forward *is* the chunked
+pass with the speaker cache: its output equals one window only up to one chunk,
+27.2 s, and the cache is compressed from the first update of anything longer.
+The model was trained on sessions of up to 105 s; one window over minutes of
+audio is a different computation, not a faster route to the same one. The Go
+diarizer implements the chunked pass.
 
 ### On quantization
 
@@ -96,7 +104,7 @@ RoPE caps a window at `pos_emb_max_len` 5000 frames, i.e. 400 s.
 scales, and by leaving `reduce_range` off: this CPU has VNNI, so the int8
 accumulate path does not saturate and the sacrificed bit buys nothing.
 
-| variant | RTF | max Δp | decisions vs fp32 |
+| variant | RTF (per 27.2 s step) | max Δp | decisions vs fp32 |
 |---|---|---|---|
 | int8 as published | 0.0145 | 0.138 | 99.7601% |
 | int8 per-channel | 0.0165 | 0.086 | 99.7990% |
@@ -123,10 +131,10 @@ venv/bin/python verify_artifacts.py  # the third-party files against the checkpo
 venv/bin/python verify_step_graph.py
 venv/bin/python quantize_variants.py
 venv/bin/python bench_step.py '[{"name":"fp32","path":"models/step.onnx","threads":4}]'
-venv/bin/python bench_window.py      # where one window stops beating chunking
+venv/bin/python bench_window.py      # step cost against window length
 venv/bin/python bench_memory.py models/step.onnx 684
 venv/bin/python decision_drift.py
-venv/bin/python diarize_once.py      # one window end to end, prints the turns
+venv/bin/python diarize_once.py      # one window end to end (not the reference; see above)
 ```
 
 `prep_input.py` and the `verify_*` scripts need the `.nemo` checkpoint in
@@ -135,10 +143,24 @@ venv/bin/python diarize_once.py      # one window end to end, prints the turns
 not tests: they report numbers and assert nothing, because the numbers depend on
 the machine.
 
-## What this leaves to do
+## What became of it
 
-A mel front end in Go (`mel_filters.bin` plus pre-emphasis 0.97, n_fft 512, Hann
-400 centred in 512, hop 160, `log(x + 2^-24)`, no normalization), two
-onnxruntime sessions, thresholding into `diarize.Turn`, and the existing
-per-word attribution unchanged. The speaker-cache state machine is only needed
-above roughly four minutes of audio, and can wait for a recording that long.
+`internal/diarize/sortformer`, and the numbers its tests hold it to:
+
+- **Front end** (`frontend.go`, `fft.go`): the `transformers` extractor's
+  log-mel in float64, computed per frame from the samples so a chunk's features
+  come out bitwise equal to a whole-file pass. Within 6.1e-5 of the reference.
+- **Chunk loop and speaker cache** (`loop.go`, `cache.go`), ported line by line
+  from `Nemotron3DiarizationSpeakerCache`. Driven by a fake network whose every
+  logit is known (splitmix64, identical in Go and Python), every step's input
+  and the cache and FIFO after every update equal the reference's.
+- **The whole pass** over 34.7 s of speech, cache compressed: speaker
+  probabilities within 3e-6 of the reference.
+- **DER** on the 16-minute dialogue of `make diar-eval`: 1.4% with no speaker
+  count, fp32 and int8 alike, against 5.9% (2.9% given the count) for the
+  previous sherpa default.
+- **One onnxruntime** in the process: the binding loads the copy sherpa-onnx
+  already linked, checked through `/proc/self/maps`, and both run side by side
+  under `-race`.
+- **One shared session**: two jobs on it get 0.76-0.81 of the throughput of
+  two sessions, and a second session would cost another ~450 MB of weights.
