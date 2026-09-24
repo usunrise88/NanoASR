@@ -182,12 +182,18 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 	// the transcript exists and rewrites it rather than being woven into it.
 	// The diarizer runs num_threads inference threads (wire.go), which sit
 	// outside the ASR governor and would otherwise oversubscribe the CPU
-	// when jobs overlap.
-	if err := p.governor.Acquire(ctx, p.opt.NumThreads); err != nil {
-		return nil, err
+	// when jobs overlap. Only a job that will run it reserves them: one that
+	// did not ask would otherwise queue for slots it never uses.
+	reserve := p.runsDiarizer(req, tracks, result.Segments)
+	if reserve {
+		if err := p.governor.Acquire(ctx, p.opt.NumThreads); err != nil {
+			return nil, err
+		}
 	}
 	spk, err := runStage(&stages, "diarize", func() (diarizeResult, error) {
-		defer p.governor.Release(p.opt.NumThreads)
+		if reserve {
+			defer p.governor.Release(p.opt.NumThreads)
+		}
 		r, w, err := p.diarize(ctx, req, tracks, result.Segments)
 		warn = append(warn, w...)
 		return r, err

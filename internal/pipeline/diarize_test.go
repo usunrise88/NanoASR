@@ -258,3 +258,34 @@ func TestDiarizeWarnsWhenTheCountDiffers(t *testing.T) {
 		}
 	}
 }
+
+// Only a job that will call the diarizer reserves its inference threads: the
+// others would queue behind diarizing jobs for slots they never use.
+func TestOnlyJobsThatDiarizeReserveItsThreads(t *testing.T) {
+	h := twoSpeakerHarness(t, &fakeDiarizer{})
+	p := h.pipeline
+	mono, stereo := []audio.PCM{silence(1)}, []audio.PCM{silence(1), silence(1)}
+	segs := []core.Segment{{ID: 0}}
+	cases := []struct {
+		name   string
+		req    core.Request
+		tracks []audio.PCM
+		segs   []core.Segment
+		want   bool
+	}{
+		{"asked", core.Request{Diarize: true}, mono, segs, true},
+		{"not asked", core.Request{}, mono, segs, false},
+		{"nothing transcribed", core.Request{Diarize: true}, mono, nil, false},
+		{"split legs", core.Request{Diarize: true, ChannelMode: core.ChannelSplit}, stereo, segs, false},
+		{"split of one channel", core.Request{Diarize: true, ChannelMode: core.ChannelSplit}, mono, segs, true},
+	}
+	for _, c := range cases {
+		if got := p.runsDiarizer(c.req, c.tracks, c.segs); got != c.want {
+			t.Errorf("%s: runsDiarizer = %v, want %v", c.name, got, c.want)
+		}
+	}
+	p.WithDiarizer(nil)
+	if p.runsDiarizer(core.Request{Diarize: true}, mono, segs) {
+		t.Error("no diarizer configured: nothing to reserve for")
+	}
+}

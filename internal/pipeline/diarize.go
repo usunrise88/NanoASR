@@ -122,6 +122,13 @@ func (p *Pipeline) diarize(
 	return diarizeResult{segments: split, speakers: speakers}, warn, nil
 }
 
+// runsDiarizer is whether diarize will call the diarizer for this job: the
+// cases it returns early on, before Process, need no inference threads.
+func (p *Pipeline) runsDiarizer(req core.Request, tracks []audio.PCM, segs []core.Segment) bool {
+	return req.Diarize && p.diarizer != nil && len(segs) > 0 &&
+		(p.channelMode(req) != core.ChannelSplit || len(tracks) <= 1)
+}
+
 // wordsOf flattens segment words in the order Apply expects to walk them.
 func wordsOf(segs []core.Segment) []core.Word {
 	n := 0
