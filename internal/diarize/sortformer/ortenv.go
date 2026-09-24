@@ -96,3 +96,21 @@ func sameVersion(a, b string) bool {
 	}
 	return norm(a) != "" && norm(a) == norm(b)
 }
+
+// RuntimeInfo reports the onnxruntime this package runs on: its version and
+// the file it was loaded from. `nanoasr version` prints both, and the release
+// job checks that the file is the one the archive ships — the check that the
+// bare-name load above found sherpa's copy and not, on Windows, System32's.
+func RuntimeInfo() (version, path string, err error) {
+	if err := ensureEnvironment(); err != nil {
+		return "", "", err
+	}
+	paths, err := loadedRuntime()
+	if err != nil {
+		return "", "", err
+	}
+	if len(paths) != 1 {
+		return "", "", fmt.Errorf("expected one onnxruntime in the process, found %d: %v", len(paths), paths)
+	}
+	return ort.GetVersion(), paths[0], nil
+}

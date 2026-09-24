@@ -1,10 +1,8 @@
 package sortformer
 
 import (
-	"bufio"
 	"os"
 	"runtime"
-	"strings"
 	"testing"
 
 	sonnx "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
@@ -32,35 +30,20 @@ func TestEnvironmentComesUp(t *testing.T) {
 // one onnxruntime. Two mapped copies would each keep their own thread pool and
 // allocator while believing they were alone.
 func TestOneOnnxruntimeInTheProcess(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("/proc/self/maps is a Linux check; Windows is checked by module handle in the release job")
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skipf("not supported on %s", runtime.GOOS)
 	}
-	if err := ensureEnvironment(); err != nil {
-		t.Fatalf("ensureEnvironment: %v", err)
-	}
-	f, err := os.Open("/proc/self/maps")
+	version, path, err := RuntimeInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-
-	paths := map[string]bool{}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 6 {
-			continue
-		}
-		if p := fields[len(fields)-1]; strings.Contains(p, "libonnxruntime") {
-			paths[p] = true
-		}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("onnxruntime reported at %s: %v", path, err)
 	}
-	if err := sc.Err(); err != nil {
-		t.Fatal(err)
+	if !sameVersion(version, sonnx.GetOnnxruntimeVersion()) {
+		t.Errorf("onnxruntime %s, sherpa-onnx runs %s", version, sonnx.GetOnnxruntimeVersion())
 	}
-	if len(paths) != 1 {
-		t.Fatalf("expected one onnxruntime mapped, found %d: %v", len(paths), paths)
-	}
+	t.Logf("onnxruntime %s from %s", version, path)
 }
 
 func TestSameVersion(t *testing.T) {

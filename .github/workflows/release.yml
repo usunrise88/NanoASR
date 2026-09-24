@@ -126,6 +126,23 @@ jobs:
           want_ui=$([ "${{ matrix.ui }}" = "1" ] && echo true || echo false)
           grep -q "ui *${want_ui}$" <<<"$out" || { echo "ui line is not ${want_ui}" >&2; exit 1; }
           grep -q "${{ inputs.tag || github.ref_name }}" <<<"$out" || { echo "version is not the tag" >&2; exit 1; }
+          # The diarizer loads onnxruntime by bare name, relying on the loader
+          # to hand back the copy sherpa-onnx already mapped. Hold it to that:
+          # the same version, from the file this archive ships — on Windows,
+          # not the older onnxruntime.dll that Windows 11 keeps in System32.
+          ort="$(sed -n 's/^onnxruntime *//p' <<<"$out")"
+          diar="$(grep '^diarizer ' <<<"$out")" || { echo "no diarizer line" >&2; exit 1; }
+          read -r _ _ diar_ver diar_path <<<"$diar"
+          [ "$diar_ver" = "$ort" ] || { echo "diarizer runs onnxruntime $diar_ver, sherpa-onnx $ort" >&2; exit 1; }
+          case "${{ matrix.goos }}" in
+            linux)   want='*/check/lib/libonnxruntime.so' ;;
+            windows) want='*\\check\\onnxruntime.dll' ;;
+          esac
+          # shellcheck disable=SC2254
+          case "$diar_path" in
+            $want) ;;
+            *) echo "diarizer loaded onnxruntime from $diar_path, not from the archive" >&2; exit 1 ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:

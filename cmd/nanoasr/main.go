@@ -27,6 +27,7 @@ import (
 	_ "github.com/usunrise88/nanoasr/internal/api/openai"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/config"
+	diarizesortformer "github.com/usunrise88/nanoasr/internal/diarize/sortformer"
 	"github.com/usunrise88/nanoasr/internal/httpx"
 	"github.com/usunrise88/nanoasr/internal/registry"
 	"github.com/usunrise88/nanoasr/internal/ui"
@@ -110,6 +111,13 @@ func printVersion() {
 	fmt.Printf("nanoasr     %s\n", version)
 	fmt.Printf("sherpa-onnx %s\n", so)
 	fmt.Printf("onnxruntime %s\n", ort)
+	// The diarizer loads onnxruntime by name, trusting it to find the copy
+	// above; printing where it came from is how the release job checks that.
+	if v, path, err := diarizesortformer.RuntimeInfo(); err != nil {
+		fmt.Printf("diarizer    unavailable: %v\n", err)
+	} else {
+		fmt.Printf("diarizer    onnxruntime %s %s\n", v, path)
+	}
 	fmt.Printf("families    %v\n", sherpa.Families())
 	fmt.Printf("dialects    %v\n", adapter.Available())
 	fmt.Printf("ui          %v\n", ui.Enabled)
