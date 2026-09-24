@@ -13,8 +13,10 @@
 #   venv/bin/python quantize_int8.py --src build/fp32/step.onnx --out build/int8-step.onnx
 #   ./package_model.sh build/fp32 build/int8-step.onnx build/
 #
-# Then upload both to the models-nemotron-diar-1 release and put the printed
-# sha256 and sizes into internal/registry/catalog.yaml.
+# The printed sha256 and sizes are what internal/registry/catalog.yaml pins.
+# The models workflow (.github/workflows/models.yml) runs these same steps with
+# the versions in requirements-export.txt, checks the result against the
+# catalog with check_catalog.py, and attaches the archives to the release.
 set -euo pipefail
 
 FP32="${1:?exported graph directory}"

@@ -1,0 +1,59 @@
+name: models
+
+# Builds the model archives this repository hosts itself and attaches them to
+# their release. Today that is Nemotron-3-Diarization, fp32 and int8, which the
+# catalog downloads from the models-nemotron-diar-1 release.
+#
+# They are built here, from pinned sources, rather than uploaded by hand: a
+# 176 MB file does not travel well, and building them in the open means anyone
+# can check that the archive the catalog trusts is the one these scripts make.
+# The build must reproduce the sha256 the catalog pins, byte for byte, or
+# nothing is published.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release to attach the archives to (created if absent)"
+        required: true
+        default: models-nemotron-diar-1
+
+permissions:
+  contents: write
+
+jobs:
+  nemotron-diarization:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the pinned exporter
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.11.0
+          python -m pip install -r scripts/diar-research/requirements-export.txt
+
+      - name: Export the graphs
+        run: python scripts/diar-research/export_onnx.py --out build/fp32
+
+      - name: Quantize the int8 step graph
+        run: python scripts/diar-research/quantize_int8.py --src build/fp32/step.onnx --out build/int8-step.onnx
+
+      - name: Pack
+        run: ./scripts/diar-research/package_model.sh build/fp32 build/int8-step.onnx build/out
+
+      - name: Match the catalog
+        run: python scripts/diar-research/check_catalog.py build/out
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes \
+              "Model archives the NanoASR catalog downloads. Built by the models workflow from scripts/diar-research; see NOTICE inside each archive for origin and licence."
+          fi
+          gh release upload "$TAG" build/out/*.tar.gz --clobber
