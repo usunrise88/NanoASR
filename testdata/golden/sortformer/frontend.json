@@ -1,0 +1,125 @@
+{
+ "note": "speech is ru-16k.wav tiled to length, decoded as int16/32768; clip is a +/-1 square wave with a 36-sample period",
+ "cases": [
+  {
+   "kind": "speech",
+   "samples": 1,
+   "frames": 0,
+   "head_rows": 0,
+   "tail_rows": 0,
+   "offset": 0
+  },
+  {
+   "kind": "speech",
+   "samples": 159,
+   "frames": 0,
+   "head_rows": 0,
+   "tail_rows": 0,
+   "offset": 0
+  },
+  {
+   "kind": "speech",
+   "samples": 160,
+   "frames": 1,
+   "head_rows": 1,
+   "tail_rows": 0,
+   "offset": 0
+  },
+  {
+   "kind": "speech",
+   "samples": 161,
+   "frames": 1,
+   "head_rows": 1,
+   "tail_rows": 0,
+   "offset": 128
+  },
+  {
+   "kind": "speech",
+   "samples": 511,
+   "frames": 3,
+   "head_rows": 3,
+   "tail_rows": 0,
+   "offset": 256
+  },
+  {
+   "kind": "speech",
+   "samples": 512,
+   "frames": 3,
+   "head_rows": 3,
+   "tail_rows": 0,
+   "offset": 640
+  },
+  {
+   "kind": "speech",
+   "samples": 513,
+   "frames": 3,
+   "head_rows": 3,
+   "tail_rows": 0,
+   "offset": 1024
+  },
+  {
+   "kind": "speech",
+   "samples": 16000,
+   "frames": 100,
+   "head_rows": 8,
+   "tail_rows": 8,
+   "offset": 1408
+  },
+  {
+   "kind": "speech",
+   "samples": 435199,
+   "frames": 2719,
+   "head_rows": 8,
+   "tail_rows": 8,
+   "offset": 3456
+  },
+  {
+   "kind": "speech",
+   "samples": 435200,
+   "frames": 2720,
+   "head_rows": 8,
+   "tail_rows": 8,
+   "offset": 5504
+  },
+  {
+   "kind": "speech",
+   "samples": 435201,
+   "frames": 2720,
+   "head_rows": 8,
+   "tail_rows": 8,
+   "offset": 7552
+  },
+  {
+   "kind": "silence",
+   "samples": 513,
+   "frames": 3,
+   "head_rows": 3,
+   "tail_rows": 0,
+   "offset": 9600
+  },
+  {
+   "kind": "silence",
+   "samples": 16000,
+   "frames": 100,
+   "head_rows": 8,
+   "tail_rows": 8,
+   "offset": 9984
+  },
+  {
+   "kind": "clip",
+   "samples": 513,
+   "frames": 3,
+   "head_rows": 3,
+   "tail_rows": 0,
+   "offset": 12032
+  },
+  {
+   "kind": "clip",
+   "samples": 16000,
+   "frames": 100,
+   "head_rows": 8,
+   "tail_rows": 8,
+   "offset": 12416
+  }
+ ]
+}

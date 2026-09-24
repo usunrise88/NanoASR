@@ -1,0 +1,7 @@
+{
+ "note": "ru-16k.wav, 0.4 s of silence, ru-16k.wav, 0.4 s, ru-16k.wav",
+ "gap_samples": 6400,
+ "samples": 554720,
+ "frames": 3467,
+ "speakers": 8
+}

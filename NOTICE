@@ -3,6 +3,7 @@ NanoASR bundles and links against third-party components:
   sherpa-onnx            Apache-2.0   https://github.com/k2-fsa/sherpa-onnx
   onnxruntime            MIT          https://github.com/microsoft/onnxruntime
   sherpa-onnx-go         Apache-2.0   https://github.com/k2-fsa/sherpa-onnx-go
+  onnxruntime_go         MIT          https://github.com/yalue/onnxruntime_go
 
 The Docker image additionally installs ffmpeg from the distribution, which is
 licensed under LGPL-2.1+ or GPL-2+ depending on the build. NanoASR invokes it
@@ -12,3 +13,8 @@ Model weights are NOT part of this repository and carry their own licences,
 some of which are non-commercial. Each catalog entry records its licence, the
 UI displays it, and registry.strict_license refuses to load weights that are
 not licensed for commercial use.
+
+The nemotron-3-diarization catalog entries are Nemotron-3-Diarization by NVIDIA
+(https://huggingface.co/nvidia/Nemotron-3-Diarization), licensed under
+OpenMDW-1.1, converted to ONNX by scripts/diar-research/export_onnx.py. Their
+archives carry the licence text and a NOTICE of origin, as that licence asks.

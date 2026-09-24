@@ -346,6 +346,17 @@ function Install-NanoASR {
     $keys = @()
     if (Test-ConfigHasKeys) {
         Say "keeping the configuration in $Config"
+        # A release can change a default model — 1.0.5 moved diarization to
+        # nemotron-3-diarization — and a server that fetches it on the first
+        # request that needs it makes that request wait for the download.
+        if (-not $NoDownload) {
+            Say "fetching any model the configuration uses that is not installed yet"
+            try {
+                Invoke-Native $Exe @('models', 'pull', '-configured', '-config', $Config) | Out-Null
+            } catch {
+                Warn "could not fetch every configured model; the server will fetch what is missing when first needed"
+            }
+        }
     } else {
         Say "writing the configuration and fetching the models (this is gigabytes)"
         $initArgs = @('init', '-config', $Config, '-data-dir', $DataDir, '-addr', $Addr, '-force')

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
@@ -13,6 +14,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/core"
 	"github.com/usunrise88/nanoasr/internal/diarize"
 	diarizesherpa "github.com/usunrise88/nanoasr/internal/diarize/sherpa"
+	diarizesortformer "github.com/usunrise88/nanoasr/internal/diarize/sortformer"
 	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pipeline"
 	"github.com/usunrise88/nanoasr/internal/pool"
@@ -28,13 +30,16 @@ import (
 
 // server is everything the HTTP layer needs, plus what has to be shut down.
 type server struct {
-	service   core.Service
-	models    core.ModelService
-	registry  *registry.Remote
-	pool      *pool.Pool
-	vad       vad.Segmenter
-	diarizer  diarize.Diarizer
-	closePost func()
+	service  core.Service
+	models   core.ModelService
+	registry *registry.Remote
+	pool     *pool.Pool
+	vad      vad.Segmenter
+	diarizer diarize.Diarizer
+	// diarizerMB is what the diarizer is expected to hold at full load, for
+	// the startup memory estimate.
+	diarizerMB int
+	closePost  func()
 
 	queue   *job.Queue
 	store   *sqlite.Store
@@ -74,7 +79,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		return nil, err
 	}
 
-	diarizer, err := buildDiarizer(ctx, cfg, reg, log)
+	diarizer, diarizerMB, err := buildDiarizer(ctx, cfg, reg, log)
 	if err != nil {
 		models.Close()
 		_ = segmenter.Close()
@@ -138,17 +143,18 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 	svc.Attach(queue, store)
 
 	return &server{
-		service:   svc,
-		models:    service.NewModels(reg, models),
-		registry:  reg,
-		pool:      models,
-		vad:       segmenter,
-		diarizer:  diarizer,
-		closePost: closePost,
-		queue:     queue,
-		store:     store,
-		spool:     sp,
-		webhook:   hooks,
+		service:    svc,
+		models:     service.NewModels(reg, models),
+		registry:   reg,
+		pool:       models,
+		vad:        segmenter,
+		diarizer:   diarizer,
+		diarizerMB: diarizerMB,
+		closePost:  closePost,
+		queue:      queue,
+		store:      store,
+		spool:      sp,
+		webhook:    hooks,
 	}, nil
 }
 
@@ -351,6 +357,25 @@ func (s *server) preload(ctx context.Context, id string, log *slog.Logger) {
 	log.Info("default model loaded", "model", id)
 }
 
+// preloadDiarizer loads a lazily loaded diarizer in the background, so the
+// first diarized request does not pay for it. Failing is not fatal: the first
+// request tries again and, if it cannot either, says why in a warning.
+func (s *server) preloadDiarizer(ctx context.Context, log *slog.Logger) {
+	p, ok := s.diarizer.(interface{ Preload(context.Context) error })
+	if !ok {
+		return
+	}
+	start := time.Now()
+	if err := p.Preload(ctx); err != nil {
+		if ctx.Err() == nil {
+			log.Warn("could not preload the diarization model; the first diarized request will try again",
+				"err", err)
+		}
+		return
+	}
+	log.Info("diarization model loaded", "ms", time.Since(start).Milliseconds())
+}
+
 // Close releases everything build acquired. The queue is stopped by the caller
 // before this, while there is still a grace period to spend on it.
 func (s *server) Close() {
@@ -372,24 +397,128 @@ func (s *server) Close() {
 	}
 }
 
-// buildDiarizer resolves the two speaker models through the same registry that
-// serves ASR models, and builds one instance per concurrent job.
+// buildDiarizer builds the configured diarization backend and reports what it
+// is expected to hold in memory at full load.
 //
 // Like the VAD pool, this sits outside the model pool: these are not
-// recognisers, they are not selectable per request, and they stay loaded for
-// the life of the server. That means they do not participate in LRU eviction or
-// max_model_rss_mb, which is a deliberate trade — the alternative is a pool key
-// space where "model" means two unrelated things.
+// recognisers, they are not selectable per request, and once loaded they stay
+// loaded for the life of the server. That means they do not participate in LRU
+// eviction or max_model_rss_mb, which is a deliberate trade — the alternative is
+// a pool key space where "model" means two unrelated things. Their memory is
+// counted in the startup estimate instead.
 func buildDiarizer(
 	ctx context.Context,
 	cfg config.Config,
 	reg *registry.Remote,
 	log *slog.Logger,
-) (diarize.Diarizer, error) {
+) (diarize.Diarizer, int, error) {
 	if !cfg.Diarization.Enabled {
-		return nil, nil
+		return nil, 0, nil
+	}
+	if cfg.Diarization.Backend == config.DiarizationSherpa {
+		return buildSherpaDiarizer(ctx, cfg, reg, log)
+	}
+	return buildSortformer(ctx, cfg, reg, log)
+}
+
+// buildSortformer sets up Nemotron-3-Diarization without loading it.
+//
+// The model is fetched and loaded by the first request that asks for
+// diarization, as ASR models are: a server upgraded to this default, or one
+// whose model is not on disk yet, starts regardless, and one that cannot
+// download it answers diarized requests with a diarization_unavailable warning
+// naming the command that fixes it.
+func buildSortformer(
+	ctx context.Context,
+	cfg config.Config,
+	reg *registry.Remote,
+	log *slog.Logger,
+) (diarize.Diarizer, int, error) {
+	id := cfg.Diarization.Model
+	man, err := reg.Resolve(ctx, id)
+	if err != nil {
+		return nil, 0, fmt.Errorf("diarization.model %q: %w", id, err)
+	}
+	if man.EffectiveKind() != registry.KindDiarization || man.Family != "sortformer" {
+		return nil, 0, fmt.Errorf("diarization.model %q is a %s model of family %s, not a sortformer diarizer",
+			id, man.EffectiveKind(), man.Family)
+	}
+	// Caught at startup for the reason given in buildSherpaDiarizer.
+	if man.SampleRate != cfg.Audio.TargetSampleRate {
+		return nil, 0, fmt.Errorf(
+			"diarization model %s expects %d Hz but audio.target_sample_rate is %d; "+
+				"set them to the same rate", id, man.SampleRate, cfg.Audio.TargetSampleRate)
 	}
 
+	d, err := diarizesortformer.New(diarizesortformer.Options{
+		NumThreads: cfg.ASR.NumThreads,
+		Resolve: func(ctx context.Context) (diarizesortformer.Files, error) {
+			dir, err := reg.Ensure(ctx, id)
+			if err != nil {
+				if ctx.Err() != nil {
+					return diarizesortformer.Files{}, err
+				}
+				// the registry's own reason usually names the fix already
+				msg := core.AsError(err).Message
+				if !strings.Contains(msg, "models pull") {
+					msg += "; run `nanoasr models pull " + id + "`"
+				}
+				return diarizesortformer.Files{}, core.Errorf(core.CodeCapabilityUnavailable,
+					"diarization is unavailable: %s", msg).WithCause(err)
+			}
+			// the installed manifest, which is the one that names its files
+			man, err := reg.Resolve(ctx, id)
+			if err != nil {
+				return diarizesortformer.Files{}, err
+			}
+			var f diarizesortformer.Files
+			for _, r := range []struct {
+				role string
+				dst  *string
+			}{
+				{"embed", &f.Embed}, {"step", &f.Step}, {"mel_filters", &f.MelFilters},
+				{"silence_embeds", &f.Silence}, {"config", &f.Config},
+			} {
+				if *r.dst, err = man.FilePath(dir, r.role); err != nil {
+					return diarizesortformer.Files{}, err
+				}
+			}
+			return f, nil
+		},
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// One shared session: the weights once, plus the activations of every
+	// step that can be in flight at the same time.
+	mb := man.Resources.ApproxRSSMB + (cfg.Jobs.MaxConcurrent-1)*diarizesortformer.StepActivationsMB
+
+	def := config.Default().Diarization
+	if cfg.Diarization.Clustering != def.Clustering ||
+		cfg.Diarization.MinDurationOn != def.MinDurationOn || cfg.Diarization.MinDurationOff != def.MinDurationOff {
+		log.Warn("diarization.clustering, min_duration_on and min_duration_off apply to backend: sherpa "+
+			"and are ignored by sortformer; set diarization.backend: sherpa to keep using them",
+			"backend", config.DiarizationSortformer)
+	}
+	_, installed := reg.Dir(id)
+	log.Info("diarization configured",
+		"backend", config.DiarizationSortformer,
+		"model", id,
+		"installed", installed == nil,
+		"note", "loaded by the first request that asks for speakers")
+	return d, mb, nil
+}
+
+// buildSherpaDiarizer resolves the two speaker models through the same
+// registry that serves ASR models, and builds one instance per concurrent job.
+func buildSherpaDiarizer(
+	ctx context.Context,
+	cfg config.Config,
+	reg *registry.Remote,
+	log *slog.Logger,
+) (diarize.Diarizer, int, error) {
+	mb := 0
 	resolve := func(id string) (string, error) {
 		man, err := reg.Resolve(ctx, id)
 		if err != nil {
@@ -399,16 +528,17 @@ func buildDiarizer(
 		if err != nil {
 			return "", err
 		}
+		mb += man.Resources.ApproxRSSMB
 		return man.FilePath(dir, "model")
 	}
 
 	segmentation, err := resolve(cfg.Diarization.SegmentationModel)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	embedding, err := resolve(cfg.Diarization.EmbeddingModel)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	pooled, err := diarizesherpa.NewPool(diarize.Config{
@@ -420,7 +550,7 @@ func buildDiarizer(
 		MinDurationOff:    cfg.Diarization.MinDurationOff,
 	}, cfg.ASR.NumThreads, cfg.Jobs.MaxConcurrent)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// The pipeline hands the diarizer whatever audio.target_sample_rate
@@ -431,17 +561,19 @@ func buildDiarizer(
 	// configuration mistake with an obvious fix.
 	if want := pooled.SampleRate(); want > 0 && want != cfg.Audio.TargetSampleRate {
 		_ = pooled.Close()
-		return nil, fmt.Errorf(
+		return nil, 0, fmt.Errorf(
 			"diarization models expect %d Hz but audio.target_sample_rate is %d; "+
 				"set them to the same rate", want, cfg.Audio.TargetSampleRate)
 	}
 
 	log.Info("diarization ready",
+		"backend", config.DiarizationSherpa,
 		"segmentation", cfg.Diarization.SegmentationModel,
 		"embedding", cfg.Diarization.EmbeddingModel,
 		"instances", cfg.Jobs.MaxConcurrent,
-		"note", "a diarization pass cannot be cancelled once started (SPEC §2 decision 34)")
-	return pooled, nil
+		"note", "a sherpa diarization pass cannot be cancelled once started (SPEC §2 decision 34)")
+	// every instance holds its own copy of both models
+	return pooled, mb * cfg.Jobs.MaxConcurrent, nil
 }
 
 // closeDiarizer is nil-safe: diarization is off by default, so most servers

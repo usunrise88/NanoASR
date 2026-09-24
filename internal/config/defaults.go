@@ -75,11 +75,17 @@ func Default() Config {
 			Hotwords: HotwordsPolicy{DefaultScore: 1.5},
 		},
 		Diarization: Diarization{
-			SegmentationModel: "pyannote-segmentation-3",
 			// Measured on 16 minutes of two-speaker Russian dialogue with a
-			// reference (make diar-eval): this embedding gives 2.9% DER with a
-			// known speaker count and 5.9% without, against 40.3% and 46.0%
-			// for campplus-sv-voxceleb on the same audio. The corpus it was
+			// reference (make diar-eval): Sortformer gives 1.4% DER without
+			// being told the speaker count, against 5.9% (2.9% told) for the
+			// sherpa settings below, and runs in a quarter of the time.
+			Backend: DiarizationSortformer,
+			Model:   "nemotron-3-diarization",
+
+			SegmentationModel: "pyannote-segmentation-3",
+			// For backend: sherpa. On the same dialogue this embedding gives
+			// 2.9% DER with a known speaker count and 5.9% without, against
+			// 40.3% and 46.0% for campplus-sv-voxceleb on the same audio. The corpus it was
 			// trained on turns out to matter far less than the earlier
 			// synthetic fixture suggested — that fixture was one voice
 			// pitch-shifted, which cannot measure speaker separation at all.
@@ -156,19 +162,24 @@ func (c *Config) Autotune() {
 }
 
 // PeakMemoryEstimateMB is what the process is expected to need at full load:
-// resident models plus the decoded PCM of every concurrent job. 30 minutes of
-// mono float32 at 16 kHz is ~115 MB, which dominates on long files.
+// resident models, the diarizer, and the decoded PCM of every concurrent job.
+// 30 minutes of mono float32 at 16 kHz is ~115 MB, which dominates on long
+// files.
+//
+// diarizerMB comes from whoever built the diarizer, because only the backend
+// knows how its memory scales with concurrency: sherpa holds a copy of its
+// models per job, Sortformer one shared copy plus each step's activations.
 //
 // Under channel_mode: split a job holds every channel at once, so the per-job
 // figure is multiplied by the channel bound. This is the server default only;
 // a per-request split against a downmix-default server can still exceed the
 // estimate, which is why audio.max_split_channels exists to bound it.
-func (c *Config) PeakMemoryEstimateMB() int {
+func (c *Config) PeakMemoryEstimateMB(diarizerMB int) int {
 	pcmPerJob := int(c.Audio.MaxDuration.Seconds()) * c.Audio.TargetSampleRate * 4 / (1 << 20)
 	if c.Audio.ChannelMode == "split" && c.Audio.MaxSplitChannels > 1 {
 		pcmPerJob *= c.Audio.MaxSplitChannels
 	}
-	return c.ASR.MaxModelRSSMB + c.Jobs.MaxConcurrent*pcmPerJob
+	return c.ASR.MaxModelRSSMB + diarizerMB + c.Jobs.MaxConcurrent*pcmPerJob
 }
 
 func totalRAMMB() int {

@@ -72,6 +72,14 @@ postproc:
 
 diarization:
   enabled: {{.Diarize}}
+  # sortformer: one model that labels up to eight speakers by itself — nothing
+  # to tune, and it cannot be told the speaker count.
+  # sherpa: segmentation, speaker embeddings and clustering — the backend that
+  # takes an exact speaker count (num_speakers). Switching to it needs its two
+  # models: nanoasr models pull -configured.
+  backend: sortformer
+  model: {{.DiarModel}}
+  # Everything below is for backend: sherpa.
   segmentation_model: {{.SegModel}}
   embedding_model: {{.EmbModel}}
   clustering:

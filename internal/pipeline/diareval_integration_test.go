@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/diarize"
 	diarizesherpa "github.com/usunrise88/nanoasr/internal/diarize/sherpa"
+	"github.com/usunrise88/nanoasr/internal/diarize/sortformer"
 )
 
 // Diarization error rate against a reference, on Russian dialogue.
@@ -78,6 +80,25 @@ func TestDiarizationErrorRate(t *testing.T) {
 
 	t.Logf("fixture %s: %.1f min, %d reference turns, %d speakers",
 		filepath.Base(wavPath), pcm.Duration()/60, len(ref), countSpeakers(ref))
+
+	// Sortformer has nothing to sweep: one row, the model as shipped.
+	t.Run("sortformer", func(t *testing.T) {
+		d := newSortformerFor(t)
+		start := time.Now()
+		turns, err := d.Process(context.Background(), pcm, 0)
+		if err != nil {
+			t.Fatalf("diarize: %v", err)
+		}
+		took := time.Since(start)
+		got := scoreDER(ref, turns)
+		t.Logf("%-30s %6s %8s %6d %6.1f%% %6.1f%% %6.1f%% %6.1f%%  (%.1f s, RTF %.4f)",
+			"sortformer "+os.Getenv("DIAR_MODEL"), "—", "—", got.hypSpeakers, 100*got.rate(),
+			100*got.miss/got.refSpeech, 100*got.falseAlarm/got.refSpeech,
+			100*got.confusion/got.refSpeech, took.Seconds(), took.Seconds()/pcm.Duration())
+	})
+	if os.Getenv("DIAR_BACKEND") == "sortformer" {
+		return
+	}
 
 	// The grid is the question this test was written to answer: which of these
 	// choices is doing the work, and which was superstition. Narrow it with
@@ -426,4 +447,48 @@ func frameOf(sec float64) int {
 		return 0
 	}
 	return int(sec / derFrame)
+}
+
+// newSortformerFor builds the sortformer backend over the registry's copy of
+// DIAR_MODEL: nemotron-3-diarization unless it names another, such as the
+// -int8 entry.
+func newSortformerFor(t *testing.T) *sortformer.Diarizer {
+	t.Helper()
+	id := os.Getenv("DIAR_MODEL")
+	if id == "" {
+		id = "nemotron-3-diarization"
+	}
+	reg := newRegistryFor(t)
+	man, err := reg.Resolve(t.Context(), id)
+	if err != nil {
+		t.Skipf("model %s is absent; run ./scripts/fetch-dev-models.sh (%v)", id, err)
+	}
+	dir, err := reg.Dir(id)
+	if err != nil {
+		t.Skipf("model %s is not installed; run ./scripts/fetch-dev-models.sh (%v)", id, err)
+	}
+	path := func(role string) string {
+		p, err := man.FilePath(dir, role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	files := sortformer.Files{
+		Embed: path("embed"), Step: path("step"), MelFilters: path("mel_filters"),
+		Silence: path("silence_embeds"), Config: path("config"),
+	}
+	d, err := sortformer.New(sortformer.Options{
+		Resolve:    func(context.Context) (sortformer.Files, error) { return files, nil },
+		NumThreads: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	// what a server does at startup, so timings are of the pass, not the load
+	if err := d.Preload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

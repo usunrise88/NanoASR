@@ -314,6 +314,14 @@ install_nanoasr() {
 
   if config_has_keys; then
     say "keeping the configuration in $CONFIG"
+    # A release can change a default model — 1.0.5 moved diarization to
+    # nemotron-3-diarization — and a server that fetches it on the first
+    # request that needs it makes that request wait for the download.
+    if [[ "$WITH_MODELS" == "1" ]]; then
+      say "fetching any model the configuration uses that is not installed yet"
+      as_service_user "$PREFIX/nanoasr" models pull -configured -config "$CONFIG" ||
+        warn "could not fetch every configured model; the server will fetch what is missing when first needed"
+    fi
   else
     say "writing the configuration and fetching the models (this is gigabytes)"
     local init_args=(init -config "$CONFIG" -data-dir "$DATA_DIR" -addr "$ADDR" -force)

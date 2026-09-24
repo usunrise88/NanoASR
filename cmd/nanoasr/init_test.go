@@ -33,6 +33,7 @@ func renderTestInit(t *testing.T, diarize bool) []byte {
 		"SegModel":  quoteIfEmpty(pick(diarize, initSegModel)),
 		"EmbModel":  quoteIfEmpty(pick(diarize, initEmbModel)),
 		"Diarize":   map[bool]string{true: "true", false: "false"}[diarize],
+		"DiarModel": initDiarModel,
 		"Threshold": defaultThreshold(),
 	})
 	if err != nil {

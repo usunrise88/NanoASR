@@ -24,6 +24,9 @@ const (
 	KindPunctuation  = "punctuation"
 	KindSegmentation = "segmentation"
 	KindEmbedding    = "embedding"
+	// KindDiarization is a whole diarizer in one model: audio in, speaker
+	// turns out, with no separate segmentation and embedding stages.
+	KindDiarization = "diarization"
 )
 
 // idPattern also guards path construction: a model id becomes a directory name,
@@ -118,7 +121,7 @@ func (m Manifest) Validate() error {
 		return core.Errorf(core.CodeInvalidRequest, "model %s: family is required", m.ID)
 	}
 	switch m.EffectiveKind() {
-	case KindASR, KindVAD, KindPunctuation, KindSegmentation, KindEmbedding:
+	case KindASR, KindVAD, KindPunctuation, KindSegmentation, KindEmbedding, KindDiarization:
 	default:
 		return core.Errorf(core.CodeInvalidRequest,
 			"model %s: unknown kind %q", m.ID, m.Kind)

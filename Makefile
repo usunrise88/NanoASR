@@ -69,9 +69,10 @@ testdata:
 diar-testdata:
 	./scripts/fetch-diar-eval.sh
 
-## diar-eval: diarization error rate over a grid of embedding models and thresholds
+## diar-eval: diarization error rate: the sortformer row, then the sherpa grid
 #
-# Needs diar-testdata and the diarization models. Asserts nothing: DER depends
+# Needs diar-testdata and the diarization models. DIAR_BACKEND=sortformer stops
+# after the sortformer row; DIAR_MODEL picks its catalog entry. Asserts nothing: DER depends
 # on the recording, and a threshold here would pass on one dialog and fail on
 # the next. It prints a table to read while tuning.
 diar-eval:

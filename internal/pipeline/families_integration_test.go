@@ -126,12 +126,16 @@ func hasConfidence(ws []core.Word) bool {
 	return false
 }
 
-// Diarization against the real segmentation and embedding models.
+// Diarization through the whole pipeline with a real backend (DIAR_BACKEND,
+// sortformer by default).
 //
 // The fixture is two voices derived from one clip by pitch shift, which is the
 // only two-speaker audio the repository can produce without shipping someone's
 // recording. The shift factor is measured rather than chosen: see
-// scripts/fetch-testdata.sh.
+// scripts/fetch-testdata.sh. It is one speaker, so what this checks is the
+// wiring — turns reach words, segments and the summary consistently — not how
+// well voices are told apart; TestDiarizationErrorRate measures that, on real
+// dialogue. Sortformer separates the two halves; sherpa's defaults merge them.
 func TestIntegrationDiarizesTwoSpeakers(t *testing.T) {
 	p := newStack(t)
 	d := newDiarizer(t)
@@ -210,8 +214,13 @@ func TestIntegrationDiarizationSkippedUnderSplit(t *testing.T) {
 	}
 }
 
-func newDiarizer(t *testing.T) *diarizesherpa.Pool {
+// newDiarizer builds the backend DIAR_BACKEND names, sortformer — the
+// server's default — unless it says sherpa.
+func newDiarizer(t *testing.T) diarize.Diarizer {
 	t.Helper()
+	if os.Getenv("DIAR_BACKEND") != "sherpa" {
+		return newSortformerFor(t)
+	}
 	root := repoRoot(t)
 	seg := filepath.Join(root, ".models", "pyannote-segmentation-3@3.0", "model.int8.onnx")
 	emb := filepath.Join(root, ".models", "campplus-sv-zh-en@16k-common-advanced",

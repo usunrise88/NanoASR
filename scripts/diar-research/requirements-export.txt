@@ -1,0 +1,12 @@
+# What export_onnx.py, quantize_int8.py and golden_sortformer.py were run with
+# when the catalog's archives were built. torch comes from the CPU index:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch==2.11.0
+# A different version of any of these can change the bytes of the graphs, and
+# with them the sha256 the catalog pins.
+transformers @ git+https://github.com/huggingface/transformers@f324707307757d9c0b8dac1c4462eceff911fa2f
+onnx==1.23.0
+onnxruntime==1.30.0
+numpy==2.4.6
+librosa==0.11.0
+huggingface_hub==1.32.0
+safetensors==0.8.0

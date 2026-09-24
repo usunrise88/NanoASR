@@ -16,7 +16,8 @@ import (
 // the lifetime of the server — so LRU eviction, the resident-model count and
 // max_model_rss_mb do not apply to them. The cost of that choice is that their
 // memory is not part of the pool's budget, which is why their manifests carry
-// approx_rss_mb and the startup estimate counts them separately.
+// approx_rss_mb and the startup estimate counts them separately, once per
+// instance.
 type Pool struct {
 	free chan *Diarizer
 	all  []*Diarizer
@@ -76,3 +77,14 @@ func (p *Pool) Close() error {
 }
 
 var _ diarize.Diarizer = (*Pool)(nil)
+
+// TakesSpeakerCount is true: a known count cuts the clustering at exactly that
+// many speakers.
+func (p *Pool) TakesSpeakerCount() bool { return true }
+
+func (p *Pool) Advice() string {
+	return "a different diarization.embedding_model or a lower " +
+		"diarization.clustering.threshold separates similar voices better"
+}
+
+var _ diarize.Tuning = (*Pool)(nil)

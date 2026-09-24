@@ -164,6 +164,71 @@ models:
       Same acoustics as gigaam-v2-ctc-ru, exported as a transducer.
 
   # ---------------------------------------------------------------------------
+  # Diarization in one model: an end-to-end Sortformer that labels up to eight
+  # speakers, in order of arrival, straight from the audio. There is no
+  # clustering, so there is no threshold to tune and no speaker count to give.
+  #
+  # Exported to ONNX from the pinned transformers implementation by
+  # scripts/diar-research/export_onnx.py and packed by package_model.sh; the
+  # graphs reproduce the checkpoint to 3.4e-9 and the Go pass reproduces the
+  # reference's probabilities to 3e-6. On 16 minutes of two-speaker Russian
+  # dialogue (make diar-eval) it gives 1.4% DER.
+  - id: nemotron-3-diarization
+    revision: "2026-09-23"
+    kind: diarization
+    family: sortformer
+    display_name: Nemotron-3-Diarization (Sortformer, fp32)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      embed: embed.onnx
+      step: step.onnx
+      mel_filters: mel_filters.bin
+      silence_embeds: silence_embeds.bin
+      config: config.json
+    resources:
+      # measured: ~465 MB of sessions plus ~35 MB per step in flight
+      approx_rss_mb: 500
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-nemotron-diar-1/nemotron-3-diarization-2026-09-23.tar.gz
+      sha256: b2ef7e1f3dfe78bcf0145ec40ff14e4623f248bcc969fec8e73eaeffad3be42f
+      size_bytes: 176348516
+    license: https://openmdw.ai/license/1-1/
+    commercial_use: "yes"
+    notes: >-
+      OpenMDW-1.1: use without restriction, keep the licence and notices when
+      redistributing. At most eight speakers.
+
+  # The same model with the step graph's weights quantized to int8. Opt-in:
+  # speaker probabilities move by up to 0.09, which changed no decision on the
+  # reference clip and left DER on the dialogue at 1.4%, and the step is ~1.5x
+  # faster — but only on CPUs with VNNI; elsewhere int8 can be slower.
+  - id: nemotron-3-diarization-int8
+    revision: "2026-09-23"
+    kind: diarization
+    family: sortformer
+    display_name: Nemotron-3-Diarization (Sortformer, int8)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      embed: embed.onnx
+      step: step.onnx
+      mel_filters: mel_filters.bin
+      silence_embeds: silence_embeds.bin
+      config: config.json
+    resources:
+      # measured: ~180 MB of sessions plus ~25 MB per step in flight
+      approx_rss_mb: 210
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-nemotron-diar-1/nemotron-3-diarization-int8-2026-09-23.tar.gz
+      sha256: 9d1abac2b6d73e90fe996a4d9e301b1dc098ad55cddcd02a04ef29a12e360013
+      size_bytes: 88977299
+    license: https://openmdw.ai/license/1-1/
+    commercial_use: "yes"
+    notes: >-
+      int8 weights in the step graph; faster only where the CPU has VNNI.
+
+  # ---------------------------------------------------------------------------
   # Diarization, part one: segmentation. Answers "is someone speaking, and is it
   # a different someone" over a sliding window; it does not identify anyone.
   - id: pyannote-segmentation-3

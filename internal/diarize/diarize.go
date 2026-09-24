@@ -42,6 +42,17 @@ type Diarizer interface {
 	Close() error
 }
 
+// Tuning is what a backend can say about its own limits, for the warnings a
+// request gets when the speakers found are not the speakers asked for. A
+// backend that does not implement it takes no speaker count and has no advice.
+type Tuning interface {
+	// TakesSpeakerCount reports whether Process honours numClusters.
+	TakesSpeakerCount() bool
+	// Advice is one clause on what to change when voices were merged, naming
+	// the configuration keys that matter for this backend.
+	Advice() string
+}
+
 // Attribution is one word's speaker and how sure we are it is that speaker
 // rather than the neighbour's.
 //
