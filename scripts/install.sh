@@ -161,16 +161,20 @@ preflight() {
 #
 # The redirect that /releases/latest performs is asked first because it is not
 # rate limited, which the API very much is on a shared address.
+#
+# Only a v* tag counts: the repository also hosts model archives as releases
+# (models-*), and one of those marked latest once made every install fail. If
+# "latest" is not a v* tag, the newest v* release in the list is used instead.
 latest_tag() {
   local url tag
   url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)"
   tag="${url##*/}"
-  if [[ "$url" == *"/releases/tag/"* && -n "$tag" ]]; then
+  if [[ "$url" == *"/releases/tag/"* && "$tag" == v* ]]; then
     printf '%s\n' "$tag"
     return
   fi
-  tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
-    sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null |
+    sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -1)"
   [[ -n "$tag" ]] || die "cannot work out the latest release; pass --version TAG"
   printf '%s\n' "$tag"
 }

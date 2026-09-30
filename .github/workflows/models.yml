@@ -51,9 +51,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
+        # --latest=false: GitHub otherwise makes the newest release "Latest",
+        # and /releases/latest/download/install.sh — the one-liner in the
+        # README — would then point here, where there is no installer.
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes \
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --latest=false --notes \
               "Model archives the NanoASR catalog downloads. Built by the models workflow from scripts/diar-research; see NOTICE inside each archive for origin and licence."
           fi
           gh release upload "$TAG" build/out/*.tar.gz --clobber

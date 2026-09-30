@@ -159,18 +159,28 @@ function Test-ConfigHasKeys {
 # Get-LatestTag asks GitHub which release is current: the API first, and the
 # redirect that /releases/latest performs when the API has had enough requests
 # from this address today.
+#
+# Only a v* tag counts: the repository also hosts model archives as releases
+# (models-*), and one of those marked latest once made every install fail. The
+# API is asked for the list, whose newest v* entry is the answer; the redirect
+# is only trusted when it lands on a v* tag.
 function Get-LatestTag {
     try {
-        return (Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases/latest").tag_name
-    } catch {
-        try {
-            $req = [Net.WebRequest]::Create("https://github.com/$Repo/releases/latest")
-            $req.AllowAutoRedirect = $false
-            $req.Method = 'HEAD'
-            $location = $req.GetResponse().Headers['Location']
-            if ($location) { return $location.Split('/')[-1] }
-        } catch { }
-    }
+        $releases = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases?per_page=30"
+        $tag = $releases | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -like 'v*' } |
+            Select-Object -First 1 -ExpandProperty tag_name
+        if ($tag) { return $tag }
+    } catch { }
+    try {
+        $req = [Net.WebRequest]::Create("https://github.com/$Repo/releases/latest")
+        $req.AllowAutoRedirect = $false
+        $req.Method = 'HEAD'
+        $location = $req.GetResponse().Headers['Location']
+        if ($location) {
+            $tag = $location.Split('/')[-1]
+            if ($tag -like 'v*') { return $tag }
+        }
+    } catch { }
     throw "cannot work out the latest release; pass -Version TAG"
 }
 

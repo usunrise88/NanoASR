@@ -228,5 +228,7 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" artifacts/* --clobber
           else
-            gh release create "$TAG" artifacts/* --title "$TAG" --notes "$notes"
+            # --latest explicitly: the one-liners resolve through
+            # /releases/latest, and a models-* release must never hold it.
+            gh release create "$TAG" artifacts/* --title "$TAG" --latest --notes "$notes"
           fi
