@@ -22,20 +22,23 @@ type Punctuator struct {
 	closed bool
 }
 
-// New loads a punctuation model.
-func New(modelPath string, numThreads int) (*Punctuator, error) {
+// New loads a punctuation model. An empty provider means the CPU.
+func New(modelPath, provider string, numThreads int) (*Punctuator, error) {
 	if modelPath == "" {
 		return nil, core.Errorf(core.CodeInvalidRequest, "punctuation: no model path configured")
 	}
 	if numThreads < 1 {
 		numThreads = 1
 	}
+	if provider == "" {
+		provider = "cpu"
+	}
 
 	impl := sonnx.NewOfflinePunctuation(&sonnx.OfflinePunctuationConfig{
 		Model: sonnx.OfflinePunctuationModelConfig{
 			CtTransformer: modelPath,
 			NumThreads:    numThreads,
-			Provider:      "cpu",
+			Provider:      provider,
 		},
 	})
 	if impl == nil {
@@ -89,13 +92,13 @@ type Pool struct {
 
 // NewPool builds size instances up front so a bad model path fails at startup
 // rather than on the first request that asks for punctuation.
-func NewPool(modelPath string, numThreads, size int) (*Pool, error) {
+func NewPool(modelPath, provider string, numThreads, size int) (*Pool, error) {
 	if size < 1 {
 		size = 1
 	}
 	p := &Pool{free: make(chan *Punctuator, size)}
 	for range size {
-		one, err := New(modelPath, numThreads)
+		one, err := New(modelPath, provider, numThreads)
 		if err != nil {
 			_ = p.Close()
 			return nil, err

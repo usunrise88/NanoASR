@@ -42,8 +42,12 @@ auth:
 
 api:
   # openai — /v1/audio/transcriptions; native — /api/v1; era — the
-  # whisper-asr-webservice contract (/asr, /detect-language, /asr_task).
-  # era mounts at the root, so add it deliberately rather than by default.
+  # whisper-asr-webservice contract (/asr, /detect-language, /asr_task);
+  # realtime — /v1/realtime, recognition over a websocket while the audio is
+  # still arriving.
+  # era mounts at the root, so add it deliberately rather than by default, and
+  # realtime loads a streaming model for the life of the server, so it is
+  # opt-in too. /docs lists whatever is enabled, without a key.
   dialects: [openai, native, era]
 
 ui:
@@ -76,6 +80,15 @@ vad:
   max_speech_sec: 20
 
 asr:
+  # The onnxruntime execution provider: cpu or cuda.
+  #
+  # One setting for every recogniser, because the provider is a property of the
+  # native libraries the process loaded rather than of a set of weights. "cuda"
+  # needs the GPU build of sherpa-onnx on the library path (scripts/install-gpu.sh,
+  # or the nanoasr GPU image); the server checks that at startup and refuses to
+  # run rather than fall back to the CPU without saying so, which is what
+  # onnxruntime does on its own. `nanoasr gpu` reports what the libraries can do.
+  provider: cpu
   models_dir: /var/lib/nanoasr/models
   default_model: gigaam-v3-ctc-punct-ru
   max_resident_models: 0        # 0 → auto
@@ -94,6 +107,43 @@ asr:
   variants:
     max: 0
     allow_hotwords: false
+
+# Streaming recognition, served by the realtime dialect over a websocket.
+#
+# This block is read only when "realtime" is in api.dialects. The model is the
+# server's, not the session's: a streaming recogniser settles its weights, its
+# decoding method and its endpoint timings when it is loaded, so a connection
+# cannot choose them.
+realtime:
+  # A streaming model from the catalog. t-one-ctc-ru is Russian telephony at
+  # 8 kHz; streaming-zipformer-small-ru is 16 kHz and cheaper to keep resident.
+  # Neither writes punctuation or capitals — no streaming Russian model does.
+  model: t-one-ctc-ru
+  max_sessions: 0               # 0 -> auto, from the CPU count
+  max_session_duration: 2h      # ceiling on one connection
+  idle_timeout: 60s             # no audio for this long -> closed
+  partial_interval: 300ms       # floor on the gap between two delta events
+  # Audio one session may have queued for decoding. Reaching it means the
+  # server cannot keep up with the stream, which is reported to the client and
+  # closes the session: dropping audio silently would leave a hole in the
+  # transcript with nothing to indicate the loss.
+  max_buffered_seconds: 10
+  num_threads: 0                # 0 -> asr.num_threads
+  # Sessions ready at the same moment are decoded in one call. Batching is what
+  # makes a GPU worth having here; one stream cannot fill it.
+  batch_size: 8
+  decoding_method: greedy_search
+  max_active_paths: 4
+  # Where one utterance ends and the next begins, in seconds. The three rules
+  # are sherpa-onnx's own and are OR-ed. rule2 is the one a caller feels: it is
+  # the pause after which the final transcript arrives. Switching endpointing
+  # off means utterances end only when the client commits the buffer, which is
+  # how a push-to-talk client works.
+  endpoint:
+    enabled: true
+    rule1_min_trailing_silence: 2.4
+    rule2_min_trailing_silence: 1.2
+    rule3_min_utterance_length: 20
 
 registry:
   allow_download: true

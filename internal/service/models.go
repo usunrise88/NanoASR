@@ -118,7 +118,11 @@ func (m *Models) Reload(ctx context.Context, id, revision string) error {
 // choosing what to run, which is before anything has been loaded.
 func (m *Models) describe(man registry.Manifest, state core.ModelState) core.ModelInfo {
 	var caps core.Capabilities
-	if fam, err := sherpa.LookupFamily(man.Family); err == nil {
+	if man.Streaming {
+		if fam, err := sherpa.LookupOnlineFamily(man.Family); err == nil {
+			caps = fam.Capabilities()
+		}
+	} else if fam, err := sherpa.LookupFamily(man.Family); err == nil {
 		caps = fam.Capabilities()
 	}
 	if state != core.ModelAbsent {
@@ -128,6 +132,7 @@ func (m *Models) describe(man registry.Manifest, state core.ModelState) core.Mod
 		ID:           man.ID,
 		Revision:     man.Revision,
 		Kind:         man.EffectiveKind(),
+		Streaming:    man.Streaming,
 		DisplayName:  man.DisplayName,
 		Family:       man.Family,
 		Languages:    man.Languages,

@@ -28,6 +28,11 @@ const (
 	// Named in the configuration for backend: sherpa, not downloaded.
 	initSegModel = "pyannote-segmentation-3"
 	initEmbModel = "campplus-sv-zh-en"
+	// The streaming model -realtime fetches: Russian, 8 kHz, telephony. It is
+	// a separate download and a separate dialect because a streaming model
+	// stays resident for the life of the server, so a deployment that will not
+	// use it should not be carrying it.
+	initRealtimeModel = "t-one-ctc-ru"
 )
 
 // initCommand writes a working configuration and fetches the weights it names.
@@ -44,6 +49,10 @@ func initCommand(args []string) error {
 	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
 	model := fs.String("model", initASRModel, "default recognition model")
 	noDiarize := fs.Bool("no-diarize", false, "turn diarization off and skip its model")
+	realtime := fs.Bool("realtime", false,
+		"also serve streaming recognition over a websocket (/v1/realtime)")
+	provider := fs.String("provider", config.ProviderCPU,
+		"onnxruntime execution provider: cpu or cuda")
 	noDownload := fs.Bool("no-download", false, "write the configuration but download nothing")
 	force := fs.Bool("force", false, "overwrite an existing configuration file")
 	if _, err := parseFlags(fs, args); err != nil {
@@ -74,20 +83,28 @@ func initCommand(args []string) error {
 		host = "this machine"
 	}
 
+	dialects := []string{config.DialectOpenAI, config.DialectNative, config.DialectEra}
+	if *realtime {
+		dialects = append(dialects, config.DialectRealtime)
+	}
+
 	rendered, err := renderInit(map[string]string{
-		"Host":      host,
-		"Addr":      *addr,
-		"AdminKey":  adminKey,
-		"UserKey":   userKey,
-		"ModelsDir": filepath.Join(dir, "models"),
-		"DBPath":    filepath.Join(dir, "nanoasr.db"),
-		"ASRModel":  *model,
-		"VADModel":  initVADModel,
-		"SegModel":  quoteIfEmpty(pick(!*noDiarize, initSegModel)),
-		"EmbModel":  quoteIfEmpty(pick(!*noDiarize, initEmbModel)),
-		"Diarize":   strconv.FormatBool(!*noDiarize),
-		"DiarModel": initDiarModel,
-		"Threshold": defaultThreshold(),
+		"Host":          host,
+		"Addr":          *addr,
+		"Dialects":      strings.Join(dialects, ", "),
+		"Provider":      *provider,
+		"RealtimeModel": pick(*realtime, initRealtimeModel),
+		"DiarModel":     initDiarModel,
+		"AdminKey":      adminKey,
+		"UserKey":       userKey,
+		"ModelsDir":     filepath.Join(dir, "models"),
+		"DBPath":        filepath.Join(dir, "nanoasr.db"),
+		"ASRModel":      *model,
+		"VADModel":      initVADModel,
+		"SegModel":      quoteIfEmpty(pick(!*noDiarize, initSegModel)),
+		"EmbModel":      quoteIfEmpty(pick(!*noDiarize, initEmbModel)),
+		"Diarize":       strconv.FormatBool(!*noDiarize),
+		"Threshold":     defaultThreshold(),
 	})
 	if err != nil {
 		return err
@@ -108,8 +125,9 @@ func initCommand(args []string) error {
 
 	if *noDownload {
 		fmt.Fprintln(os.Stderr, "\nno models were downloaded (-no-download); run "+
-			"`nanoasr models pull "+strings.Join(initModels(*model, !*noDiarize), " ")+"` before serving")
-	} else if err := pullModels(cfg, initModels(*model, !*noDiarize)); err != nil {
+			"`nanoasr models pull "+strings.Join(initModels(*model, !*noDiarize, *realtime), " ")+
+			"` before serving")
+	} else if err := pullModels(cfg, initModels(*model, !*noDiarize, *realtime)); err != nil {
 		// The configuration is already on disk and valid, so a download that
 		// failed is worth reporting as itself rather than as "init failed":
 		// the fix is `nanoasr models pull`, not starting over.
@@ -120,13 +138,24 @@ func initCommand(args []string) error {
 	fmt.Printf("user key       %s\n", userKey)
 	fmt.Fprintf(os.Stderr, "\nBoth keys are stored in %s. Start the server with:\n"+
 		"  nanoasr serve -config %s\n", *cfgPath, *cfgPath)
+	if *realtime {
+		fmt.Fprintf(os.Stderr, "\nStreaming recognition is at ws://%s/v1/realtime "+
+			"(see /docs); %s writes no punctuation or capitals.\n", *addr, initRealtimeModel)
+	}
+	if *provider != config.ProviderCPU {
+		fmt.Fprintf(os.Stderr, "\nasr.provider is %q: install the GPU libraries with "+
+			"scripts/install-gpu.sh, or the server will refuse to start.\n", *provider)
+	}
 	return nil
 }
 
-func initModels(asr string, diarize bool) []string {
+func initModels(asr string, diarize, realtime bool) []string {
 	ids := []string{asr, initVADModel}
 	if diarize {
 		ids = append(ids, initDiarModel)
+	}
+	if realtime {
+		ids = append(ids, initRealtimeModel)
 	}
 	return ids
 }

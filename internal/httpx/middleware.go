@@ -126,6 +126,9 @@ func Auth(keys KeyStore, publicPrefixes ...string) Middleware {
 
 			token := bearer(r.Header.Get("Authorization"))
 			if token == "" {
+				token = websocketToken(r)
+			}
+			if token == "" {
 				unauthorized(w)
 				return
 			}
@@ -179,11 +182,20 @@ func denyAdmin(w http.ResponseWriter, _ *http.Request) {
 }
 
 // isPublicPath matches a prefix exactly, or as a path segment boundary, so
-// "/ui" exempts "/ui" and "/ui/app.js" but never "/uisecret". A prefix that
-// trims to nothing ("" or "/") is ignored: it would match every request and
-// silently disable authentication server-wide.
+// "/ui" exempts "/ui" and "/ui/app.js" but never "/uisecret".
+//
+// "/" is the one entry that is matched exactly and never as a prefix. It names
+// the root, which serves a redirect to the documentation and nothing else;
+// treated as a prefix it would match every request and disable authentication
+// server-wide. An empty entry is ignored for the same reason.
 func isPublicPath(path string, prefixes []string) bool {
 	for _, p := range prefixes {
+		if p == "/" {
+			if path == "/" {
+				return true
+			}
+			continue
+		}
 		p = strings.TrimSuffix(p, "/")
 		if p == "" {
 			continue
@@ -193,6 +205,32 @@ func isPublicPath(path string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+// websocketKeyPrefix is how a credential arrives on a websocket upgrade.
+//
+// A browser cannot set the Authorization header when it opens a WebSocket —
+// the API takes a URL and a subprotocol list and nothing else — so OpenAI's own
+// clients pass the key as a subprotocol token. It is the same secret in a
+// different envelope, and unlike a query parameter it is not part of the
+// request line, so it does not end up in an access log or a proxy's history.
+//
+// "insecure" is OpenAI's name for it, and it is theirs for a reason: any script
+// on the page can read a key the page holds. The key still has to be a real
+// one, which is why this is an alternative spelling rather than an exemption.
+const websocketKeyPrefix = "openai-insecure-api-key."
+
+// websocketToken extracts that credential, and only from an upgrade request.
+func websocketToken(r *http.Request) string {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return ""
+	}
+	for _, field := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
+		if token, ok := strings.CutPrefix(strings.TrimSpace(field), websocketKeyPrefix); ok {
+			return token
+		}
+	}
+	return ""
 }
 
 func bearer(h string) string {
@@ -264,6 +302,15 @@ func (w *statusWriter) Flush() {
 		f.Flush()
 	}
 }
+
+// Unwrap exposes the writer underneath, which is how http.ResponseController
+// reaches capabilities this wrapper does not implement itself.
+//
+// Without it a websocket upgrade fails: the realtime dialect has to hijack the
+// connection, and a logging wrapper that hides the Hijacker makes that
+// impossible — a middleware that quietly removes a capability from every
+// handler below it.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func newID() string {
 	var b [8]byte

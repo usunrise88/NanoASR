@@ -59,7 +59,11 @@ type ModelInfo struct {
 	DisplayName string `json:"display_name"`
 	// Kind separates transcription models from the supporting ones — VAD,
 	// punctuation, diarization — that share the same registry.
-	Kind      string     `json:"kind"`
+	Kind string `json:"kind"`
+	// Streaming marks a model that recognises audio as it arrives. It serves
+	// the realtime API and cannot decode an uploaded file, so a client
+	// choosing a model for /v1/audio/transcriptions has to be able to tell.
+	Streaming bool       `json:"streaming,omitempty"`
 	Family    string     `json:"family"`
 	Languages []string   `json:"languages"`
 	License   string     `json:"license"`

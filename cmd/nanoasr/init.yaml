@@ -26,8 +26,9 @@ auth:
 
 api:
   # openai — /v1/audio/transcriptions; native — /api/v1; era — the
-  # whisper-asr-webservice contract (/asr, /detect-language, /asr_task).
-  dialects: [openai, native, era]
+  # whisper-asr-webservice contract (/asr, /detect-language, /asr_task);
+  # realtime — /v1/realtime over a websocket. /docs lists what is enabled.
+  dialects: [{{.Dialects}}]
 
 ui:
   enabled: true
@@ -47,10 +48,28 @@ vad:
 asr:
   models_dir: {{.ModelsDir}}
   default_model: {{.ASRModel}}
+  # cpu or cuda. "cuda" needs the GPU build of the sherpa-onnx libraries, which
+  # scripts/install-gpu.sh installs; the server refuses to start without them
+  # rather than running on the CPU in silence. `nanoasr gpu` reports what the
+  # loaded libraries can do.
+  provider: {{.Provider}}
   # 0 → derived from CPU count and RAM at startup.
   inference_slots: 0
   num_threads: 0
-
+{{if .RealtimeModel}}
+# Streaming recognition over a websocket. Neither of the Russian streaming
+# models writes punctuation or capitals; the offline endpoints still do.
+realtime:
+  model: {{.RealtimeModel}}
+  max_sessions: 0               # 0 → derived from the CPU count
+  idle_timeout: 60s
+  partial_interval: 300ms
+  endpoint:
+    enabled: true
+    rule1_min_trailing_silence: 2.4
+    rule2_min_trailing_silence: 1.2
+    rule3_min_utterance_length: 20
+{{end}}
 jobs:
   queue_size: 100
   max_concurrent: 0             # 0 → auto

@@ -38,6 +38,7 @@ param(
     [switch] $NoFfmpeg    = [bool]($env:NANOASR_FFMPEG   -eq '0'),
     [switch] $NoStart     = [bool]($env:NANOASR_START    -eq '0'),
     [switch] $NoPath      = [bool]($env:NANOASR_PATH     -eq '0'),
+    [switch] $Realtime    = [bool]($env:NANOASR_REALTIME -eq '1'),
     [switch] $Uninstall,
     [switch] $Purge,
     [switch] $Help
@@ -71,6 +72,8 @@ Install NanoASR as a Windows service.
   -NoUI             install the build without the web interface
   -NoDownload       write the configuration but fetch no models
   -NoFfmpeg         do not install ffmpeg
+  -Realtime         also serve streaming recognition over a websocket,
+                    and fetch the Russian streaming model it needs
   -NoStart          register the service but leave it stopped
   -NoPath           do not add the installation to the machine PATH
   -Uninstall        stop and remove the service and the installation
@@ -79,7 +82,15 @@ Install NanoASR as a Windows service.
 Each has an environment variable, for the piped form where parameters cannot be
 passed: NANOASR_VERSION, NANOASR_PREFIX, NANOASR_DATA_DIR, NANOASR_ADDR,
 NANOASR_SERVICE, NANOASR_UI=0, NANOASR_DOWNLOAD=0, NANOASR_FFMPEG=0,
-NANOASR_START=0, NANOASR_PATH=0, NANOASR_UNINSTALL=1, NANOASR_PURGE=1.
+NANOASR_REALTIME=1, NANOASR_START=0, NANOASR_PATH=0, NANOASR_UNINSTALL=1,
+NANOASR_PURGE=1.
+
+There is no GPU option here yet. sherpa-onnx does publish a CUDA build for
+Windows, but NanoASR installs and checks the GPU runtime on Linux only: the
+provider probe that keeps a server from silently running on the CPU reads
+/proc, and nothing here has been tried on a Windows GPU. So asr.provider: cuda
+is refused on Windows by this build, and GPU recognition is a Linux deployment
+(install.sh --gpu).
 "@
 }
 
@@ -109,7 +120,8 @@ function Invoke-Elevated {
            '-Prefix', "`"$Prefix`"", '-DataDir', "`"$DataDir`"", '-Addr', "`"$Addr`"",
            '-ServiceName', "`"$ServiceName`"", '-Repo', "`"$Repo`"")
     if ($Version)    { $a += @('-Version', "`"$Version`"") }
-    foreach ($s in 'NoUI', 'NoDownload', 'NoFfmpeg', 'NoStart', 'NoPath', 'Uninstall', 'Purge') {
+    foreach ($s in 'NoUI', 'NoDownload', 'NoFfmpeg', 'NoStart', 'NoPath', 'Realtime',
+                   'Uninstall', 'Purge') {
         if ((Get-Variable -Name $s -ValueOnly)) { $a += "-$s" }
     }
 
@@ -346,8 +358,8 @@ function Install-NanoASR {
     $keys = @()
     if (Test-ConfigHasKeys) {
         Say "keeping the configuration in $Config"
-        # A release can change a default model — 1.0.5 moved diarization to
-        # nemotron-3-diarization — and a server that fetches it on the first
+        # A release can change a default model: 1.0.5 moved diarization to
+        # nemotron-3-diarization, and a server that fetches it on the first
         # request that needs it makes that request wait for the download.
         if (-not $NoDownload) {
             Say "fetching any model the configuration uses that is not installed yet"
@@ -361,6 +373,10 @@ function Install-NanoASR {
         Say "writing the configuration and fetching the models (this is gigabytes)"
         $initArgs = @('init', '-config', $Config, '-data-dir', $DataDir, '-addr', $Addr, '-force')
         if ($NoDownload) { $initArgs += '-no-download' }
+        # Only on a fresh configuration: adding the dialect to one somebody
+        # else wrote would mean editing their file, and the streaming model is
+        # a separate download either way.
+        if ($Realtime)   { $initArgs += '-realtime' }
         $out  = Invoke-Native $Exe $initArgs
         $keys = @($out | Where-Object { $_ -match '^(admin|user) key' })
     }
