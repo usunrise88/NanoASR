@@ -98,16 +98,33 @@ Key implementation properties:
 
 ### One command
 
-Linux, as a systemd service:
+Linux, as a systemd service. The CPU is the default; `--gpu` recognises on an NVIDIA
+device instead, and `--addr` decides where the server listens:
 
 ```bash
+# CPU, on 127.0.0.1:8080.
 curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash
+
+# NVIDIA GPU, CUDA 12 or 13 with cuDNN 9. The same installation, on the device.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --gpu
+
+# A port of your own, reachable from other machines.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --addr 0.0.0.0:9000
+
+# Both.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --gpu --addr 0.0.0.0:9000
 ```
 
-Windows, as a service, in PowerShell:
+Windows, as a service, in PowerShell. GPU recognition is Linux-only for now, so what
+is left to choose here is the address — and `iex` cannot pass arguments, so it arrives
+as an environment variable:
 
 ```powershell
+# CPU, on 127.0.0.1:8080.
 irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+
+# A port of your own.
+$env:NANOASR_ADDR = "0.0.0.0:9000"; irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
 ```
 
 Either one resolves the latest release, verifies the download against the published
@@ -130,8 +147,8 @@ privileged steps go through `sudo` one at a time, because a script that arrived 
 a pipe has nothing to re-execute as root. ffmpeg is installed when it is missing and the
 system has an obvious way to install it — without it only WAV and raw PCM are accepted.
 
-Options are flags, and, for the piped form that cannot take flags, environment
-variables:
+Every option is a flag, and every flag also has an environment variable, which is
+what a form that cannot carry arguments needs:
 
 ```bash
 curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --addr 0.0.0.0:8080

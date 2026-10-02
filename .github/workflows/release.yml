@@ -184,13 +184,28 @@ jobs:
           notes=$(cat <<'EOF'
           ## Install
 
-          Linux, as a systemd service:
+          Linux, as a systemd service. The CPU is the default; `--gpu` recognises on
+          an NVIDIA device instead, and `--addr` decides where the server listens:
 
+              # CPU, on 127.0.0.1:8080.
               curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash
 
-          Windows, as a service, in PowerShell:
+              # NVIDIA GPU, CUDA 12 or 13 with cuDNN 9.
+              curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash -s -- --gpu
+
+              # A port of your own, reachable from other machines.
+              curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash -s -- --addr 0.0.0.0:9000
+
+              # Both.
+              curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash -s -- --gpu --addr 0.0.0.0:9000
+
+          Windows, as a service, in PowerShell. Installing on the GPU is Linux-only
+          for now, and `iex` cannot pass arguments, so the address arrives as an
+          environment variable:
 
               irm https://github.com/${{ github.repository }}/releases/latest/download/install.ps1 | iex
+
+              $env:NANOASR_ADDR = "0.0.0.0:9000"; irm https://github.com/${{ github.repository }}/releases/latest/download/install.ps1 | iex
 
           Either one works out the release, verifies what it downloads against
           `sha256sums.txt`, writes a configuration with two API keys, downloads
@@ -203,11 +218,10 @@ jobs:
           realtime transcription API. It fetches a Russian streaming model;
           note that no streaming Russian model writes punctuation or capitals.
 
-          Add `--gpu` to recognise on an NVIDIA GPU (Linux, CUDA 12 or 13 with
-          cuDNN 9). The same command works on a fresh installation and on one
-          already running on the CPU, `--no-gpu` goes back, and an ordinary
-          upgrade never changes which one you are on — it refreshes the GPU
-          libraries of a GPU installation so they keep matching the binary.
+          `--gpu` works the same on a fresh installation and on one already running
+          on the CPU, `--no-gpu` goes back, and an ordinary upgrade never changes
+          which one you are on — it refreshes the GPU libraries of a GPU
+          installation so they keep matching the binary.
 
           It swaps in the CUDA build of the sherpa-onnx libraries, points the
           service at them, and checks that they load before changing anything:
@@ -245,7 +259,20 @@ jobs:
           )
           # Idempotent on purpose: re-running the workflow for a tag replaces
           # the assets instead of failing on a release that already exists.
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          #
+          # The existence check asks for the release list rather than the release,
+          # because a release written by hand before the tag is pushed is a draft,
+          # and a draft is not reachable by its tag. Creating a second release for
+          # a tag that already has a draft is the one outcome worth engineering
+          # against: it would leave the written notes orphaned behind an empty
+          # release. A draft is matched by tag_name and gets the assets, keeping
+          # the title and the notes it was written with.
+          # No pipe to head: the default shell runs with pipefail, and gh taking a
+          # SIGPIPE from a reader that has already left would fail the step.
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$TAG\") | .id] | first // empty")
+          if [[ -n "$existing" ]]; then
+            echo "release $TAG exists (id $existing), uploading assets to it"
             gh release upload "$TAG" artifacts/* --clobber
           else
             gh release create "$TAG" artifacts/* --title "$TAG" --notes "$notes"
