@@ -36,6 +36,7 @@ func renderTestInit(t *testing.T, diarize, realtime bool) []byte {
 		"UserKey":       userKey,
 		"ModelsDir":     "/var/lib/nanoasr/models",
 		"DBPath":        "/var/lib/nanoasr/nanoasr.db",
+		"TempDir":       "/var/lib/nanoasr/spool",
 		"ASRModel":      initASRModel,
 		"VADModel":      initVADModel,
 		"SegModel":      quoteIfEmpty(pick(diarize, initSegModel)),
@@ -177,5 +178,34 @@ func TestConfiguredModelsCoverTheRealtimeDialect(t *testing.T) {
 	}
 	if !slices.Contains(got, initASRModel) || !slices.Contains(got, cfg.VAD.Model) {
 		t.Errorf("configuredModels dropped something else: %v", got)
+	}
+}
+
+// The spool has to belong to this installation. Left unset it resolves to one
+// directory under the system temp dir, shared by every server on the machine —
+// and the startup sweep removes each spool file whose job is absent from the
+// database it just read, which on a second server is the first server's queued
+// audio. A CPU and a GPU service side by side is a documented arrangement, so
+// init names the path rather than leaving it to a default that cannot know.
+func TestInitGivesTheInstallationItsOwnSpool(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nanoasr.yaml")
+	if err := os.WriteFile(path, renderTestInit(t, false, false), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Storage.TempDir == "" {
+		t.Fatal("storage.temp_dir is empty, so the spool falls back to a shared directory")
+	}
+	// Beside the database, which is what makes it this installation's.
+	if want := filepath.Join(filepath.Dir(cfg.Storage.DBPath), "spool"); cfg.Storage.TempDir != want {
+		t.Errorf("storage.temp_dir = %q, want %q (beside the database)", cfg.Storage.TempDir, want)
+	}
+	if strings.HasPrefix(cfg.Storage.TempDir, os.TempDir()+string(filepath.Separator)) {
+		t.Errorf("storage.temp_dir = %q is under the system temp dir, where a second server would share it",
+			cfg.Storage.TempDir)
 	}
 }

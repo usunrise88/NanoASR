@@ -197,6 +197,12 @@ func (c *Config) Autotune() {
 	// A subdirectory of our own, not the system temp directory itself: the
 	// spool holds uploaded audio at 0700, and startup cleanup should be walking
 	// our files rather than everyone else's.
+	//
+	// It is still shared between two servers on one machine, and the sweep
+	// removes every spool file whose job is absent from the database it just
+	// read — the other server's queued audio included. `nanoasr init` writes an
+	// explicit path under the data directory for that reason; this fallback is
+	// for a configuration that names none, and a second server wants its own.
 	if c.Storage.TempDir == "" {
 		c.Storage.TempDir = filepath.Join(os.TempDir(), "nanoasr-spool")
 	}

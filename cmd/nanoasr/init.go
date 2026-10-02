@@ -99,6 +99,7 @@ func initCommand(args []string) error {
 		"UserKey":       userKey,
 		"ModelsDir":     filepath.Join(dir, "models"),
 		"DBPath":        filepath.Join(dir, "nanoasr.db"),
+		"TempDir":       filepath.Join(dir, "spool"),
 		"ASRModel":      *model,
 		"VADModel":      initVADModel,
 		"SegModel":      quoteIfEmpty(pick(!*noDiarize, initSegModel)),
