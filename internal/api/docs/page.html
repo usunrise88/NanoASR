@@ -83,7 +83,7 @@
     <li>version <b>{{.Version}}</b></li>
     <li>auth <b>{{.AuthMode}}</b></li>
     <li>upload limit <b>{{mib .MaxUploadBytes}} MiB</b></li>
-    {{- range .Dialects}}<li>dialect <b>{{.Name}}</b></li>{{end}}
+    {{- range .Dialects}}{{if .Enabled}}<li>dialect <b>{{.Name}}</b></li>{{end}}{{end}}
   </ul>
 
   <h2>Authentication</h2>
@@ -124,10 +124,21 @@
   {{end}}
   {{end}}
 
-  {{range .Dialects}}
+  {{range .Dialects}}{{if .Enabled}}
   <h2>{{.Title}}</h2>
   <p class="sub">{{.Summary}}</p>
   {{range .Routes}}{{template "route" .}}{{end}}
+  {{end}}{{end}}
+
+  {{with off .Dialects}}
+  <h2>Not enabled here</h2>
+  <p class="sub">This build also carries the dialects below. They answer nothing
+  until they are named in <code>api.dialects</code> in the configuration, so their
+  routes are left out of this page and out of
+  <a href="/docs/openapi.json">openapi.json</a>.</p>
+  <ul>
+    {{- range .}}<li><b>{{.Name}}</b> &mdash; {{.Title}}{{if .Summary}} {{.Summary}}{{end}}</li>{{end}}
+  </ul>
   {{end}}
 
   {{if .Server}}

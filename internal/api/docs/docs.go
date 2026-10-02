@@ -36,7 +36,8 @@ type Page struct {
 	Public []string
 	// UIPath is where the test UI is mounted, empty when it is not.
 	UIPath string
-	// Dialects are the mounted API dialects, in configuration order.
+	// Dialects are every dialect this build registers, the mounted ones first
+	// in configuration order; adapter.DocsFor marks which are enabled.
 	Dialects []adapter.Doc
 	// Server holds the endpoints that belong to no dialect.
 	Server []adapter.Route
@@ -52,6 +53,15 @@ type Page struct {
 func Handler(p Page) (http.Handler, error) {
 	tmpl, err := template.New("page.html").Funcs(template.FuncMap{
 		"mib": func(n int64) int64 { return n / (1 << 20) },
+		"off": func(docs []adapter.Doc) []adapter.Doc {
+			var out []adapter.Doc
+			for _, d := range docs {
+				if !d.Enabled {
+					out = append(out, d)
+				}
+			}
+			return out
+		},
 	}).ParseFS(pageTemplate, "page.html")
 	if err != nil {
 		return nil, err
@@ -140,6 +150,12 @@ func openAPI(p Page) map[string]any {
 	}
 
 	for _, d := range p.Dialects {
+		// A dialect that is off serves none of these, and a generated client
+		// that called them would get a 404. The page names it in prose; this
+		// file lists only what answers.
+		if !d.Enabled {
+			continue
+		}
 		for _, r := range d.Routes {
 			add(r, d.Name)
 		}

@@ -133,6 +133,12 @@ default models and leaves a running service behind; the keys and the URL are pri
 the end. Run it again and it upgrades in place: the service is stopped first, and the
 configuration and the models are kept.
 
+Kept means kept, which is worth knowing before you pass a flag to an upgrade: the
+options that reach `nanoasr init` — the listen address, `--realtime` — only apply when
+there is no configuration yet. On an upgrade the file decides, the installer says which
+flag it did not apply, and the change is one line in the configuration (or, for the
+address, `systemctl edit` and `Environment=NANOASR_ADDR=...` for the service alone).
+
 | | Linux | Windows |
 |---|---|---|
 | Binary and libraries | `/opt/nanoasr` | `C:\Program Files\NanoASR` |

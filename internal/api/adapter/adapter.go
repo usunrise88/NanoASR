@@ -53,47 +53,84 @@ type Doc struct {
 	Title   string
 	Summary string
 	Routes  []Route
+	// Enabled is false for a dialect this build registers but the
+	// configuration does not list. Its routes are not served, and the page
+	// says so rather than leaving them out: somebody looking for an endpoint
+	// the release notes promised needs to find out that it is one line of
+	// configuration away, not that it does not exist.
+	Enabled bool
 }
 
 // Documented is the optional half of Adapter: a dialect that can describe
 // itself appears in the documentation page.
 //
-// Optional rather than required because the page is built from the dialects
-// actually mounted, and a dialect nobody enabled must not be documented as
-// though it were serving. A dialect that does not implement this is listed by
-// name with a note saying it describes no routes, which is a visible gap
-// rather than a silent one.
+// Optional rather than required because a dialect nobody enabled must not be
+// documented as though it were serving. A dialect that does not implement this
+// is listed by name with a note saying it describes no routes, which is a
+// visible gap rather than a silent one — and so is a dialect that is off: it
+// is listed as off, with its routes withheld.
 type Documented interface {
 	Doc() Doc
 }
 
-// DocsFor returns the documentation of the named dialects, in the order given.
+// DocsFor returns the documentation of every dialect this build registers: the
+// enabled ones first, in the order the configuration named them, then the rest
+// marked Enabled=false and sorted by name.
+//
+// Returning the disabled ones too is the point. Enabling a dialect is one line
+// in api.dialects, and a page that simply omitted what is off left somebody
+// who had just read about an endpoint with no way to tell whether it was
+// missing from the build, missing from the release, or merely switched off.
 func DocsFor(names []string) []Doc {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	out := make([]Doc, 0, len(names))
+	out := make([]Doc, 0, len(adapters))
+	seen := make(map[string]bool, len(names))
 	for _, n := range names {
+		if seen[n] {
+			continue
+		}
 		a, ok := adapters[n]
 		if !ok {
 			continue
 		}
-		d, ok := a.(Documented)
-		if !ok {
-			out = append(out, Doc{
-				Name:    n,
-				Title:   n,
-				Summary: "This dialect does not describe its routes.",
-			})
-			continue
+		seen[n] = true
+		out = append(out, docOf(n, a, true))
+	}
+
+	rest := make([]string, 0, len(adapters))
+	for n := range adapters {
+		if !seen[n] {
+			rest = append(rest, n)
 		}
-		doc := d.Doc()
-		if doc.Name == "" {
-			doc.Name = n
-		}
-		out = append(out, doc)
+	}
+	sort.Strings(rest)
+	for _, n := range rest {
+		out = append(out, docOf(n, adapters[n], false))
 	}
 	return out
+}
+
+func docOf(name string, a Adapter, enabled bool) Doc {
+	d, ok := a.(Documented)
+	if !ok {
+		return Doc{
+			Name:    name,
+			Title:   name,
+			Summary: "This dialect does not describe its routes.",
+			Enabled: enabled,
+		}
+	}
+	doc := d.Doc()
+	if doc.Name == "" {
+		doc.Name = name
+	}
+	if doc.Title == "" {
+		doc.Title = name
+	}
+	doc.Enabled = enabled
+	return doc
 }
 
 // Adapter is one API dialect.
