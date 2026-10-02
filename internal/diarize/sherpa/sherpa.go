@@ -43,17 +43,21 @@ func New(cfg diarize.Config, numThreads int) (*Diarizer, error) {
 	if numThreads < 1 {
 		numThreads = 1
 	}
+	provider := cfg.Provider
+	if provider == "" {
+		provider = "cpu"
+	}
 
 	c := sonnx.OfflineSpeakerDiarizationConfig{
 		Segmentation: sonnx.OfflineSpeakerSegmentationModelConfig{
 			Pyannote:   sonnx.OfflineSpeakerSegmentationPyannoteModelConfig{Model: cfg.SegmentationModel},
 			NumThreads: numThreads,
-			Provider:   "cpu",
+			Provider:   provider,
 		},
 		Embedding: sonnx.SpeakerEmbeddingExtractorConfig{
 			Model:      cfg.EmbeddingModel,
 			NumThreads: numThreads,
-			Provider:   "cpu",
+			Provider:   provider,
 		},
 		Clustering: sonnx.FastClusteringConfig{
 			NumClusters: cfg.NumClusters,

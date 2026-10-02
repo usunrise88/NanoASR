@@ -48,6 +48,12 @@ type Manifest struct {
 	SampleRate  int      `yaml:"sample_rate" json:"sample_rate"`
 	// ModelingUnit drives word assembly: bpe | cjkchar | char | cjkchar+bpe.
 	ModelingUnit string `yaml:"modeling_unit,omitempty" json:"modeling_unit"`
+	// Streaming marks a model that recognises audio as it arrives, for the
+	// realtime API. It is stated rather than inferred from the family name,
+	// and the loaders check it against the family they find: a streaming
+	// export cannot be decoded by the offline recogniser and the reverse, and
+	// the error either way is worth being clear about.
+	Streaming bool `yaml:"streaming,omitempty" json:"streaming,omitempty"`
 
 	Files    map[string]string `yaml:"files" json:"files"`
 	Features Features          `yaml:"features" json:"features"`

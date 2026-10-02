@@ -19,5 +19,38 @@ services:
     # (SPEC §11). Restarts are the mitigation until workers are isolated.
     stop_grace_period: 40s
 
+  # The same image with the CUDA build of the sherpa-onnx libraries, and a
+  # device to run them on:
+  #
+  #   docker compose --profile gpu up --build nanoasr-gpu
+  #
+  # It needs the NVIDIA container runtime on the host. Realtime recognition is
+  # what a GPU is worth having for here: the engine decodes every open session
+  # in one batched call, and that is what fills a device.
+  nanoasr-gpu:
+    profiles: ["gpu"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        FLAVOUR: gpu
+    image: nanoasr:dev-gpu
+    ports:
+      - "8080:8080"
+    volumes:
+      - nanoasr-data:/var/lib/nanoasr
+    environment:
+      NANOASR_ADDR: ":8080"
+      NANOASR_AUTH_KEYS: "${NANOASR_AUTH_KEYS:?set an API key, or switch auth.mode to open on loopback}"
+      NANOASR_LOG_FORMAT: json
+      NANOASR_API_DIALECTS: "openai,native,realtime"
+    restart: unless-stopped
+    stop_grace_period: 40s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+
 volumes:
   nanoasr-data:

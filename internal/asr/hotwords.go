@@ -130,7 +130,10 @@ func DecodingSupport(family, method string) error {
 		// Every family can decode greedily.
 		return nil
 	case ModifiedBeamSearch:
-		if family != "transducer" {
+		// Both transducer families, offline and streaming: the search is a
+		// property of the decoder, and a streaming transducer has the same
+		// joiner to score candidate paths with.
+		if family != "transducer" && family != "streaming_transducer" {
 			return core.Errorf(core.CodeCapabilityUnavailable,
 				"modified_beam_search works on transducer models; %s decodes greedily only",
 				family)

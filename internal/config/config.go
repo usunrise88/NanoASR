@@ -5,6 +5,8 @@
 // The server starts with no configuration file at all.
 package config
 
+import "strings"
+
 type Config struct {
 	Server      Server      `yaml:"server"`
 	Auth        Auth        `yaml:"auth"`
@@ -13,6 +15,7 @@ type Config struct {
 	Audio       Audio       `yaml:"audio"`
 	VAD         VAD         `yaml:"vad"`
 	ASR         ASR         `yaml:"asr"`
+	Realtime    Realtime    `yaml:"realtime"`
 	Registry    Registry    `yaml:"registry"`
 	Jobs        Jobs        `yaml:"jobs"`
 	PostProc    PostProc    `yaml:"postproc"`
@@ -71,8 +74,31 @@ const (
 	PriorityInteractive = "interactive"
 )
 
+// Dialect names api.dialects accepts. They are declared here rather than only
+// in the packages that register them so that configuration validation can name
+// one without importing the HTTP layer.
+const (
+	DialectOpenAI   = "openai"
+	DialectNative   = "native"
+	DialectEra      = "era"
+	DialectRealtime = "realtime"
+)
+
 type API struct {
 	Dialects []string `yaml:"dialects"`
+}
+
+// DialectEnabled reports whether this dialect is mounted. Several settings are
+// only meaningful when one particular dialect is serving — realtime.model is
+// required exactly when the realtime dialect is on — and validating them
+// unconditionally would refuse configurations that are perfectly fine.
+func (a API) DialectEnabled(name string) bool {
+	for _, d := range a.Dialects {
+		if strings.TrimSpace(d) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // UI has no require_auth knob. Whether a key is needed is not a UI setting: the
@@ -111,8 +137,29 @@ type VAD struct {
 	MaxSpeechSec float32 `yaml:"max_speech_sec"`
 }
 
+// Execution providers asr.provider accepts.
+//
+// There is no "auto": a server that was asked for the GPU and quietly used the
+// CPU is the failure this whole knob exists to prevent, and a server that was
+// asked for the CPU has nothing to detect.
+const (
+	ProviderCPU  = "cpu"
+	ProviderCUDA = "cuda"
+)
+
 type ASR struct {
-	ModelsDir         string   `yaml:"models_dir"`
+	ModelsDir string `yaml:"models_dir"`
+	// Provider is the onnxruntime execution provider: "cpu" or "cuda".
+	//
+	// It is one setting for every recogniser rather than one per model,
+	// because the provider is a property of the native libraries the process
+	// loaded, not of a set of weights. "cuda" therefore requires the GPU build
+	// of sherpa-onnx on the library path; the server checks that at startup and
+	// refuses to run rather than fall back to the CPU without saying so, which
+	// is what onnxruntime does on its own.
+	//
+	// VAD stays on the CPU whatever this says — see sherpa.ProviderFor.
+	Provider          string   `yaml:"provider"`
 	DefaultModel      string   `yaml:"default_model"`
 	MaxResidentModels int      `yaml:"max_resident_models"`
 	MaxModelRSSMB     int      `yaml:"max_model_rss_mb"`
@@ -140,6 +187,65 @@ type Variants struct {
 type Batch struct {
 	MaxSize    int `yaml:"max_size"`
 	MaxSeconds int `yaml:"max_seconds"`
+}
+
+// Realtime configures the streaming recogniser behind the websocket dialect.
+//
+// It is a separate section from ASR because almost nothing carries over: a
+// streaming model is a different export of a different architecture, it is
+// resident for the life of the server rather than pooled, and what bounds it is
+// concurrent connections rather than queued jobs.
+type Realtime struct {
+	// Model is the streaming model every session uses. One model, not a pool:
+	// a realtime session holds decoder state for its whole life, so admitting a
+	// second model means a second resident copy with no way to evict it while
+	// anyone is connected. A client asking for a different one is told so.
+	Model string `yaml:"model"`
+	// MaxSessions bounds concurrent connections. 0 → derived in Autotune.
+	MaxSessions int `yaml:"max_sessions"`
+	// MaxSessionDuration is the hard ceiling on one connection. A realtime
+	// socket has no natural end, and without this a forgotten browser tab
+	// holds a decoder slot for as long as the process lives.
+	MaxSessionDuration Duration `yaml:"max_session_duration"`
+	// IdleTimeout closes a session that has sent no audio for this long. A
+	// client that is genuinely streaming a microphone sends silence, so this
+	// catches a dead peer rather than a quiet speaker.
+	IdleTimeout Duration `yaml:"idle_timeout"`
+	// PartialInterval is the floor on the gap between two delta events for one
+	// utterance. Partial hypotheses change on every decoded chunk, and a
+	// client that renders each one is doing eighty DOM updates a second.
+	PartialInterval Duration `yaml:"partial_interval"`
+	// MaxBufferedSeconds bounds the audio one session may have queued for
+	// decoding. Reaching it means the server cannot keep up with the stream,
+	// which is reported to the client and closes the session: silently
+	// dropping audio would produce a transcript with a hole in it and no
+	// indication that anything was lost.
+	MaxBufferedSeconds int `yaml:"max_buffered_seconds"`
+	// NumThreads is the decoder's intra-op thread count. 0 → asr.num_threads.
+	NumThreads int `yaml:"num_threads"`
+	// BatchSize is how many sessions are decoded in one call. Batching is what
+	// makes a GPU worth having here: one stream cannot fill it.
+	BatchSize      int      `yaml:"batch_size"`
+	DecodingMethod string   `yaml:"decoding_method"`
+	MaxActivePaths int      `yaml:"max_active_paths"`
+	Endpoint       Endpoint `yaml:"endpoint"`
+}
+
+// Endpoint is sherpa-onnx's endpoint detection, which is what decides where one
+// utterance ends and the next begins. The three rules are OR-ed, and the names
+// are sherpa's own so that its documentation applies unchanged.
+type Endpoint struct {
+	Enabled bool `yaml:"enabled"`
+	// Rule1MinTrailingSilence ends an utterance after this much silence when
+	// nothing has been decoded yet, in seconds.
+	Rule1MinTrailingSilence float32 `yaml:"rule1_min_trailing_silence"`
+	// Rule2MinTrailingSilence ends it after this much silence following
+	// decoded speech. This is the one a caller feels: it is the pause after
+	// which the final transcript arrives.
+	Rule2MinTrailingSilence float32 `yaml:"rule2_min_trailing_silence"`
+	// Rule3MinUtteranceLength ends it after this many seconds regardless, so a
+	// monologue still produces results.
+	Rule3MinUtteranceLength float32 `yaml:"rule3_min_utterance_length"`
 }
 
 type Registry struct {

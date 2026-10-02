@@ -27,6 +27,7 @@ SERVICE="${NANOASR_SERVICE:-nanoasr}"
 WITH_UI="${NANOASR_UI:-1}"
 WITH_MODELS="${NANOASR_DOWNLOAD:-1}"
 WITH_FFMPEG="${NANOASR_FFMPEG:-1}"
+REALTIME="${NANOASR_REALTIME:-0}"
 START="${NANOASR_START:-1}"
 ACTION=install
 PURGE=0
@@ -63,14 +64,19 @@ Install NanoASR as a systemd service.
   --no-ui           install the build without the web interface
   --no-download     write the configuration but fetch no models
   --no-ffmpeg       do not install ffmpeg
+  --realtime        also serve streaming recognition over a websocket,
+                    and fetch the Russian streaming model it needs
   --no-start        install everything, start nothing
   --uninstall       stop and remove the service and the installation
   --purge           with --uninstall: also delete the data and the account
 
 Each option has an environment variable: NANOASR_VERSION, NANOASR_PREFIX,
 NANOASR_DATA_DIR, NANOASR_ADDR, NANOASR_USER, NANOASR_SERVICE, NANOASR_UI=0,
-NANOASR_DOWNLOAD=0, NANOASR_FFMPEG=0, NANOASR_START=0, NANOASR_UNINSTALL=1,
-NANOASR_PURGE=1. A flag wins over one.
+NANOASR_DOWNLOAD=0, NANOASR_FFMPEG=0, NANOASR_REALTIME=1, NANOASR_START=0,
+NANOASR_UNINSTALL=1, NANOASR_PURGE=1. A flag wins over one.
+
+For recognition on an NVIDIA GPU, install this first and then run
+install-gpu.sh, which swaps in the CUDA build of the native libraries.
 EOF
 }
 
@@ -85,6 +91,7 @@ while [[ $# -gt 0 ]]; do
     --no-ui)       WITH_UI=0; shift ;;
     --no-download) WITH_MODELS=0; shift ;;
     --no-ffmpeg)   WITH_FFMPEG=0; shift ;;
+    --realtime)    REALTIME=1; shift ;;
     --no-start)    START=0; shift ;;
     --uninstall)   ACTION=uninstall; shift ;;
     --purge)       PURGE=1; shift ;;
@@ -326,6 +333,16 @@ install_nanoasr() {
     say "writing the configuration and fetching the models (this is gigabytes)"
     local init_args=(init -config "$CONFIG" -data-dir "$DATA_DIR" -addr "$ADDR" -force)
     [[ "$WITH_MODELS" == "1" ]] || init_args+=(-no-download)
+    # Only on a fresh configuration: adding the dialect to an existing one
+    # would mean editing a file somebody else wrote, and the streaming model is
+    # a separate 128 MB download either way.
+    #
+    # An if rather than `[[ ... ]] && ...`: under set -e the && form exits the
+    # script when the condition is false, because the statement's status is
+    # then 1 and nothing is consuming it.
+    if [[ "$REALTIME" == "1" ]]; then
+      init_args+=(-realtime)
+    fi
     as_service_user "$PREFIX/nanoasr" "${init_args[@]}" 2>&1 | tee "$TMP/init.log" ||
       die "nanoasr init did not finish — the output above says why. Nothing else was changed; run this again once it is fixed"
     keys="$(grep -E '^(admin|user) key' "$TMP/init.log" || true)"
@@ -394,9 +411,19 @@ EOF
     -H "Authorization: Bearer <the user key>" \\
     -F file=@audio.wav -F model=whisper-1
 
+  docs       $url/docs    (no key needed)
+
   update     curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash
   uninstall  curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash -s -- --uninstall
+  gpu        curl -fsSL https://github.com/$REPO/releases/latest/download/install-gpu.sh | bash
 EOF
+  if [[ "$REALTIME" == "1" ]]; then
+    cat >&2 <<EOF
+
+  Streaming recognition is at ${url/http/ws}/v1/realtime — see $url/docs.
+  The Russian streaming models write no punctuation and no capitals.
+EOF
+  fi
 }
 
 uninstall_nanoasr() {

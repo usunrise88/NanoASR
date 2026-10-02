@@ -169,10 +169,11 @@ jobs:
       # release is current, and that script then installs exactly it.
       - name: stage the installers and the checksums
         run: |
-          cp scripts/install.sh scripts/install.ps1 artifacts/
+          cp scripts/install.sh scripts/install.ps1 scripts/install-gpu.sh artifacts/
           # Named rather than globbed so that sha256sums.txt cannot end up
           # listing itself, which is how a checksum file becomes unverifiable.
-          (cd artifacts && sha256sum nanoasr-* install.sh install.ps1 > sha256sums.txt)
+          (cd artifacts && sha256sum nanoasr-* install.sh install.ps1 install-gpu.sh \
+            > sha256sums.txt)
           cat artifacts/sha256sums.txt
 
       - name: publish
@@ -196,6 +197,22 @@ jobs:
           the models and leaves a running service behind. Run it again to
           upgrade; the configuration and the models are kept. `--uninstall`
           (`-Uninstall` in PowerShell) undoes it.
+
+          Add `--realtime` (`-Realtime`) to also serve streaming recognition
+          over a websocket at `/v1/realtime`, in the event protocol of OpenAI's
+          realtime transcription API. It fetches a Russian streaming model;
+          note that no streaming Russian model writes punctuation or capitals.
+
+          For recognition on an NVIDIA GPU, after installing:
+
+              curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install-gpu.sh | sudo bash
+
+          That swaps in the CUDA build of the sherpa-onnx libraries, points the
+          service at them and checks that they load before changing anything.
+          It needs CUDA 12 and cuDNN 9 on the host; `nanoasr gpu` reports what
+          the loaded libraries can do, and the server refuses to start on a
+          provider it cannot serve rather than falling back to the CPU in
+          silence.
 
           ## Archives
 

@@ -29,6 +29,14 @@ type Config struct {
 	Threshold      float32
 	MinDurationOn  float32
 	MinDurationOff float32
+	// Provider is the onnxruntime execution provider, empty meaning "cpu".
+	//
+	// Read by the sherpa backend only. The sortformer backend builds its own
+	// onnxruntime sessions (internal/diarize/sortformer) and does not append
+	// an execution provider to them, so it runs on the CPU whatever
+	// asr.provider says — which is stated in the README rather than left for
+	// somebody to measure.
+	Provider string
 }
 
 // Diarizer wraps sherpa_onnx.OfflineSpeakerDiarization.

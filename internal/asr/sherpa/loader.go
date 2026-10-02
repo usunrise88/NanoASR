@@ -14,9 +14,10 @@ import (
 // LoaderOptions are the process-wide defaults a model inherits when its
 // manifest does not override them.
 type LoaderOptions struct {
-	// Provider is the onnxruntime execution provider. Only "cpu" is supported;
-	// the field exists because the binding takes one and a future GPU build
-	// would set it here and nowhere else.
+	// Provider is the onnxruntime execution provider: "cpu" or "cuda".
+	// Whether the loaded libraries can serve it is settled before any model is
+	// loaded — see CheckProvider — so by the time this is used it is known to
+	// be available.
 	Provider string
 	// NumThreads is the per-instance intra-op thread count. The CPU governor
 	// admits work in units of this number, so the two must agree.
@@ -32,9 +33,7 @@ type LoaderOptions struct {
 // from a manifest. The signature is structural rather than importing
 // internal/pool, so cgo stays out of the pool's dependency graph.
 func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, string, asr.Variant) (asr.Recognizer, error) {
-	if opt.Provider == "" {
-		opt.Provider = "cpu"
-	}
+	opt.Provider = providerOrCPU(opt.Provider)
 	if opt.NumThreads < 1 {
 		opt.NumThreads = 1
 	}
@@ -43,6 +42,15 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 		if kind := m.EffectiveKind(); kind != registry.KindASR {
 			return nil, core.Errorf(core.CodeInvalidRequest,
 				"model %s is a %s model and cannot be used for transcription", m.ID, kind)
+		}
+		// A streaming export has no whole-file decoder: its encoder was
+		// trained with a few hundred milliseconds of right context and
+		// sherpa-onnx will not load it as an offline recogniser. Said here
+		// because the alternative error is "unknown model family".
+		if m.Streaming {
+			return nil, core.Errorf(core.CodeInvalidRequest,
+				"model %s is a streaming model: it serves the realtime API (/v1/realtime) "+
+					"and cannot decode an uploaded file", m.ID)
 		}
 
 		fam, err := LookupFamily(m.Family)

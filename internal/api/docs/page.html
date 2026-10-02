@@ -1,0 +1,147 @@
+{{define "route"}}
+  <div class="route">
+    <div class="line">
+      <span class="method">{{.Method}}</span>
+      <span class="path">{{.Path}}</span>
+      {{if .Admin}}<span class="badge">admin key</span>{{end}}
+      {{if .Public}}<span class="badge">no key</span>{{end}}
+    </div>
+    <p class="summary">{{.Summary}}</p>
+    {{if .Detail}}<p class="detail">{{.Detail}}</p>{{end}}
+  </div>
+{{end}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoASR API</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg: #16181d; --dim: #5c6370; --bg: #ffffff; --card: #f6f7f9;
+    --line: #e2e5ea; --accent: #0a60c2; --code: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e6e8ec; --dim: #9aa3b2; --bg: #14161a; --card: #1b1e24;
+      --line: #2a2f38; --accent: #6fb2ff; --code: #22262e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1rem 6rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 52rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; margin: 0 0 .25rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.25rem; margin: 2.5rem 0 .25rem; letter-spacing: -.01em; }
+  h2 + p.sub { margin-top: .25rem; }
+  p.sub { color: var(--dim); margin: 0 0 1rem; }
+  a { color: var(--accent); }
+  code, kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .875em; background: var(--code); padding: .1em .35em; border-radius: 4px;
+  }
+  pre {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: .9rem 1rem; overflow-x: auto; font-size: .85rem; line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; }
+  .facts { display: flex; flex-wrap: wrap; gap: .4rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+  .facts li {
+    background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+    padding: .15rem .7rem; font-size: .8rem; color: var(--dim);
+  }
+  .facts b { color: var(--fg); font-weight: 600; }
+  .route {
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+    padding: .8rem 1rem; margin: .6rem 0;
+  }
+  .route .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; }
+  .method {
+    font-family: ui-monospace, monospace; font-size: .75rem; font-weight: 700;
+    letter-spacing: .04em; color: var(--accent); min-width: 3.6rem;
+  }
+  .path { font-family: ui-monospace, monospace; font-size: .9rem; word-break: break-all; }
+  .badge {
+    font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+    border: 1px solid var(--line); border-radius: 999px; padding: .05rem .5rem; color: var(--dim);
+  }
+  .summary { margin: .35rem 0 0; }
+  .detail { margin: .35rem 0 0; color: var(--dim); font-size: .9rem; }
+  footer { color: var(--dim); font-size: .85rem; margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>NanoASR API</h1>
+  <p class="sub">Offline speech recognition. This page describes the endpoints this
+  server has actually mounted, and nothing it does not serve.</p>
+
+  <ul class="facts">
+    <li>version <b>{{.Version}}</b></li>
+    <li>auth <b>{{.AuthMode}}</b></li>
+    <li>upload limit <b>{{mib .MaxUploadBytes}} MiB</b></li>
+    {{- range .Dialects}}<li>dialect <b>{{.Name}}</b></li>{{end}}
+  </ul>
+
+  <h2>Authentication</h2>
+  {{if eq .AuthMode "open"}}
+  <p class="sub">This server runs in open mode and takes no credential. Open mode is
+  permitted only on a loopback address.</p>
+  {{else}}
+  <p class="sub">Every request needs an API key, as a bearer token:</p>
+  <pre><code>curl -H "Authorization: Bearer $NANOASR_KEY" \
+  -F file=@call.wav -F model=gigaam-v3-ctc-punct-ru \
+  http://localhost:8080/v1/audio/transcriptions</code></pre>
+  <p class="detail">A browser cannot set a header when it opens a WebSocket, so
+  <code>/v1/realtime</code> also accepts the key as a subprotocol:
+  <code>openai-insecure-api-key.&lt;key&gt;</code>. Any script on the page can read a
+  key the page holds, which is what "insecure" refers to; it is still a real key and
+  is checked like one.</p>
+  {{end}}
+  {{if .Public}}
+  <p class="detail">Served without a credential:
+    {{range $i, $p := .Public}}{{if $i}}, {{end}}<code>{{$p}}</code>{{end}}.</p>
+  {{end}}
+
+  {{if .RealtimeInfo}}
+  <h2>Streaming model</h2>
+  <p class="sub">Realtime recognition is served by one model, loaded for the life of the
+  server. A session cannot choose another one.</p>
+  <ul class="facts">
+    <li>model <b>{{.RealtimeInfo.Model}}</b></li>
+    <li>rate <b>{{.RealtimeInfo.SampleRate}} Hz</b></li>
+    {{- range .RealtimeInfo.Languages}}<li>language <b>{{.}}</b></li>{{end}}
+    <li>punctuation <b>{{if .RealtimeInfo.Punctuation}}yes{{else}}no{{end}}</b></li>
+    <li>word timestamps <b>{{if .RealtimeInfo.WordTimestamps}}yes{{else}}no{{end}}</b></li>
+    <li>sessions <b>{{.RealtimeInfo.Active}} of {{.RealtimeInfo.MaxSessions}}</b></li>
+  </ul>
+  {{if not .RealtimeInfo.Punctuation}}
+  <p class="detail">This model writes neither punctuation nor capitals — no streaming
+  Russian model does. The offline endpoints still do.</p>
+  {{end}}
+  {{end}}
+
+  {{range .Dialects}}
+  <h2>{{.Title}}</h2>
+  <p class="sub">{{.Summary}}</p>
+  {{range .Routes}}{{template "route" .}}{{end}}
+  {{end}}
+
+  {{if .Server}}
+  <h2>Server</h2>
+  <p class="sub">Endpoints that belong to no dialect.</p>
+  {{range .Server}}{{template "route" .}}{{end}}
+  {{end}}
+
+  <footer>
+    <p>The same endpoint list as OpenAPI: <a href="/docs/openapi.json">openapi.json</a>.
+    Schemas are not in it — a hand-written schema beside a hand-written page is a
+    second description that drifts.</p>
+    {{if .UIPath}}<p>There is a test UI at <a href="{{.UIPath}}">{{.UIPath}}</a>.</p>{{end}}
+  </footer>
+</main>
+</body>
+</html>

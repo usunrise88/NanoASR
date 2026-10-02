@@ -57,6 +57,12 @@ func configuredModels(cfg config.Config) []string {
 			ids = append(ids, cfg.Diarization.Model)
 		}
 	}
+	// The streaming model, but only when the dialect that serves it is on:
+	// realtime.model keeps its default value in every configuration, and
+	// fetching a model nobody asked for is 128 MB of surprise.
+	if cfg.API.DialectEnabled(config.DialectRealtime) {
+		ids = append(ids, cfg.Realtime.Model)
+	}
 	out := ids[:0]
 	for _, id := range ids {
 		if id != "" && !slices.Contains(out, id) {

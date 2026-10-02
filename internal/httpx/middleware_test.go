@@ -155,3 +155,30 @@ func TestBearerParsing(t *testing.T) {
 		}
 	}
 }
+
+// The root serves a redirect to the documentation, so it is exempt — and it has
+// to be exempt as exactly "/" rather than as a prefix, which would make every
+// path on the server public.
+func TestTheRootIsExemptWithoutExemptingEverything(t *testing.T) {
+	keys, err := NewStaticKeyStore([]KeySpec{{Name: "k", Secret: "sk-test-0123456789abcdef"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Auth(keys, "/healthz", "/")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}))
+
+	for path, want := range map[string]int{
+		"/":              http.StatusTeapot,
+		"/healthz":       http.StatusTeapot,
+		"/api/v1/models": http.StatusUnauthorized,
+		"/v1/models":     http.StatusUnauthorized,
+		"/docs":          http.StatusUnauthorized,
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Errorf("%s: status %d, want %d", path, rec.Code, want)
+		}
+	}
+}

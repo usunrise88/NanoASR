@@ -3,6 +3,7 @@ module github.com/usunrise88/nanoasr
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/k2-fsa/sherpa-onnx-go v1.13.6
 	github.com/yalue/onnxruntime_go v1.31.0
 	golang.org/x/sys v0.47.0

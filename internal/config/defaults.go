@@ -50,6 +50,10 @@ func Default() Config {
 		},
 		ASR: ASR{
 			ModelsDir: "/var/lib/nanoasr/models",
+			// The CPU is what the shipped native libraries can do. Changing
+			// this to "cuda" without installing the GPU libraries is refused
+			// at startup rather than answered with a silent fallback.
+			Provider: ProviderCPU,
 			// Russian punctuation and casing come from the recognition model
 			// itself, because no Russian CT-Transformer exists to add them in a
 			// second pass (SPEC §5.6). Naming the punctuating model as the
@@ -59,6 +63,31 @@ func Default() Config {
 			IdleTTL:        Dur(15 * time.Minute),
 			AcquireTimeout: Dur(30 * time.Second),
 			Batch:          Batch{MaxSize: 8, MaxSeconds: 60},
+		},
+		Realtime: Realtime{
+			// Russian, streaming, 8 kHz, character vocabulary: the only
+			// streaming model in the catalog that matches the workload this
+			// server is for. It does not punctuate — no streaming Russian
+			// model does — so a realtime transcript arrives in lower case.
+			Model: "t-one-ctc-ru",
+			// Two hours: long enough for a meeting, short enough that a
+			// forgotten tab releases its slot the same day.
+			MaxSessionDuration: Dur(2 * time.Hour),
+			IdleTimeout:        Dur(60 * time.Second),
+			PartialInterval:    Dur(300 * time.Millisecond),
+			MaxBufferedSeconds: 10,
+			BatchSize:          8,
+			DecodingMethod:     "greedy_search",
+			MaxActivePaths:     4,
+			// sherpa-onnx's own defaults. Rule 2 is the one a caller feels:
+			// 1.2 s of silence after speech is what ends an utterance and
+			// produces the final transcript.
+			Endpoint: Endpoint{
+				Enabled:                 true,
+				Rule1MinTrailingSilence: 2.4,
+				Rule2MinTrailingSilence: 1.2,
+				Rule3MinUtteranceLength: 20,
+			},
 		},
 		Registry: Registry{AllowDownload: true, DownloadConcurrency: 2},
 		Jobs: Jobs{
@@ -133,6 +162,18 @@ func (c *Config) Autotune() {
 		if c.Audio.ChannelMode == "split" && c.Audio.MaxSplitChannels > 1 {
 			c.Jobs.MaxConcurrent = clamp(c.Jobs.MaxConcurrent/c.Audio.MaxSplitChannels, 1, 8)
 		}
+	}
+	if c.Realtime.NumThreads <= 0 {
+		c.Realtime.NumThreads = c.ASR.NumThreads
+	}
+	if c.Realtime.MaxSessions <= 0 {
+		// One decoder goroutine serves every session, and it runs with
+		// num_threads of intra-op parallelism — so the bound is not how many
+		// cores there are but how much audio one such decoder keeps up with.
+		// Streaming models are small and each session is a fraction of real
+		// time, so this is deliberately more generous than jobs.max_concurrent
+		// and still bounded: an unbounded count is an unbounded queue.
+		c.Realtime.MaxSessions = clamp(cpus*2, 2, 32)
 	}
 	if c.ASR.MaxModelRSSMB <= 0 {
 		c.ASR.MaxModelRSSMB = clamp(ramMB/2, 1024, 16384)

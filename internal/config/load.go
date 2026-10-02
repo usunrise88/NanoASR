@@ -47,6 +47,8 @@ func applyEnv(c *Config) {
 	str("NANOASR_AUTH_MODE", &c.Auth.Mode)
 	str("NANOASR_MODELS_DIR", &c.ASR.ModelsDir)
 	str("NANOASR_DEFAULT_MODEL", &c.ASR.DefaultModel)
+	str("NANOASR_PROVIDER", &c.ASR.Provider)
+	str("NANOASR_REALTIME_MODEL", &c.Realtime.Model)
 	str("NANOASR_FFMPEG_PATH", &c.Audio.FFmpegPath)
 	str("NANOASR_DB_PATH", &c.Storage.DBPath)
 	str("NANOASR_TEMP_DIR", &c.Storage.TempDir)
@@ -60,6 +62,7 @@ func applyEnv(c *Config) {
 	num("NANOASR_MAX_MODEL_RSS_MB", &c.ASR.MaxModelRSSMB)
 	num("NANOASR_QUEUE_SIZE", &c.Jobs.QueueSize)
 	num("NANOASR_MAX_CONCURRENT", &c.Jobs.MaxConcurrent)
+	num("NANOASR_REALTIME_MAX_SESSIONS", &c.Realtime.MaxSessions)
 	num64("NANOASR_MAX_QUEUED_BYTES", &c.Jobs.MaxQueuedBytes)
 
 	bl("NANOASR_UI_ENABLED", &c.UI.Enabled)
@@ -200,7 +203,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("ui.path must be an absolute path below the root, got %q", p)
 		}
 		for _, reserved := range []string{"/api", "/v1", "/asr", "/asr_task", "/detect-language",
-			"/healthz", "/readyz"} {
+			"/healthz", "/readyz", "/docs"} {
 			if p == reserved || strings.HasPrefix(reserved, p+"/") || strings.HasPrefix(p, reserved+"/") {
 				return fmt.Errorf("ui.path %q overlaps the reserved path %q: "+
 					"requests under ui.path are not authenticated", p, reserved)
@@ -209,6 +212,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Audio.MaxSplitChannels < 1 {
 		return fmt.Errorf("audio.max_split_channels must be at least 1, got %d", c.Audio.MaxSplitChannels)
+	}
+	switch c.ASR.Provider {
+	case ProviderCPU, ProviderCUDA:
+	default:
+		return fmt.Errorf("asr.provider must be %q or %q, got %q",
+			ProviderCPU, ProviderCUDA, c.ASR.Provider)
+	}
+	if err := c.validateRealtime(); err != nil {
+		return err
 	}
 	if err := c.validatePostProc(); err != nil {
 		return err
@@ -240,6 +252,53 @@ func (c *Config) validatePostProc() error {
 	if c.PostProc.Hotwords.Enabled && c.ASR.Variants.Max == 0 {
 		return fmt.Errorf("postproc.hotwords.enabled is true but asr.variants.max is 0; " +
 			"per-request hotwords need a second resident model instance to load into")
+	}
+	return nil
+}
+
+// validateRealtime checks the streaming settings, but only the ones that can be
+// wrong. Most of them are only consulted when the realtime dialect is mounted,
+// and refusing to start over a setting nothing reads would make the realtime
+// block impossible to leave in a shared configuration file.
+func (c *Config) validateRealtime() error {
+	r := c.Realtime
+	if c.API.DialectEnabled(DialectRealtime) && r.Model == "" {
+		return fmt.Errorf("api.dialects includes %q but realtime.model is empty; "+
+			"name a streaming model, or drop the dialect", DialectRealtime)
+	}
+	if r.MaxSessions < 0 {
+		return fmt.Errorf("realtime.max_sessions must not be negative, got %d", r.MaxSessions)
+	}
+	if r.MaxBufferedSeconds < 1 {
+		return fmt.Errorf("realtime.max_buffered_seconds must be at least 1, got %d",
+			r.MaxBufferedSeconds)
+	}
+	if r.BatchSize < 1 {
+		return fmt.Errorf("realtime.batch_size must be at least 1, got %d", r.BatchSize)
+	}
+	switch r.DecodingMethod {
+	case "greedy_search", "modified_beam_search":
+	default:
+		return fmt.Errorf(
+			"realtime.decoding_method must be greedy_search or modified_beam_search, got %q",
+			r.DecodingMethod)
+	}
+	if r.MaxActivePaths < 1 {
+		return fmt.Errorf("realtime.max_active_paths must be at least 1, got %d", r.MaxActivePaths)
+	}
+	if e := r.Endpoint; e.Rule1MinTrailingSilence < 0 ||
+		e.Rule2MinTrailingSilence < 0 || e.Rule3MinUtteranceLength < 0 {
+		return fmt.Errorf("realtime.endpoint rules must not be negative")
+	}
+	// Endpointing switched off means no utterance ever ends on its own, so the
+	// only transcripts a client sees are the ones it asks for by committing
+	// the buffer. That is a legitimate mode — it is how a push-to-talk client
+	// works — but rule 3 at zero with endpointing on is not: it would end an
+	// utterance on every decoded chunk.
+	if r.Endpoint.Enabled && r.Endpoint.Rule3MinUtteranceLength == 0 &&
+		r.Endpoint.Rule2MinTrailingSilence == 0 && r.Endpoint.Rule1MinTrailingSilence == 0 {
+		return fmt.Errorf("realtime.endpoint.enabled is true but every rule is 0; " +
+			"set at least one, or disable endpointing and commit the buffer from the client")
 	}
 	return nil
 }

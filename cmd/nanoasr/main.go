@@ -4,6 +4,7 @@
 //	nanoasr serve   [-config path]   run the HTTP server
 //	nanoasr key     [list|issue|remove]  manage the api keys in a config file
 //	nanoasr models  [list|pull id]   inspect and fetch models
+//	nanoasr gpu                      report the execution provider and the GPU
 //	nanoasr service [install|...]    register the Windows service (also: --install)
 //	nanoasr version                  print versions, including the native libs
 package main
@@ -22,11 +23,14 @@ import (
 	"syscall"
 
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
+	"github.com/usunrise88/nanoasr/internal/api/docs"
 	_ "github.com/usunrise88/nanoasr/internal/api/era"
 	"github.com/usunrise88/nanoasr/internal/api/native"
 	_ "github.com/usunrise88/nanoasr/internal/api/openai"
+	_ "github.com/usunrise88/nanoasr/internal/api/realtime"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/config"
+	"github.com/usunrise88/nanoasr/internal/core"
 	diarizesortformer "github.com/usunrise88/nanoasr/internal/diarize/sortformer"
 	"github.com/usunrise88/nanoasr/internal/httpx"
 	"github.com/usunrise88/nanoasr/internal/registry"
@@ -64,6 +68,8 @@ func main() {
 		err = keyCommand(os.Args[2:])
 	case "models":
 		err = models(os.Args[2:])
+	case "gpu":
+		err = gpuCommand(os.Args[2:])
 	case "service":
 		err = serviceCommand(os.Args[2:])
 	case "version":
@@ -93,6 +99,7 @@ func usage() {
   nanoasr serve   [-config FILE] [-addr ADDR] [-log-file FILE]
   nanoasr key     list | issue NAME [-admin] [-rps N] | remove NAME
   nanoasr models  list | catalog | pull ID... | pull -configured | inspect DIR [--probe WAV]
+  nanoasr gpu     [-config FILE] [-provider cuda]
   nanoasr service install | uninstall | start | stop | restart | status
   nanoasr version
 
@@ -111,6 +118,9 @@ func printVersion() {
 	fmt.Printf("nanoasr     %s\n", version)
 	fmt.Printf("sherpa-onnx %s\n", so)
 	fmt.Printf("onnxruntime %s\n", ort)
+	// What the loaded libraries can do, not what the configuration asked for:
+	// `nanoasr gpu` reports both and explains any difference.
+	fmt.Printf("runtime     %s\n", sherpa.Probe().Summary())
 	// The diarizer loads onnxruntime by name, trusting it to find the copy
 	// above; printing where it came from is how the release job checks that.
 	if v, path, err := diarizesortformer.RuntimeInfo(); err != nil {
@@ -119,6 +129,7 @@ func printVersion() {
 		fmt.Printf("diarizer    onnxruntime %s %s\n", v, path)
 	}
 	fmt.Printf("families    %v\n", sherpa.Families())
+	fmt.Printf("streaming   %v\n", sherpa.OnlineFamilies())
 	fmt.Printf("dialects    %v\n", adapter.Available())
 	fmt.Printf("ui          %v\n", ui.Enabled)
 }
@@ -205,6 +216,7 @@ func serve(ctx context.Context, args []string) (rerr error) {
 	if err := srv.resume(ctx, log); err != nil {
 		return err
 	}
+	srv.startRealtime(ctx)
 	go srv.purgeHistory(ctx, cfg.Jobs.HistoryTTL.Duration, log)
 	go srv.purgePool(ctx, cfg.ASR.IdleTTL.Duration, log)
 
@@ -249,6 +261,7 @@ func serve(ctx context.Context, args []string) (rerr error) {
 	}
 	if err := adapter.MountAll(mux, cfg.API.Dialects, srv.service, adapter.Deps{
 		Models:         srv.models,
+		Realtime:       srv.realtimeService(),
 		MaxUploadBytes: cfg.Server.MaxUploadBytes,
 		ConfigSnapshot: snapshot,
 	}); err != nil {
@@ -270,6 +283,40 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		}
 	}
 
+	// The reference, served without a key. Everything on it is already
+	// knowable by anyone who can reach the port, and a reference that needs a
+	// credential is a reference people guess around instead of reading.
+	//
+	// "/" below is the redirect to it, and is matched exactly rather than as a
+	// prefix — see httpx.isPublicPath.
+	public := []string{"/healthz", "/readyz", "/docs", "/"}
+	if uiMounted {
+		public = append(public, cfg.UI.Path)
+	}
+	docsHandler, err := docs.Handler(docs.Page{
+		Version:        version,
+		AuthMode:       cfg.Auth.Mode,
+		Public:         public,
+		UIPath:         uiPathOrEmpty(cfg, uiMounted),
+		Dialects:       adapter.DocsFor(cfg.API.Dialects),
+		Server:         serverRoutes(cfg, uiMounted),
+		Realtime:       realtimeInfo(srv),
+		MaxUploadBytes: cfg.Server.MaxUploadBytes,
+	})
+	if err != nil {
+		return err
+	}
+	mux.Handle("GET /docs", docsHandler)
+	mux.Handle("GET /docs/", docsHandler)
+
+	// The root is the one place a person arrives by typing the address, so it
+	// points at the page that explains the rest. Exactly the root: "/{$}"
+	// rather than "/", which would catch every path that matched nothing else
+	// and turn a typo into a redirect instead of a 404.
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/docs", http.StatusFound)
+	})
+
 	// Auth goes last so that a 401 is still logged and still carries the
 	// security headers, and so the request id is available to report.
 	mw := []httpx.Middleware{
@@ -288,13 +335,9 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		if err != nil {
 			return err
 		}
-		public := []string{"/healthz", "/readyz"}
-		if uiMounted {
-			public = append(public, cfg.UI.Path)
-		}
-		// Health probes cannot present a credential, and a browser does not
-		// send a bearer token when loading a script tag. Everything else is
-		// authenticated.
+		// Health probes cannot present a credential, a browser does not send a
+		// bearer token when loading a script tag, and the reference is public
+		// on purpose. Everything else is authenticated.
 		mw = append(mw, httpx.Auth(keys, public...))
 
 		// Rate limiting comes after Auth because there is nothing to attribute
@@ -484,6 +527,58 @@ func keySpecs(keys []config.APIKey) []httpx.KeySpec {
 		})
 	}
 	return out
+}
+
+// serverRoutes documents what the server serves outside any dialect.
+func serverRoutes(cfg config.Config, uiMounted bool) []adapter.Route {
+	out := []adapter.Route{{
+		Method: "GET", Path: "/healthz", Public: true,
+		Summary: "Liveness, with the native library versions.",
+	}, {
+		Method: "GET", Path: "/readyz", Public: true,
+		Summary: "Readiness, and the queue depth.",
+		Detail: "503 when the queue is full, which is when a load balancer should stop " +
+			"sending work here.",
+	}, {
+		Method: "GET", Path: "/docs", Public: true,
+		Summary: "This page.",
+	}, {
+		Method: "GET", Path: "/docs/openapi.json", Public: true,
+		Summary: "The same endpoint list, as OpenAPI.",
+	}, {
+		Method: "GET", Path: "/", Public: true,
+		Summary: "Redirects to /docs.",
+	}}
+	if uiMounted {
+		out = append(out, adapter.Route{
+			Method: "GET", Path: cfg.UI.Path, Public: true,
+			Summary: "The test UI.",
+			Detail: "Served without a credential because a browser does not send a bearer " +
+				"token when it loads a script tag. The SPA discovers whether the API " +
+				"needs a key from the first 401 it gets.",
+		})
+	}
+	return out
+}
+
+func uiPathOrEmpty(cfg config.Config, uiMounted bool) string {
+	if !uiMounted {
+		return ""
+	}
+	return cfg.UI.Path
+}
+
+// realtimeInfo is nil when no streaming model is loaded, and otherwise reads
+// the live session count rather than a figure captured at startup.
+func realtimeInfo(srv *server) func() *core.RealtimeInfo {
+	rt := srv.realtimeService()
+	if rt == nil {
+		return nil
+	}
+	return func() *core.RealtimeInfo {
+		info := rt.Describe()
+		return &info
+	}
 }
 
 func newLogger(c config.Log, w io.Writer) *slog.Logger {

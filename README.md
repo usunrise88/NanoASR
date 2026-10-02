@@ -58,6 +58,10 @@ Key implementation properties:
 - Per-request model selection; several models resident in parallel.
 - `greedy_search` and `modified_beam_search` decoding methods.
 - Recognition biasing towards a supplied word list (hotwords).
+- Streaming recognition while the audio is still arriving, over a websocket, with
+  partial hypotheses and automatic utterance boundaries.
+- CPU or NVIDIA GPU, chosen by one setting and verified at startup rather than
+  falling back in silence.
 
 **Audio**
 
@@ -82,7 +86,9 @@ Key implementation properties:
 
 **Operations**
 
-- Three HTTP API dialects served concurrently on one port.
+- Four HTTP API dialects served concurrently on one port, one of them a websocket.
+- An API reference at `/docs`, generated from the dialects actually mounted and
+  served without a key.
 - API key authentication with per-key rate limits and priorities.
 - Model registry: built-in catalog, SHA-256 verified downloads, management over the API.
 - Automatic pool sizing from CPU count and available memory.
@@ -146,6 +152,7 @@ irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 |
 | `--no-ui` | `-NoUI` | `NANOASR_UI=0` | the build without the web interface |
 | `--no-download` | `-NoDownload` | `NANOASR_DOWNLOAD=0` | write the configuration, fetch no models |
 | `--no-ffmpeg` | `-NoFfmpeg` | `NANOASR_FFMPEG=0` | leave ffmpeg alone |
+| `--realtime` | `-Realtime` | `NANOASR_REALTIME=1` | also serve streaming recognition over a websocket |
 | `--no-start` | `-NoStart` | `NANOASR_START=0` | install everything, start nothing |
 | `--uninstall` | `-Uninstall` | `NANOASR_UNINSTALL=1` | stop and remove the installation |
 | `--purge` | `-Purge` | `NANOASR_PURGE=1` | with the above, also delete the data |
@@ -289,6 +296,75 @@ through an environment variable:
 ```bash
 NANOASR_AUTH_KEYS=sk-... docker compose -f deploy/docker-compose.yml up -d
 ```
+
+### NVIDIA GPU
+
+The difference between CPU and GPU recognition is not the binary: it is which build
+of the sherpa-onnx libraries the dynamic loader finds. sherpa-onnx publishes two —
+one against a CPU-only onnxruntime, one against a CUDA one — and NanoASR ships the
+first. After installing, swap in the second:
+
+```bash
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install-gpu.sh | sudo bash
+```
+
+It downloads the CUDA build of exactly the sherpa-onnx version the binary was linked
+against, verifies its checksum, unpacks the libraries into `/opt/nanoasr/lib-gpu` and
+points the service at them with a systemd drop-in that also sets
+`NANOASR_PROVIDER=cuda`. The CPU libraries stay where they are, which is what makes
+`install-gpu.sh --revert` a deletion rather than a reinstall.
+
+It verifies before it reconfigures: if the libraries cannot be loaded on the machine —
+no driver, no cuDNN, no device — nothing is changed and the service keeps running on
+the CPU.
+
+Requirements: Linux on x86-64, an NVIDIA driver, CUDA 12 and cuDNN 9 (`--cuda 13` for
+the CUDA 13 build). In a container, the image is the same one with a build argument:
+
+```bash
+docker build -f deploy/Dockerfile --build-arg FLAVOUR=gpu -t nanoasr:gpu .
+docker run --gpus all -e NANOASR_AUTH_KEYS=sk-... -p 8080:8080 nanoasr:gpu
+# or: docker compose -f deploy/docker-compose.yml --profile gpu up --build nanoasr-gpu
+```
+
+What the GPU is worth here is throughput rather than the latency of one stream. The
+realtime engine decodes every open session in one batched call, and that is what fills
+a device; a single 16 kHz stream asks for a few milliseconds of work every hundred
+milliseconds and could never keep an accelerator busy. Raise `realtime.max_sessions`
+and `asr.batch.max_size` once it is running.
+
+Whatever the configuration says, `nanoasr gpu` reports what the loaded libraries can
+actually do:
+
+```
+$ nanoasr gpu
+sherpa-onnx   1.13.6
+onnxruntime   1.27.1
+library dir   /opt/nanoasr/lib-gpu
+providers     libonnxruntime_providers_cuda.so libonnxruntime_providers_shared.so
+cuda provider /opt/nanoasr/lib-gpu/libonnxruntime_providers_cuda.so
+nvidia driver 550.54.14
+devices       /dev/nvidia0
+runtime       cuda ready (driver 550.54.14, 1 device(s))
+provider      cuda (from /opt/nanoasr/nanoasr.yaml)
+verdict       cuda can be served
+```
+
+The server makes the same checks at startup and refuses to run when the provider it
+was asked for cannot be served. That is deliberate: onnxruntime answers a request for
+a provider it does not have by logging a line nobody reads and running on the CPU, so
+a server told to use the GPU would come up looking healthy and be several times slower
+than the operator planned for.
+
+`asr.provider` reaches recognition — offline and streaming — the punctuation model and
+the `sherpa` diarization backend. Two things stay on the CPU whatever it says:
+
+- The VAD. Silero is 1.5 MB and decides one 32 ms frame at a time, so a GPU would
+  spend more on the two transfers than the CPU spends on the arithmetic.
+- The `sortformer` diarization backend, which is the default. It builds its own
+  onnxruntime sessions and appends no execution provider to them, so it runs on the
+  CPU; moving it would be a change in `internal/diarize/sortformer` and is not one to
+  make without a device to measure it on.
 
 ### Building from source
 
@@ -443,8 +519,14 @@ Dialects are enabled in the configuration and served concurrently:
 
 ```yaml
 api:
-  dialects: [openai, native, era]
+  dialects: [openai, native, era, realtime]
 ```
+
+`GET /docs` is the reference for whichever of them are mounted, built from the
+dialects themselves rather than written out by hand, and served without a key —
+everything on it is already knowable by anyone who can reach the port. `GET /` redirects
+there, and `GET /docs/openapi.json` is the same endpoint list for a client generator
+(without request and response schemas, which it says).
 
 ### `native` — the full service interface
 
@@ -495,6 +577,88 @@ Differences from the original API:
 - `prompt` is interpreted as a comma-separated hotword list rather than as a language
   model prompt.
 - `temperature` is accepted and has no effect: the decoders do not sample.
+
+### `realtime` — streaming recognition over a websocket
+
+Recognition while the audio is still arriving, in the event protocol of OpenAI's
+realtime API with `intent=transcription`.
+
+| Method | Path |
+|---|---|
+| `GET` | `/v1/realtime?intent=transcription` (websocket upgrade) |
+| `POST` | `/v1/realtime/transcription_sessions` (`501`, with how to connect instead) |
+
+It needs a streaming model, which is a different export of a different architecture
+from the offline ones — the encoder is trained with a few hundred milliseconds of
+right context — so it is enabled deliberately:
+
+```yaml
+api:
+  dialects: [openai, native, realtime]
+realtime:
+  model: t-one-ctc-ru
+```
+
+`nanoasr init -realtime`, or `install.sh --realtime`, writes that and fetches the
+model.
+
+**Client events.** `session.update` (`transcription_session.update` is accepted too),
+`input_audio_buffer.append` with base64 audio, `input_audio_buffer.commit` and
+`input_audio_buffer.clear`. A binary websocket frame is accepted as raw audio in the
+declared format, which saves the third of bandwidth base64 costs.
+
+**Server events.** `transcription_session.created` and `.updated`,
+`input_audio_buffer.speech_started`, `.speech_stopped`, `.committed`, `.cleared`,
+`conversation.item.created`,
+`conversation.item.input_audio_transcription.delta` and `.completed`, `error`, and
+`nanoasr.warning` for a parameter that was accepted and ignored.
+
+**Audio.** `input_audio_format` takes `pcm16` (24 kHz by default, as in OpenAI's API),
+`g711_ulaw`, `g711_alaw`, or an object that carries the rate:
+
+```json
+{"type": "session.update",
+ "session": {"input_audio_format": {"type": "audio/pcm", "rate": 16000}}}
+```
+
+The object form matters more here than it does to OpenAI: these models are 8 and
+16 kHz, telephony audio arrives at 8 kHz already, and making every caller resample to
+24 kHz only to have sherpa-onnx resample it back would cost quality for nothing.
+Whatever the rate, resampling to the model's happens on the way in.
+
+**Authentication.** `Authorization: Bearer <key>` as everywhere else. A browser cannot
+set a header when it opens a WebSocket, so the key may instead travel as a
+subprotocol — `openai-insecure-api-key.<key>`, the spelling OpenAI's own clients use.
+Any script on the page can read a key the page holds, which is what "insecure" refers
+to; it is still a real key and is checked like one.
+
+Differences from the original API:
+
+- The model, the decoding method and the endpoint timings belong to the server. A
+  streaming recogniser settles all three when it is loaded, so a session cannot choose
+  them: asking for another model is an error, and asking for other turn-detection
+  timings is a warning. `turn_detection: null` *is* honoured — it means the client will
+  commit the buffer itself, which is how push-to-talk works.
+- `prompt` is ignored, with a warning. On the offline API it maps to hotword biasing;
+  biasing a streaming recogniser would mean a second resident copy of the model per
+  bias list.
+- Every `delta` event also carries the full hypothesis in a `nanoasr` object. A
+  streaming decoder revises as well as extends — it can retract a word it has already
+  sent — and no sequence of deltas expresses that. The full text is the authoritative
+  value.
+- `completed` carries `nanoasr.start_ms`, `nanoasr.end_ms`, the model and, when the
+  model produces token timings, `nanoasr.words`.
+- There are no ephemeral tokens, no conversation events and no model that replies.
+- Transcripts have no punctuation and no capitals when the model's vocabulary has
+  none, which is the case for every Russian streaming model there is. The session
+  object says so, and the offline endpoints still punctuate.
+
+One session is one decoder state, and `realtime.max_sessions` bounds how many there
+can be; a connection beyond it is closed with `1013 Try Again Later` rather than
+queued, because a session that starts in ninety seconds is worse to a caller holding a
+live microphone than one that never starts. A client that falls more than
+`realtime.max_buffered_seconds` behind is told so and closed, rather than having its
+audio dropped into a transcript with an unmarked hole in it.
 
 ### `era` — whisper-asr-webservice compatibility
 
@@ -803,6 +967,76 @@ curl -s -H "Authorization: Bearer $KEY" \
   | jq '[.segments[] | {channel, start, text}]'
 ```
 
+**Streaming recognition over a websocket**
+
+Node 22 and later have a WebSocket client built in, so this needs nothing installed:
+
+```js
+// node stream.mjs call.wav   — 16-bit mono PCM, any rate
+import { readFileSync } from "node:fs";
+
+const ws = new WebSocket("ws://localhost:8080/v1/realtime?intent=transcription", [
+  "realtime", `openai-insecure-api-key.${process.env.KEY}`,
+]);
+
+ws.addEventListener("open", async () => {
+  ws.send(JSON.stringify({
+    type: "transcription_session.update",
+    session: { input_audio_format: { type: "audio/pcm", rate: 16000 } },
+  }));
+  // 100 ms of 16 kHz 16-bit mono at a time, as a microphone would.
+  const pcm = readFileSync(process.argv[2]).subarray(44);
+  for (let at = 0; at < pcm.length; at += 3200) {
+    ws.send(pcm.subarray(at, at + 3200));
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+});
+
+ws.addEventListener("message", (e) => {
+  const ev = JSON.parse(e.data);
+  if (ev.type === "conversation.item.input_audio_transcription.delta") {
+    process.stdout.write(ev.delta);               // or ev.nanoasr.text, in full
+  } else if (ev.type === "conversation.item.input_audio_transcription.completed") {
+    console.log(`\n--- ${ev.transcript}`);
+    ws.close();
+  }
+});
+```
+
+The OpenAI Python SDK speaks the same protocol, and this is the exact program the
+dialect is tested against:
+
+```python
+import base64, wave
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8080/v1", api_key=KEY)
+with wave.open("call.wav") as w:                  # 16-bit mono
+    rate, pcm = w.getframerate(), w.readframes(w.getnframes())
+
+with client.realtime.connect(model="t-one-ctc-ru") as conn:
+    conn.session.update(session={
+        "type": "transcription",
+        "audio": {"input": {"format": {"type": "audio/pcm", "rate": rate}}},
+    })
+    for at in range(0, len(pcm), rate // 5):      # 200 ms a time
+        conn.input_audio_buffer.append(
+            audio=base64.b64encode(pcm[at:at + rate // 5]).decode())
+    conn.input_audio_buffer.commit()
+
+    for event in conn:
+        if event.type == "conversation.item.input_audio_transcription.delta":
+            print(event.delta, end="", flush=True)
+        elif event.type == "conversation.item.input_audio_transcription.completed":
+            print("\n" + event.transcript)
+            break
+```
+
+Sending faster than real time, as that loop does, is allowed: the server throttles the
+connection to decode speed rather than dropping audio, so the realtime API doubles as
+a fast way to transcribe a file. A `commit` waits for everything sent before it.
+
 **Subtitles**
 
 ```bash
@@ -912,6 +1146,8 @@ separate punctuation model is required for Russian.
 | `gigaam-v2-ctc-ru` | Recognition, CTC | ru | 167 MB | Unconfirmed |
 | `gigaam-v2-rnnt-ru` | Recognition, transducer | ru | 172 MB | Unconfirmed |
 | `zipformer-small-en` | Recognition, transducer | en | 112 MB | Permitted |
+| `t-one-ctc-ru` | Streaming recognition, CTC, 8 kHz | ru | 128 MB | Permitted |
+| `streaming-zipformer-small-ru` | Streaming recognition, transducer | ru | 90 MB | Unconfirmed |
 | `silero-vad-v5` | Voice activity detection | multi | 0.6 MB | Permitted |
 | `nemotron-3-diarization` | Diarization | multi | 176 MB | Permitted |
 | `nemotron-3-diarization-int8` | Diarization, int8 | multi | 89 MB | Permitted |
@@ -923,6 +1159,14 @@ separate punctuation model is required for Russian.
 "Unconfirmed" means the model archive carries no machine-readable licence text. The
 `registry.strict_license` setting refuses to download weights whose commercial use is
 not confirmed.
+
+The two streaming entries serve `/v1/realtime` and only that: a streaming export has no
+whole-file decoder, and asking the offline endpoints for one is refused with a message
+saying so. Neither writes punctuation or capitals — no streaming Russian model does.
+`t-one-ctc-ru` is 8 kHz telephony, trained on call-centre audio, which is the workload
+the offline default was chosen for too; `streaming-zipformer-small-ru` is 16 kHz, a
+third cheaper to keep resident and measured at 0.03x real time on two CPU threads
+against T-one's 0.075x.
 
 The catalog is extended with custom entries through `registry.catalog_url`, and mirrors
 are configured with `registry.mirrors`.

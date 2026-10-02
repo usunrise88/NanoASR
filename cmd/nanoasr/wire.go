@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usunrise88/nanoasr/internal/asr"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/config"
@@ -20,6 +21,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/pool"
 	"github.com/usunrise88/nanoasr/internal/postproc"
 	postprocsherpa "github.com/usunrise88/nanoasr/internal/postproc/sherpa"
+	"github.com/usunrise88/nanoasr/internal/realtime"
 	"github.com/usunrise88/nanoasr/internal/registry"
 	"github.com/usunrise88/nanoasr/internal/service"
 	"github.com/usunrise88/nanoasr/internal/spool"
@@ -41,6 +43,15 @@ type server struct {
 	diarizerMB int
 	closePost  func()
 
+	// realtime is nil unless the realtime dialect is mounted: a streaming
+	// model is several hundred megabytes resident for the life of the
+	// process, so it is loaded only where it is going to be served.
+	realtime  *realtime.Engine
+	streaming asr.Streaming
+	// realtimeDone closes when the decoder loop has returned, which is what
+	// makes it safe to free the recogniser the loop was using.
+	realtimeDone chan struct{}
+
 	queue   *job.Queue
 	store   *sqlite.Store
 	spool   *spool.Spool
@@ -52,6 +63,24 @@ type server struct {
 // or an unreadable models directory would only fail on the first request, when
 // a user is waiting.
 func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, error) {
+	// Before anything is loaded: onnxruntime answers a request for a provider
+	// it does not have by running on the CPU and logging a line nobody reads,
+	// so a server told to use the GPU would come up looking healthy and be
+	// several times slower than the operator planned for. The facts are
+	// measured instead — see sherpa.Probe — and a provider that cannot be
+	// served is a startup failure.
+	rt := sherpa.Probe()
+	log.Info("native runtime",
+		"provider", cfg.ASR.Provider, "detected", rt.Summary(),
+		"library_dir", rt.LibraryDir)
+	warnings, err := sherpa.CheckProvider(cfg.ASR.Provider)
+	for _, w := range warnings {
+		log.Warn("gpu runtime", "note", w)
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	reg, err := buildRegistry(cfg, log)
 	if err != nil {
 		return nil, err
@@ -59,7 +88,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 
 	models := pool.New(reg,
 		sherpa.NewLoader(sherpa.LoaderOptions{
-			Provider:   "cpu",
+			Provider:   cfg.ASR.Provider,
 			NumThreads: cfg.ASR.NumThreads,
 			Debug:      cfg.Log.Level == "debug",
 		}),
@@ -86,11 +115,20 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		return nil, err
 	}
 
+	rtEngine, streaming, err := buildRealtime(ctx, cfg, reg, log)
+	if err != nil {
+		models.Close()
+		_ = segmenter.Close()
+		closeDiarizer(diarizer)
+		return nil, err
+	}
+
 	post, closePost, err := buildPostProc(ctx, cfg, reg, log)
 	if err != nil {
 		models.Close()
 		_ = segmenter.Close()
 		closeDiarizer(diarizer)
+		closeStreaming(streaming)
 		return nil, err
 	}
 
@@ -99,6 +137,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		models.Close()
 		_ = segmenter.Close()
 		closeDiarizer(diarizer)
+		closeStreaming(streaming)
 		closePost()
 		return nil, err
 	}
@@ -151,6 +190,8 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		diarizer:   diarizer,
 		diarizerMB: diarizerMB,
 		closePost:  closePost,
+		realtime:   rtEngine,
+		streaming:  streaming,
 		queue:      queue,
 		store:      store,
 		spool:      sp,
@@ -325,6 +366,10 @@ func buildVAD(ctx context.Context, cfg config.Config, reg *registry.Remote, log 
 
 	// One detector per concurrent job: the detector is stateful, so sharing one
 	// would serialise the pipeline.
+	//
+	// No provider here, deliberately: Silero is 1.5 MB and decides one 32 ms
+	// frame at a time, so a GPU would spend more time on the two transfers
+	// than the CPU spends on the arithmetic. asr.provider does not reach it.
 	pooled, err := vad.NewPool(vad.Config{
 		Family:       man.Family,
 		ModelPath:    path,
@@ -379,6 +424,18 @@ func (s *server) preloadDiarizer(ctx context.Context, log *slog.Logger) {
 // Close releases everything build acquired. The queue is stopped by the caller
 // before this, while there is still a grace period to spend on it.
 func (s *server) Close() {
+	// The decoder loop holds the streaming recogniser's streams, so it has to
+	// have returned before the recogniser is freed. It returns as soon as the
+	// server context is cancelled, which happened before this was called; the
+	// timeout is there so a bug in the loop cannot hang the shutdown.
+	if s.realtimeDone != nil {
+		select {
+		case <-s.realtimeDone:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	closeStreaming(s.streaming)
+
 	if s.store != nil {
 		_ = s.store.Close()
 	}
@@ -548,6 +605,7 @@ func buildSherpaDiarizer(
 		Threshold:         cfg.Diarization.Clustering.Threshold,
 		MinDurationOn:     cfg.Diarization.MinDurationOn,
 		MinDurationOff:    cfg.Diarization.MinDurationOff,
+		Provider:          cfg.ASR.Provider,
 	}, cfg.ASR.NumThreads, cfg.Jobs.MaxConcurrent)
 	if err != nil {
 		return nil, 0, err
@@ -581,6 +639,110 @@ func buildSherpaDiarizer(
 func closeDiarizer(d diarize.Diarizer) {
 	if d != nil {
 		_ = d.Close()
+	}
+}
+
+// realtimeService returns the realtime service, or a nil interface when this
+// server has none.
+//
+// Not a field access: a nil *realtime.Engine stored in an interface is not a
+// nil interface, so a dialect asking `deps.Realtime == nil` would be told there
+// is a service and then call through a nil pointer.
+func (s *server) realtimeService() core.RealtimeService {
+	if s.realtime == nil {
+		return nil
+	}
+	return s.realtime
+}
+
+// startRealtime runs the decoder loop for the life of ctx.
+//
+// It is started by the caller rather than by build, so that nothing is decoding
+// while the rest of the server is still being assembled.
+func (s *server) startRealtime(ctx context.Context) {
+	if s.realtime == nil {
+		return
+	}
+	s.realtimeDone = make(chan struct{})
+	go func() {
+		defer close(s.realtimeDone)
+		s.realtime.Run(ctx)
+	}()
+}
+
+// buildRealtime loads the streaming model and the engine over it, or returns
+// nothing at all when the realtime dialect is not mounted.
+//
+// The streaming model sits outside the model pool, like the VAD and the
+// diarization models and for the same reason: it is not selectable per request,
+// it is resident for the life of the server, and a session holds decoder state
+// against it for minutes at a time. Admitting it to an LRU pool would mean
+// evicting a model with live connections on it.
+func buildRealtime(
+	ctx context.Context,
+	cfg config.Config,
+	reg *registry.Remote,
+	log *slog.Logger,
+) (*realtime.Engine, asr.Streaming, error) {
+	if !cfg.API.DialectEnabled(config.DialectRealtime) {
+		return nil, nil, nil
+	}
+
+	man, err := reg.Resolve(ctx, cfg.Realtime.Model)
+	if err != nil {
+		return nil, nil, fmt.Errorf("realtime model %q: %w", cfg.Realtime.Model, err)
+	}
+	dir, err := reg.Dir(cfg.Realtime.Model)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rec, err := sherpa.NewOnline(ctx, man, dir, sherpa.OnlineOptions{
+		Provider:                cfg.ASR.Provider,
+		NumThreads:              cfg.Realtime.NumThreads,
+		Debug:                   cfg.Log.Level == "debug",
+		DecodingMethod:          cfg.Realtime.DecodingMethod,
+		MaxActivePaths:          cfg.Realtime.MaxActivePaths,
+		EnableEndpoint:          cfg.Realtime.Endpoint.Enabled,
+		Rule1MinTrailingSilence: cfg.Realtime.Endpoint.Rule1MinTrailingSilence,
+		Rule2MinTrailingSilence: cfg.Realtime.Endpoint.Rule2MinTrailingSilence,
+		Rule3MinUtteranceLength: cfg.Realtime.Endpoint.Rule3MinUtteranceLength,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("realtime model %q: %w", cfg.Realtime.Model, err)
+	}
+
+	engine := realtime.New(rec, realtime.Options{
+		MaxSessions:        cfg.Realtime.MaxSessions,
+		MaxSessionDuration: cfg.Realtime.MaxSessionDuration.Duration,
+		IdleTimeout:        cfg.Realtime.IdleTimeout.Duration,
+		PartialInterval:    cfg.Realtime.PartialInterval.Duration,
+		MaxBufferedSeconds: cfg.Realtime.MaxBufferedSeconds,
+		BatchSize:          cfg.Realtime.BatchSize,
+		Languages:          man.Languages,
+		Logger:             log,
+	})
+
+	caps := rec.Capabilities()
+	log.Info("realtime ready",
+		"model", man.Key(), "family", man.Family, "model_rate", rec.SampleRate(),
+		"max_sessions", cfg.Realtime.MaxSessions, "provider", cfg.ASR.Provider,
+		"endpointing", cfg.Realtime.Endpoint.Enabled,
+		"punctuation", caps.PunctuationBuiltin)
+	if !caps.PunctuationBuiltin {
+		// Said out loud because it is the first thing a caller comparing the
+		// realtime transcript with the offline one will notice.
+		log.Warn("realtime transcripts have no punctuation or capitals",
+			"model", man.Key(),
+			"note", "no streaming Russian model writes them; the offline API still does")
+	}
+	return engine, rec, nil
+}
+
+// closeStreaming is nil-safe: most servers never load a streaming model.
+func closeStreaming(rec asr.Streaming) {
+	if rec != nil {
+		_ = rec.Close()
 	}
 }
 
@@ -618,7 +780,7 @@ func buildPostProc(
 		return nil, nil, err
 	}
 
-	pooled, err := postprocsherpa.NewPool(path, cfg.ASR.NumThreads, cfg.Jobs.MaxConcurrent)
+	pooled, err := postprocsherpa.NewPool(path, cfg.ASR.Provider, cfg.ASR.NumThreads, cfg.Jobs.MaxConcurrent)
 	if err != nil {
 		return nil, nil, err
 	}

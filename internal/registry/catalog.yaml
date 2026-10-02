@@ -164,6 +164,92 @@ models:
       Same acoustics as gigaam-v2-ctc-ru, exported as a transducer.
 
   # ---------------------------------------------------------------------------
+  # Russian, streaming CTC, 8 kHz. The realtime default, and the only entry in
+  # this file that recognises audio as it arrives rather than a finished file.
+  #
+  # It is a telephony model — trained at 8 kHz by T-Bank's VoiceKit team on
+  # call-centre audio — which is the same workload the offline default was
+  # chosen for. Streaming costs accuracy against an offline model of the same
+  # size, because the encoder only ever sees 300 ms of right context, and it
+  # writes neither punctuation nor capitals: no streaming Russian model does.
+  - id: t-one-ctc-ru
+    revision: "2025-09-08"
+    kind: asr
+    streaming: true
+    family: streaming_t_one_ctc
+    display_name: T-one streaming CTC (Russian, 8 kHz)
+    languages: [ru]
+    sample_rate: 8000
+    modeling_unit: char
+    files:
+      model: model.onnx
+      tokens: tokens.txt
+    features:
+      sample_rate: 8000
+      dim: 80
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      # Measured: 534 MB resident with the model loaded and decoding.
+      approx_rss_mb: 600
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-t-one-russian-2025-09-08.tar.bz2
+      sha256: b9c907450e99a6e5049e279bf18368a17db0bdc5e63b7fa978943138debbe3ae
+      size_bytes: 128468156
+    license: apache-2.0
+    commercial_use: "yes"
+    notes: >-
+      Character vocabulary of 35 tokens: the Russian alphabet, a space and the
+      CTC blank. Lower case, no punctuation. Audio at any rate is resampled to
+      8 kHz on the way in, so a 16 kHz browser stream works and simply carries
+      no information above 4 kHz. Measured on the reference clip: 0.075x real
+      time on two CPU threads, which is thirteen streams per decoder.
+
+  # ---------------------------------------------------------------------------
+  # Russian, streaming transducer, 16 kHz. The alternative to T-one for
+  # wideband audio, and the one to use when the transcript needs token
+  # timestamps: a transducer emits them, this CTC export does too, but the
+  # transducer's are per subword rather than per character.
+  - id: streaming-zipformer-small-ru
+    revision: "vosk-2025-08-16"
+    kind: asr
+    streaming: true
+    family: streaming_transducer
+    display_name: Zipformer streaming small (Russian, Vosk)
+    languages: [ru]
+    sample_rate: 16000
+    modeling_unit: bpe
+    files:
+      encoder: encoder.onnx
+      decoder: decoder.onnx
+      joiner: joiner.onnx
+      tokens: tokens.txt
+      bpe_vocab: bpe.model
+    features:
+      sample_rate: 16000
+      dim: 80
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      # Measured: 171 MB resident, decoding at 0.03x real time on two threads.
+      approx_rss_mb: 256
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16.tar.bz2
+      sha256: cc2e99ed0c67cae8801170e7b7539b4cac00b716076af86f974bf5b888d9370c
+      size_bytes: 89653224
+    license: https://huggingface.co/alphacep/vosk-model-small-streaming-ru
+    # The archive ships no licence file, and the terms of the Vosk model it was
+    # converted from are the subject of an open upstream question
+    # (k2-fsa/sherpa-onnx#3914), so this stays "unknown" until someone can
+    # point at the text.
+    commercial_use: unknown
+    notes: >-
+      Converted from alphacep/vosk-model-small-streaming-ru. Subword
+      vocabulary, lower case, no punctuation. Measured on the reference clip:
+      0.03x real time on two CPU threads against T-one's 0.075x, and the
+      cheaper of the two to keep resident.
+
+  # ---------------------------------------------------------------------------
   # Diarization in one model: an end-to-end Sortformer that labels up to eight
   # speakers, in order of arrival, straight from the audio. There is no
   # clustering, so there is no threshold to tune and no speaker count to give.
