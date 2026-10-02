@@ -666,7 +666,10 @@ func TestBadFormatsAreRefused(t *testing.T) {
 
 func waitFor(t *testing.T, done func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// Generous, because these wait for a server goroutine to get round to
+	// something and a loaded CI runner is slower than it looks. Nothing here
+	// waits on a timeout, so a long deadline costs nothing when it passes.
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if done() {
 			return

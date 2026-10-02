@@ -238,13 +238,14 @@ type conn struct {
 
 	// --- shared ---
 	opened atomic.Bool
-	// handling is true while the read loop is acting on a message. It matters
-	// for one reason: a websocket ping is answered by a pong that only the
-	// read loop can collect, and that loop blocks on purpose while the
-	// recogniser catches up with a client sending faster than real time. A
-	// ping sent then would time out and close a connection whose peer is
-	// demonstrably alive — it has just sent audio.
+	// handling is true while the read loop is acting on a message, and
+	// lastRead is when it last got one. Both exist for one reason: a websocket
+	// ping is answered by a pong that only the read loop can collect, and that
+	// loop blocks on purpose while the recogniser catches up with a client
+	// sending faster than real time. A ping is therefore neither sent nor
+	// believed while traffic is flowing — see busy.
 	handling atomic.Bool
+	lastRead atomic.Int64
 	pumpDone chan struct{}
 	cancel   context.CancelFunc
 }
@@ -259,6 +260,7 @@ func (c *conn) run(ctx context.Context) {
 	defer c.ws.CloseNow()
 
 	c.ws.SetReadLimit(maxMessageBytes)
+	c.lastRead.Store(time.Now().UnixNano())
 
 	if err := c.send(ctx, c.sessionState(serverSessionCreated)); err != nil {
 		return
@@ -286,6 +288,7 @@ func (c *conn) read(ctx context.Context) {
 		if err != nil {
 			return
 		}
+		c.lastRead.Store(time.Now().UnixNano())
 		c.handling.Store(true)
 		keep := true
 		switch typ {
@@ -633,20 +636,38 @@ func (c *conn) keepalive(ctx context.Context) {
 				c.cancel()
 				return
 			}
-			if c.handling.Load() {
-				// Nothing to find out: the peer sent something a moment ago,
-				// and the pong could not be read while that is being acted on.
+			if c.busy() {
+				// Nothing to find out: traffic is flowing, and a pong cannot
+				// be collected while the read loop is acting on a message.
 				continue
 			}
 			pingCtx, cancel := context.WithTimeout(ctx, c.write)
 			err := c.ws.Ping(pingCtx)
 			cancel()
-			if err != nil {
-				c.cancel()
-				return
+			if err == nil {
+				continue
 			}
+			// The ping went unanswered — but the read loop may have picked up
+			// a message in the meantime and be blocked applying backpressure,
+			// in which case the pong is sitting unread behind it and says
+			// nothing about the peer. Only silence counts.
+			if c.busy() {
+				continue
+			}
+			c.cancel()
+			return
 		}
 	}
+}
+
+// busy reports whether the read loop is in a state where a pong would go
+// uncollected: acting on a message, or having had one recently enough that the
+// next is already on its way.
+func (c *conn) busy() bool {
+	if c.handling.Load() {
+		return true
+	}
+	return time.Since(time.Unix(0, c.lastRead.Load())) < c.ping
 }
 
 // sessionState describes the session as it stands.
