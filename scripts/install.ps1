@@ -85,9 +85,12 @@ NANOASR_SERVICE, NANOASR_UI=0, NANOASR_DOWNLOAD=0, NANOASR_FFMPEG=0,
 NANOASR_REALTIME=1, NANOASR_START=0, NANOASR_PATH=0, NANOASR_UNINSTALL=1,
 NANOASR_PURGE=1.
 
-There is no GPU option here: the CUDA build of the sherpa-onnx libraries that
-asr.provider: cuda needs is published for Linux, so GPU recognition is a Linux
-deployment (scripts/install-gpu.sh).
+There is no GPU option here yet. sherpa-onnx does publish a CUDA build for
+Windows, but NanoASR installs and checks the GPU runtime on Linux only: the
+provider probe that keeps a server from silently running on the CPU reads
+/proc, and nothing here has been tried on a Windows GPU. So asr.provider: cuda
+is refused on Windows by this build, and GPU recognition is a Linux deployment
+(install.sh --gpu).
 "@
 }
 
@@ -355,8 +358,8 @@ function Install-NanoASR {
     $keys = @()
     if (Test-ConfigHasKeys) {
         Say "keeping the configuration in $Config"
-        # A release can change a default model — 1.0.5 moved diarization to
-        # nemotron-3-diarization — and a server that fetches it on the first
+        # A release can change a default model: 1.0.5 moved diarization to
+        # nemotron-3-diarization, and a server that fetches it on the first
         # request that needs it makes that request wait for the download.
         if (-not $NoDownload) {
             Say "fetching any model the configuration uses that is not installed yet"

@@ -28,6 +28,12 @@ WITH_UI="${NANOASR_UI:-1}"
 WITH_MODELS="${NANOASR_DOWNLOAD:-1}"
 WITH_FFMPEG="${NANOASR_FFMPEG:-1}"
 REALTIME="${NANOASR_REALTIME:-0}"
+# Empty means "leave it as it is": the CPU on a fresh install, and whatever an
+# existing one is already using on an upgrade. 1 is the GPU, 0 is back to the
+# CPU. Not a default of 0, because that would quietly undo somebody's GPU
+# installation on the next upgrade.
+GPU="${NANOASR_GPU:-}"
+CUDA="${NANOASR_CUDA:-12}"
 START="${NANOASR_START:-1}"
 ACTION=install
 PURGE=0
@@ -66,17 +72,25 @@ Install NanoASR as a systemd service.
   --no-ffmpeg       do not install ffmpeg
   --realtime        also serve streaming recognition over a websocket,
                     and fetch the Russian streaming model it needs
+  --gpu             recognise on an NVIDIA GPU: install the CUDA build of the
+                    native libraries and point the service at them. Works on a
+                    fresh install and on one already running on the CPU.
+  --no-gpu          put an installation that is using the GPU back on the CPU
+  --cuda 12|13      CUDA major version for --gpu             ($CUDA)
   --no-start        install everything, start nothing
   --uninstall       stop and remove the service and the installation
   --purge           with --uninstall: also delete the data and the account
 
 Each option has an environment variable: NANOASR_VERSION, NANOASR_PREFIX,
 NANOASR_DATA_DIR, NANOASR_ADDR, NANOASR_USER, NANOASR_SERVICE, NANOASR_UI=0,
-NANOASR_DOWNLOAD=0, NANOASR_FFMPEG=0, NANOASR_REALTIME=1, NANOASR_START=0,
-NANOASR_UNINSTALL=1, NANOASR_PURGE=1. A flag wins over one.
+NANOASR_DOWNLOAD=0, NANOASR_FFMPEG=0, NANOASR_REALTIME=1, NANOASR_GPU=1 (or 0),
+NANOASR_CUDA, NANOASR_START=0, NANOASR_UNINSTALL=1, NANOASR_PURGE=1. A flag
+wins over one.
 
-For recognition on an NVIDIA GPU, install this first and then run
-install-gpu.sh, which swaps in the CUDA build of the native libraries.
+The CPU is the default and an upgrade never changes which one you are on: an
+installation already using the GPU keeps it, with its libraries refreshed to
+match the new binary. install-gpu.sh is the same step on its own, with more
+options.
 EOF
 }
 
@@ -92,6 +106,9 @@ while [[ $# -gt 0 ]]; do
     --no-download) WITH_MODELS=0; shift ;;
     --no-ffmpeg)   WITH_FFMPEG=0; shift ;;
     --realtime)    REALTIME=1; shift ;;
+    --gpu)         GPU=1; shift ;;
+    --no-gpu)      GPU=0; shift ;;
+    --cuda)        CUDA="${2:?--cuda needs 12 or 13}"; shift 2 ;;
     --no-start)    START=0; shift ;;
     --uninstall)   ACTION=uninstall; shift ;;
     --purge)       PURGE=1; shift ;;
@@ -349,11 +366,15 @@ install_nanoasr() {
   fi
 
   if ! systemd_running; then
+    apply_gpu_choice
     say "installed in $PREFIX; start it with: $PREFIX/nanoasr serve -config $CONFIG"
     return
   fi
 
   write_unit
+  # Before the service is started, so it comes up on the right libraries once
+  # rather than on the CPU and then again a second later.
+  apply_gpu_choice
   if [[ "$START" == "1" ]]; then
     say "enabling and starting $SERVICE"
     $SUDO systemctl enable --now "$SERVICE"
@@ -364,6 +385,78 @@ install_nanoasr() {
   fi
 
   summary "$keys"
+}
+
+# --- the GPU libraries -------------------------------------------------------
+
+# on_gpu reports whether this installation is using the CUDA libraries.
+on_gpu() { [[ -d "$PREFIX/lib-gpu" ]]; }
+
+# gpu_script finds install-gpu.sh, which does the work.
+#
+# Beside this script when it was run from a checkout or an unpacked release;
+# otherwise from the same release this installed, never "latest" — the
+# libraries have to match the binary, and a newer script may pin a newer
+# archive.
+gpu_script() {
+  local here sibling
+  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  sibling="$here/install-gpu.sh"
+  if [[ -n "$here" && -f "$sibling" ]]; then
+    printf '%s' "$sibling"
+    return
+  fi
+  [[ -n "$TMP" ]] || TMP="$(mktemp -d)"
+  if ! fetch "$BASE/install-gpu.sh" "$TMP/install-gpu.sh"; then
+    warn "this release does not publish install-gpu.sh ($BASE/install-gpu.sh);"
+    warn "install the GPU libraries from a checkout, or from a release that has it"
+    return 1
+  fi
+  printf '%s' "$TMP/install-gpu.sh"
+}
+
+# apply_gpu_choice installs, refreshes or removes the CUDA libraries.
+#
+# The third case is the one worth having: a plain upgrade of an installation
+# that is using the GPU re-runs the install, because those libraries carry the
+# sherpa-onnx version the binary was linked against and the new binary may need
+# a different one.
+apply_gpu_choice() {
+  local args=(--prefix "$PREFIX" --service "$SERVICE" --cuda "$CUDA" --no-restart)
+
+  case "$GPU" in
+    1)
+      say "installing the CUDA build of the native libraries"
+      ;;
+    0)
+      if ! on_gpu; then
+        return
+      fi
+      say "putting $SERVICE back on the CPU libraries"
+      args+=(--revert)
+      ;;
+    *)
+      if ! on_gpu; then
+        return
+      fi
+      say "refreshing the GPU libraries to match the new binary"
+      ;;
+  esac
+
+  # Not fatal: the script below says what went wrong and whether it changed
+  # anything, and a failed GPU step leaves the CPU libraries in place — so the
+  # rest of the installation, which is fine, is worth finishing. It does decide
+  # the exit code, in main: a deployment that asked for the GPU and did not get
+  # it has to be able to tell.
+  local script
+  if ! script="$(gpu_script)"; then
+    GPU_FAILED=1
+    return
+  fi
+  if ! bash "$script" "${args[@]}"; then
+    warn "the GPU step did not finish; $SERVICE will run on the CPU"
+    GPU_FAILED=1
+  fi
 }
 
 # wait_for_health gives the server a minute to answer and reports rather than
@@ -386,6 +479,20 @@ wait_for_health() {
   warn "no answer from $url/healthz yet — loading the weights takes a while: journalctl -u $SERVICE -f"
 }
 
+# provider_line is what the summary says about CPU or GPU, and it is read from
+# the installation rather than from the flags: a GPU step that failed leaves
+# the service on the CPU, and the summary has to say the same thing the server
+# will.
+provider_line() {
+  if [[ "${GPU_FAILED:-0}" == "1" ]]; then
+    printf 'cpu (the GPU step failed; see above)'
+  elif on_gpu; then
+    printf 'cuda    %s/lib-gpu, drop-in %s' "$PREFIX" "$UNIT_DIR/$SERVICE.service.d/10-gpu.conf"
+  else
+    printf 'cpu     --gpu installs the CUDA libraries'
+  fi
+}
+
 summary() {
   local keys="$1" url
   url="$(probe_url)"
@@ -394,6 +501,7 @@ summary() {
 NanoASR $VERSION is installed.
 
   service   $SERVICE          systemctl status $SERVICE
+  provider  $(provider_line)
   binary    $PREFIX/nanoasr
   config    $CONFIG
   data      $DATA_DIR
@@ -415,7 +523,7 @@ EOF
 
   update     curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash
   uninstall  curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash -s -- --uninstall
-  gpu        curl -fsSL https://github.com/$REPO/releases/latest/download/install-gpu.sh | bash
+  gpu        curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash -s -- --gpu
 EOF
   if [[ "$REALTIME" == "1" ]]; then
     cat >&2 <<EOF
@@ -432,9 +540,17 @@ uninstall_nanoasr() {
     say "stopping and disabling $SERVICE"
     $SUDO systemctl disable --now "$SERVICE" 2>/dev/null || true
   fi
+  # The GPU drop-in lives in a directory of its own beside the unit. It goes
+  # whether or not the unit is still there, because a leftover one would
+  # configure the next installation with libraries that are not.
+  if [[ -d "$UNIT_DIR/$SERVICE.service.d" ]]; then
+    $SUDO rm -rf "$UNIT_DIR/$SERVICE.service.d"
+  fi
   if [[ -f "$UNIT" ]]; then
     $SUDO rm -f "$UNIT"
-    systemd_running && $SUDO systemctl daemon-reload || true
+  fi
+  if systemd_running; then
+    $SUDO systemctl daemon-reload || true
   fi
   say "removing $PREFIX"
   $SUDO rm -rf "$PREFIX"
@@ -454,3 +570,11 @@ case "$ACTION" in
   install)   install_nanoasr ;;
   uninstall) uninstall_nanoasr ;;
 esac
+
+# The installation itself is done either way; this is about the GPU step, which
+# either was asked for or was already in place. Failing out loud is the point:
+# the service is running on the CPU and somebody is expecting otherwise.
+if [[ "${GPU_FAILED:-0}" == "1" ]]; then
+  warn "finished, but not on the GPU — see the message above"
+  exit 1
+fi

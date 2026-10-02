@@ -153,6 +153,7 @@ irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 |
 | `--no-download` | `-NoDownload` | `NANOASR_DOWNLOAD=0` | write the configuration, fetch no models |
 | `--no-ffmpeg` | `-NoFfmpeg` | `NANOASR_FFMPEG=0` | leave ffmpeg alone |
 | `--realtime` | `-Realtime` | `NANOASR_REALTIME=1` | also serve streaming recognition over a websocket |
+| `--gpu` | — | `NANOASR_GPU=1` | recognise on an NVIDIA GPU (Linux); `--no-gpu` goes back |
 | `--no-start` | `-NoStart` | `NANOASR_START=0` | install everything, start nothing |
 | `--uninstall` | `-Uninstall` | `NANOASR_UNINSTALL=1` | stop and remove the installation |
 | `--purge` | `-Purge` | `NANOASR_PURGE=1` | with the above, also delete the data |
@@ -302,24 +303,42 @@ NANOASR_AUTH_KEYS=sk-... docker compose -f deploy/docker-compose.yml up -d
 The difference between CPU and GPU recognition is not the binary: it is which build
 of the sherpa-onnx libraries the dynamic loader finds. sherpa-onnx publishes two —
 one against a CPU-only onnxruntime, one against a CUDA one — and NanoASR ships the
-first. After installing, swap in the second:
+first. The installer swaps in the second when you ask it to:
 
 ```bash
-curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install-gpu.sh | sudo bash
+# A new installation, or one already running on the CPU — the same command,
+# because an installation is upgraded in place.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --gpu
+
+# And back again.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --no-gpu
 ```
 
-It downloads the CUDA build of exactly the sherpa-onnx version the binary was linked
-against, verifies its checksum, unpacks the libraries into `/opt/nanoasr/lib-gpu` and
-points the service at them with a systemd drop-in that also sets
-`NANOASR_PROVIDER=cuda`. The CPU libraries stay where they are, which is what makes
-`install-gpu.sh --revert` a deletion rather than a reinstall.
+On an existing installation that fetches the release, keeps the configuration and
+the models, and then installs the GPU libraries. The CPU is the default, and **an
+upgrade never changes which one you are on**: an installation already using the GPU
+keeps it, with its libraries refreshed to match the new binary — which matters,
+because those libraries carry the sherpa-onnx version the binary was linked
+against.
+
+`scripts/install-gpu.sh` is that step on its own, with more options (`--cuda 13`,
+`--sherpa`, `--sha256`, `--revert`); `install.sh --gpu` runs it for you. It downloads
+the CUDA build of exactly the sherpa-onnx and onnxruntime versions the installed
+binary reports, verifies a measured checksum, unpacks the libraries into
+`/opt/nanoasr/lib-gpu` and points the service at them with a systemd drop-in that
+also sets `NANOASR_PROVIDER=cuda`. The CPU libraries stay where they are, which is
+what makes the way back a deletion rather than a reinstall.
 
 It verifies before it reconfigures: if the libraries cannot be loaded on the machine —
 no driver, no cuDNN, no device — nothing is changed and the service keeps running on
 the CPU.
 
 Requirements: Linux on x86-64, an NVIDIA driver, CUDA 12 and cuDNN 9 (`--cuda 13` for
-the CUDA 13 build). In a container, the image is the same one with a build argument:
+the CUDA 13 build). Windows is CPU-only here: sherpa-onnx does publish a CUDA build
+for Windows, but nothing in NanoASR installs or checks it yet — the probe below reads
+`/proc` — so `asr.provider: cuda` is refused there rather than quietly ignored.
+
+In a container, the image is the same one with a build argument:
 
 ```bash
 docker build -f deploy/Dockerfile --build-arg FLAVOUR=gpu -t nanoasr:gpu .

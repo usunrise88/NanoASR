@@ -203,16 +203,19 @@ jobs:
           realtime transcription API. It fetches a Russian streaming model;
           note that no streaming Russian model writes punctuation or capitals.
 
-          For recognition on an NVIDIA GPU, after installing:
+          Add `--gpu` to recognise on an NVIDIA GPU (Linux, CUDA 12 or 13 with
+          cuDNN 9). The same command works on a fresh installation and on one
+          already running on the CPU, `--no-gpu` goes back, and an ordinary
+          upgrade never changes which one you are on — it refreshes the GPU
+          libraries of a GPU installation so they keep matching the binary.
 
-              curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install-gpu.sh | sudo bash
-
-          That swaps in the CUDA build of the sherpa-onnx libraries, points the
-          service at them and checks that they load before changing anything.
-          It needs CUDA 12 and cuDNN 9 on the host; `nanoasr gpu` reports what
-          the loaded libraries can do, and the server refuses to start on a
-          provider it cannot serve rather than falling back to the CPU in
-          silence.
+          It swaps in the CUDA build of the sherpa-onnx libraries, points the
+          service at them, and checks that they load before changing anything:
+          a host that cannot serve the provider is left running on the CPU and
+          told so. `nanoasr gpu` reports what the loaded libraries can do, and
+          the server refuses to start on a provider it cannot serve rather than
+          falling back to the CPU in silence. `install-gpu.sh` is that step on
+          its own, with more options.
 
           ## Archives
 

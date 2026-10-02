@@ -153,6 +153,7 @@ irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 |
 | `--no-download` | `-NoDownload` | `NANOASR_DOWNLOAD=0` | написать конфигурацию, модели не загружать |
 | `--no-ffmpeg` | `-NoFfmpeg` | `NANOASR_FFMPEG=0` | не трогать ffmpeg |
 | `--realtime` | `-Realtime` | `NANOASR_REALTIME=1` | плюс потоковое распознавание по websocket |
+| `--gpu` | — | `NANOASR_GPU=1` | распознавание на NVIDIA GPU (Linux); `--no-gpu` — обратно |
 | `--no-start` | `-NoStart` | `NANOASR_START=0` | установить всё, ничего не запускать |
 | `--uninstall` | `-Uninstall` | `NANOASR_UNINSTALL=1` | остановить и удалить установку |
 | `--purge` | `-Purge` | `NANOASR_PURGE=1` | вместе с предыдущим — удалить и данные |
@@ -298,25 +299,42 @@ NANOASR_AUTH_KEYS=sk-... docker compose -f deploy/docker-compose.yml up -d
 
 Разница между распознаванием на CPU и на GPU — не в исполняемом файле, а в том, какую
 сборку библиотек sherpa-onnx найдёт динамический загрузчик. Их публикуют две: против
-onnxruntime только для CPU и против CUDA-сборки. NanoASR поставляется с первой; после
-установки можно подставить вторую:
+onnxruntime только для CPU и против CUDA-сборки. NanoASR поставляется с первой, а
+установщик подставляет вторую по ключу:
 
 ```bash
-curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install-gpu.sh | sudo bash
+# Новая установка или уже работающая на CPU — команда одна и та же,
+# потому что установка обновляется на месте.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --gpu
+
+# И обратно.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --no-gpu
 ```
 
-Скрипт скачивает CUDA-сборку ровно той версии sherpa-onnx, с которой собран бинарник,
-проверяет контрольную сумму, распаковывает библиотеки в `/opt/nanoasr/lib-gpu` и
-направляет службу на них через systemd drop-in, который заодно выставляет
-`NANOASR_PROVIDER=cuda`. CPU-библиотеки остаются на месте — поэтому
-`install-gpu.sh --revert` это удаление, а не переустановка.
+На существующей установке это скачает релиз, сохранит конфигурацию и модели, а потом
+поставит GPU-библиотеки. CPU — значение по умолчанию, и **обновление никогда не меняет
+того, на чём вы работаете**: установка, уже использующая GPU, его сохраняет, а её
+библиотеки обновляются под новый бинарник — это важно, потому что в них зашита версия
+sherpa-onnx, с которой он собран.
+
+`scripts/install-gpu.sh` — тот же шаг отдельно и с дополнительными опциями
+(`--cuda 13`, `--sherpa`, `--sha256`, `--revert`); `install.sh --gpu` запускает его за
+вас. Скрипт скачивает CUDA-сборку ровно тех версий sherpa-onnx и onnxruntime, которые
+сообщает установленный бинарник, проверяет измеренную контрольную сумму, распаковывает
+библиотеки в `/opt/nanoasr/lib-gpu` и направляет службу на них через systemd drop-in,
+который заодно выставляет `NANOASR_PROVIDER=cuda`. CPU-библиотеки остаются на месте —
+поэтому возврат это удаление, а не переустановка.
 
 Проверка идёт до переконфигурации: если библиотеки на этой машине загрузить нельзя —
 нет драйвера, нет cuDNN, нет устройства — ничего не меняется, и служба продолжает
 работать на процессоре.
 
 Требования: Linux x86-64, драйвер NVIDIA, CUDA 12 и cuDNN 9 (`--cuda 13` для сборки
-под CUDA 13). В контейнере это тот же образ с другим аргументом сборки:
+под CUDA 13). На Windows пока только CPU: CUDA-сборка sherpa-onnx для Windows
+публикуется, но NanoASR её не ставит и не проверяет — проверка ниже читает `/proc`, —
+поэтому `asr.provider: cuda` там отклоняется, а не игнорируется молча.
+
+В контейнере это тот же образ с другим аргументом сборки:
 
 ```bash
 docker build -f deploy/Dockerfile --build-arg FLAVOUR=gpu -t nanoasr:gpu .

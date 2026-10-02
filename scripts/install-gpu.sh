@@ -25,8 +25,12 @@ set -euo pipefail
 PREFIX="${NANOASR_PREFIX:-/opt/nanoasr}"
 SERVICE="${NANOASR_SERVICE:-nanoasr}"
 CUDA="${NANOASR_CUDA:-12}"
-SHERPA="${NANOASR_SHERPA_VERSION:-1.13.6}"
-ONNXRUNTIME="${NANOASR_ONNXRUNTIME_VERSION:-1.27.1}"
+# Both default to whatever the installed binary reports. They are part of the
+# archive's name upstream, and they have to match the libraries the binary was
+# linked against — so reading them from the binary is what makes this script
+# keep working across an upgrade instead of fetching last release's archive.
+SHERPA="${NANOASR_SHERPA_VERSION:-}"
+ONNXRUNTIME="${NANOASR_ONNXRUNTIME_VERSION:-}"
 SHA256="${NANOASR_GPU_SHA256:-}"
 RESTART="${NANOASR_START:-1}"
 VERIFY=1
@@ -50,7 +54,8 @@ Install the CUDA build of the sherpa-onnx libraries and point NanoASR at them.
   --prefix DIR      where NanoASR is installed            ($PREFIX)
   --service NAME    systemd unit to reconfigure            ($SERVICE)
   --cuda 12|13      CUDA major version to match            ($CUDA)
-  --sherpa VERSION  sherpa-onnx version to fetch           ($SHERPA)
+  --sherpa VERSION  sherpa-onnx version to fetch   (default: the binary's)
+  --onnxruntime VER onnxruntime version to match   (default: the binary's)
   --sha256 HEX      checksum, for a version not pinned here
   --no-verify       install without checking the checksum (not advised)
   --no-restart      install and configure, restart nothing
@@ -60,6 +65,9 @@ Install the CUDA build of the sherpa-onnx libraries and point NanoASR at them.
 Environment: NANOASR_PREFIX, NANOASR_SERVICE, NANOASR_CUDA,
 NANOASR_SHERPA_VERSION, NANOASR_ONNXRUNTIME_VERSION, NANOASR_GPU_SHA256,
 NANOASR_START=0, NANOASR_GPU_REVERT=1. A flag wins over one.
+
+install.sh --gpu runs this for you, and a later install.sh upgrade refreshes
+these libraries so they keep matching the binary.
 EOF
 }
 
@@ -69,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --service)    SERVICE="${2:?--service needs a name}"; shift 2 ;;
     --cuda)       CUDA="${2:?--cuda needs 12 or 13}"; shift 2 ;;
     --sherpa)     SHERPA="${2:?--sherpa needs a version}"; shift 2 ;;
+    --onnxruntime) ONNXRUNTIME="${2:?--onnxruntime needs a version}"; shift 2 ;;
     --sha256)     SHA256="${2:?--sha256 needs a checksum}"; shift 2 ;;
     --no-verify)  VERIFY=0; shift ;;
     --no-restart) RESTART=0; shift ;;
@@ -99,6 +108,37 @@ escalate() {
   say "using sudo for the privileged steps"
 }
 
+# resolve_versions settles which archive to fetch.
+#
+# The libraries replace the ones the binary was linked against, so the C API has
+# to be the same version: a mismatch is a crash at the first model load, with a
+# message about a missing symbol that explains nothing. The binary knows both
+# versions, so they are read from it rather than pinned here — that is what
+# makes `install.sh --gpu` work on an instance that was upgraded since the
+# GPU libraries went in.
+resolve_versions() {
+  local out sherpa ort
+  out="$("$BINARY" version 2>/dev/null || true)"
+  sherpa="$(awk '/^sherpa-onnx/ {print $2}' <<<"$out")"
+  ort="$(awk '/^onnxruntime/ {print $2}' <<<"$out")"
+
+  if [[ -n "$SHERPA" && -n "$sherpa" && "$SHERPA" != "$sherpa" ]]; then
+    die "$BINARY was built against sherpa-onnx $sherpa but --sherpa says $SHERPA;
+    drop the flag, or update NanoASR first"
+  fi
+  if [[ -n "$ONNXRUNTIME" && -n "$ort" && "$ONNXRUNTIME" != "$ort" ]]; then
+    die "$BINARY reports onnxruntime $ort but --onnxruntime says $ONNXRUNTIME"
+  fi
+  [[ -n "$SHERPA" ]] || SHERPA="$sherpa"
+  [[ -n "$ONNXRUNTIME" ]] || ONNXRUNTIME="$ort"
+
+  if [[ -z "$SHERPA" || -z "$ONNXRUNTIME" ]]; then
+    die "could not read the sherpa-onnx and onnxruntime versions from $BINARY
+    (\`$BINARY version\` prints them); pass --sherpa and --onnxruntime"
+  fi
+  say "matching the installed binary: sherpa-onnx $SHERPA, onnxruntime $ONNXRUNTIME"
+}
+
 # Checksums measured from the published archives. A version that is not in this
 # table can still be installed, with --sha256 or --no-verify, and says so.
 archive_sha256() {
@@ -124,18 +164,7 @@ preflight() {
     have "$tool" || die "$tool is required"
   done
   [[ -x "$BINARY" ]] || die "no NanoASR at $BINARY; install it first (scripts/install.sh)"
-
-  # The libraries replace the ones the binary was linked against, so the C API
-  # has to be the same version. A mismatch here is a crash at the first model
-  # load, with a message about a missing symbol that explains nothing.
-  local installed
-  installed="$("$BINARY" version 2>/dev/null | awk '/^sherpa-onnx/ {print $2}')"
-  if [[ -z "$installed" ]]; then
-    warn "could not read the sherpa-onnx version from $BINARY"
-  elif [[ "$installed" != "$SHERPA" ]]; then
-    die "$BINARY was built against sherpa-onnx $installed but this would install $SHERPA;
-    pass --sherpa $installed, or update NanoASR first"
-  fi
+  resolve_versions
 
   if ! compgen -G "/dev/nvidia[0-9]*" >/dev/null && ! have nvidia-smi; then
     warn "no NVIDIA device and no nvidia-smi on this machine: the libraries will install,"
@@ -158,8 +187,11 @@ verify() {
     return
   fi
   if [[ -z "$want" ]]; then
-    die "no checksum is pinned for sherpa-onnx $SHERPA with onnxruntime $ONNXRUNTIME on CUDA $CUDA;
-    pass --sha256 <hex>, or --no-verify to install it unchecked"
+    die "no checksum is pinned for sherpa-onnx $SHERPA with onnxruntime $ONNXRUNTIME on CUDA $CUDA.
+    This script ships the checksums of the archives it was released with; a newer
+    NanoASR needs a newer one. Take it from
+      https://github.com/k2-fsa/sherpa-onnx/releases/tag/v$SHERPA
+    and pass --sha256 <hex>, or --no-verify to install it unchecked"
   fi
   local got
   got="$(sha256sum "$file" | cut -d' ' -f1)"
@@ -203,6 +235,15 @@ install_libraries() {
 # written is the whole point: a verification that happens after the service has
 # been reconfigured is a verification of a broken service.
 check_runtime() {
+  # A NanoASR older than these libraries has no `gpu` command, and asking it
+  # anyway prints its usage and exits non-zero — which would be read here as
+  # "CUDA cannot be served" and explain nothing.
+  if ! "$BINARY" gpu -h >/dev/null 2>&1; then
+    die "$BINARY has no 'gpu' command, so it is older than this script.
+    The libraries are in $GPU_DIR and nothing has been reconfigured.
+    Upgrade NanoASR first (install.sh), then run this again."
+  fi
+
   say "checking whether CUDA can be served"
   if ! LD_LIBRARY_PATH="$GPU_DIR" "$BINARY" gpu -provider cuda; then
     die "the GPU libraries are installed at $GPU_DIR but cannot be used on this machine.
