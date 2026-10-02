@@ -98,16 +98,33 @@
 
 ### Одной командой
 
-Linux, служба systemd:
+Linux, служба systemd. По умолчанию распознавание на CPU; `--gpu` переводит его на
+NVIDIA, `--addr` задаёт адрес и порт:
 
 ```bash
+# CPU, на 127.0.0.1:8080.
 curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash
+
+# NVIDIA GPU, CUDA 12 или 13 с cuDNN 9. Та же установка, но на устройстве.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --gpu
+
+# Свой порт, доступный с других машин.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --addr 0.0.0.0:9000
+
+# И то и другое.
+curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --gpu --addr 0.0.0.0:9000
 ```
 
-Windows, служба, в PowerShell:
+Windows, служба, в PowerShell. Установка и проверка GPU пока только для Linux, так что
+здесь остаётся выбрать адрес — а `iex` не умеет передавать аргументы, поэтому он
+приходит переменной окружения:
 
 ```powershell
+# CPU, на 127.0.0.1:8080.
 irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
+
+# Свой порт.
+$env:NANOASR_ADDR = "0.0.0.0:9000"; irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 | iex
 ```
 
 Каждый из скриптов определяет последний релиз, сверяет загруженное с опубликованным
@@ -130,8 +147,8 @@ irm https://github.com/usunrise88/NanoASR/releases/latest/download/install.ps1 |
 конвейеру, нечего перезапускать от имени root. ffmpeg устанавливается, если его нет, а
 система предлагает очевидный способ: без него принимаются только WAV и сырой PCM.
 
-Параметры задаются флагами, а для формы с конвейером, которая флаги принять не может, —
-переменными окружения:
+Каждый параметр — флаг, и у каждого флага есть переменная окружения: она нужна там,
+где аргументы передать нельзя.
 
 ```bash
 curl -fsSL https://github.com/usunrise88/NanoASR/releases/latest/download/install.sh | bash -s -- --addr 0.0.0.0:8080
