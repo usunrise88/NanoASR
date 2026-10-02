@@ -104,6 +104,17 @@ test('reports models by what is actually true of them', async ({ page }) => {
 
   // A model on disk is "On disk" until it is loaded, never "Not downloaded" —
   // the two were conflated by the server until this milestone.
-  await expect(page.getByText(/On disk|На диске/).first()).toBeVisible()
-  await expect(page.getByText(/Not downloaded|Нет на диске/)).toHaveCount(0)
+  //
+  // Scoped to the section that lists what is on disk, because the catalog
+  // section below it is *meant* to say "Not downloaded": it lists the entries
+  // the development model set leaves out, and there are some. Asserting about
+  // the whole page made this fail every time the catalog gained one.
+  const heading = page.getByRole('heading', { name: /^(On disk|На диске)$/ })
+  await expect(heading).toBeVisible()
+
+  const onDisk = page.locator('section').filter({ has: heading })
+  await expect(onDisk.getByText(/Not downloaded|Нет на диске/)).toHaveCount(0)
+  // The section heading carries the same words as the badge, so a model row
+  // in it means a second match.
+  await expect(onDisk.getByText(/^(On disk|На диске)$/).nth(1)).toBeVisible()
 })
