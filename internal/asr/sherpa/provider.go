@@ -33,11 +33,11 @@ type Runtime struct {
 	// CUDAProviderPath is the CUDA execution provider library, empty when the
 	// loaded onnxruntime is a CPU-only build.
 	CUDAProviderPath string
-	// CUDAProviderError is what the dynamic loader said when asked to load
-	// that library. Empty means it loaded, which means every CUDA and cuDNN
-	// library it needs resolved too — the check is delegated to the loader
-	// rather than reimplemented against a list of sonames that changes with
-	// every CUDA major version.
+	// CUDAProviderError says why that library could not be used, empty when
+	// nothing stands in the way. What is checked is its dependencies — the
+	// CUDA and cuDNN libraries named in its own dynamic section — rather than
+	// the library itself, which is not loadable on its own: see
+	// probeCUDAProvider.
 	CUDAProviderError string
 	// Driver is the NVIDIA kernel driver version, empty when the driver is not
 	// loaded or not visible to this process.
@@ -49,8 +49,9 @@ type Runtime struct {
 	Platform bool
 }
 
-// Probe gathers the runtime facts. It is cheap except for one dlopen of the
-// CUDA provider library, which is the same work onnxruntime would do later.
+// Probe gathers the runtime facts. It is cheap except for a dlopen of each
+// library the CUDA provider imports, which is the lookup onnxruntime would do
+// later anyway.
 func Probe() Runtime {
 	rt := Runtime{Platform: probeSupported}
 	rt.SherpaOnnx, rt.OnnxRuntime = Versions()
@@ -124,9 +125,11 @@ func CheckProvider(provider string) (warnings []string, err error) {
 	}
 	if rt.CUDAProviderError != "" {
 		return nil, fmt.Errorf(
-			"asr.provider is %q and %s is present, but the dynamic loader cannot load it: %s.\n"+
-				"That library needs CUDA 12 (or 13, matching the archive you installed) and cuDNN 9 "+
-				"on the library path; install them, or set asr.provider: cpu",
+			"asr.provider is %q and %s is present, but it cannot be used: %s.\n"+
+				"Those are the CUDA and cuDNN libraries it imports, and they have to be on the "+
+				"library path — the CUDA major version matching the archive you installed, with "+
+				"cuDNN 9. Installing them is not enough on its own if they land outside the "+
+				"loader's search path: `ldconfig -p` has to find them. Or set asr.provider: cpu",
 			ProviderCUDA, rt.CUDAProviderPath, rt.CUDAProviderError)
 	}
 
