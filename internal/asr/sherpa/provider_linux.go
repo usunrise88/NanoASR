@@ -11,6 +11,8 @@ import "C"
 
 import (
 	"bufio"
+	"debug/elf"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,15 +75,31 @@ func probeProviders(dir string) []string {
 	return out
 }
 
-// probeCUDAProvider asks the dynamic loader to load the CUDA execution
-// provider, and reports what it said.
+// probeCUDAProvider reports whether the CUDA execution provider's own
+// dependencies are present, and names the ones that are not.
 //
-// This is the whole check, and it is delegated rather than reimplemented on
-// purpose: that library needs eight CUDA and cuDNN shared objects whose
-// sonames change with the CUDA major version, and the loader already knows how
-// to find them and which one is missing. onnxruntime performs this same dlopen
-// when the provider is first used; doing it at startup moves the failure from
-// the first request to the boot sequence, where somebody is watching.
+// What it deliberately does not do is load that library. The provider is not
+// standalone: it imports Provider_GetHost from
+// libonnxruntime_providers_shared.so and declares no dependency on it, because
+// onnxruntime loads that bridge into the global symbol scope first and the
+// provider second. It is also linked BIND_NOW, so RTLD_LAZY defers nothing.
+// Loading it on its own therefore fails with "undefined symbol:
+// Provider_GetHost" on every machine, however well CUDA is installed — which
+// is exactly what the first version of this check did, and it refused the GPU
+// on a correctly configured host.
+//
+// Loading the bridge first would resolve that symbol, but it would also run the
+// provider's initialisers outside the sequence onnxruntime drives, and a
+// startup probe that can crash the server is worse than one that answers a
+// narrower question. So the question is narrowed to the one that was worth
+// asking in the first place: are the CUDA and cuDNN libraries it needs on the
+// library path? The list comes from the library's own dynamic section rather
+// than a table here, so it stays right as sonames change with the CUDA major
+// version, and the dependencies are leaf libraries that are safe to load.
+//
+// Whether those libraries can then run kernels on this particular device is
+// not knowable without building a session, so it is left to the first model
+// load, where sherpa-onnx will say so.
 func probeCUDAProvider(dir string) (path, loadErr string) {
 	if dir == "" {
 		return "", ""
@@ -91,18 +109,57 @@ func probeCUDAProvider(dir string) (path, loadErr string) {
 		return "", ""
 	}
 
-	cpath := C.CString(path)
-	defer C.free(unsafe.Pointer(cpath))
+	deps, err := importedLibraries(path)
+	if err != nil {
+		return path, "cannot read its dynamic section: " + err.Error()
+	}
+	if missing := missingLibraries(deps, dlopenByName); len(missing) > 0 {
+		return path, "cannot find " + strings.Join(missing, ", ")
+	}
+	return path, ""
+}
 
-	// RTLD_LOCAL so nothing this library exports can shadow a symbol the rest
-	// of the process resolves later; the handle is closed either way, and
-	// onnxruntime opens its own.
-	h := C.dlopen(cpath, C.RTLD_LAZY|C.RTLD_LOCAL)
+// importedLibraries is the DT_NEEDED list: what the loader will require.
+func importedLibraries(path string) ([]string, error) {
+	f, err := elf.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.ImportedLibraries()
+}
+
+// missingLibraries reports which of names the loader cannot find, in the order
+// they appear. open is a parameter so the decision can be tested without a
+// machine that has CUDA on it or one that does not.
+func missingLibraries(names []string, open func(string) error) []string {
+	var missing []string
+	for _, name := range names {
+		if err := open(name); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+// dlopenByName resolves a soname the way the loader will when it comes to load
+// the provider: RUNPATH is absent from that library, so a plain soname lookup
+// through LD_LIBRARY_PATH and the ld.so cache has the same answer.
+func dlopenByName(soname string) error {
+	cname := C.CString(soname)
+	defer C.free(unsafe.Pointer(cname))
+
+	// RTLD_LOCAL so nothing these libraries export can shadow a symbol the
+	// rest of the process resolves later; onnxruntime opens its own handles.
+	h := C.dlopen(cname, C.RTLD_LAZY|C.RTLD_LOCAL)
 	if h == nil {
-		return path, strings.TrimSpace(C.GoString(C.dlerror()))
+		if msg := strings.TrimSpace(C.GoString(C.dlerror())); msg != "" {
+			return errors.New(msg)
+		}
+		return errors.New("dlopen failed")
 	}
 	C.dlclose(h)
-	return path, ""
+	return nil
 }
 
 var driverVersion = regexp.MustCompile(`\d+\.\d+(\.\d+)?`)
