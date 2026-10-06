@@ -43,12 +43,18 @@ function HomePage() {
 
   const loading = useDelayedPending(models.isLoading)
   const installed = models.data ?? []
-  const chosen = installed.find((m) => m.id === modelID)
 
   // The first model on disk is the sensible default, and picking it here rather
   // than in an effect means the select is never briefly empty.
   const effectiveModel =
     modelID || installed.find((m) => m.kind === '' || m.kind === 'asr')?.id || ''
+
+  // The options panel describes the model the run will use, which is the one
+  // the select is showing — not only one the user has clicked. Reading it from
+  // modelID left the panel with no model until somebody opened the select, and
+  // a panel with no model says "this model cannot do that" about a model that
+  // can: a punctuating model arrived with its punctuation switch greyed out.
+  const chosen = installed.find((m) => m.id === effectiveModel)
 
   async function run() {
     if (!file) return

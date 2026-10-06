@@ -84,9 +84,17 @@ models:
       sha256: 20e41e160efa6f2460a7ef6554cdbbb9e8fffb2b92e6bc708e9406bd8b9256ea
       size_bytes: 163282594
     license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
-    # Same as v2: the archive ships a saved GitHub HTML page in place of the
-    # licence text, so the terms cannot be established from the download.
-    commercial_use: unknown
+    # MIT, and stated here rather than left unknown because the publisher says
+    # it about the weights rather than only about the code: ai-sage/GigaAM-v3
+    # on Hugging Face carries license: mit in its model card, and this archive
+    # ships the MIT text itself — 1070 bytes of plain ASCII beside the weights,
+    # checked by downloading it.
+    #
+    # The note this replaced said the archive carried a saved GitHub HTML page
+    # instead of the licence; that was true of an earlier upload and is not
+    # true of this one. The v2 entries below are left unknown: nobody has
+    # checked their archives the same way.
+    commercial_use: "yes"
     notes: >-
       Subword vocabulary of 257 tokens carrying full stops, commas, question
       marks and capitals — hence punctuation and casing without a second pass.
@@ -143,7 +151,9 @@ models:
           sha256: 828c12c991019eef952a960661f25a92d6ad279591e2ea466b4aeddf1d20a18a
           size_bytes: 255336
     license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
-    commercial_use: unknown
+    # MIT, on the same evidence as the v3 CTC entry above: the publisher's own
+    # model card, and the MIT text inside this archive.
+    commercial_use: "yes"
     notes: >-
       Punctuates and capitalises like gigaam-v3-ctc-punct-ru but over its own
       larger vocabulary — 1024 subwords against the CTC model's 257 — and being

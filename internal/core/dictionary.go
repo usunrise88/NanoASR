@@ -26,10 +26,14 @@ type Dictionary struct {
 	Description string `json:"description,omitempty"`
 
 	// Phrases is the list itself. A listing leaves it out — a page of
-	// dictionaries is a page of names, not of their contents — so a client
-	// reading it there must not take nil for "empty": PhraseCount is the one
-	// that is always answered.
-	Phrases     []string `json:"phrases,omitempty"`
+	// dictionaries is a page of names, not of their contents.
+	//
+	// Not omitempty, so the two cases a client has to tell apart look
+	// different on the wire: a listing sends null, meaning "not included
+	// here", and a dictionary that genuinely holds nothing sends []. With
+	// omitempty an empty dictionary was indistinguishable from a listing row,
+	// and the only honest answer was "read the documentation".
+	Phrases     []string `json:"phrases"`
 	PhraseCount int      `json:"phrase_count"`
 
 	// Matches are the phrases a search matched, capped. A listing that

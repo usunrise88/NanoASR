@@ -1473,8 +1473,8 @@ separate punctuation model is required for Russian.
 
 | Identifier | Type | Language | Size | Commercial use |
 |---|---|---|---|---|
-| `gigaam-v3-ctc-punct-ru` | Recognition, CTC | ru | 163 MB | Unconfirmed |
-| `gigaam-v3-rnnt-punct-ru` | Recognition, transducer | ru | 170 MB | Unconfirmed |
+| `gigaam-v3-ctc-punct-ru` | Recognition, CTC | ru | 163 MB | Permitted (MIT) |
+| `gigaam-v3-rnnt-punct-ru` | Recognition, transducer | ru | 170 MB | Permitted (MIT) |
 | `gigaam-v2-ctc-ru` | Recognition, CTC | ru | 167 MB | Unconfirmed |
 | `gigaam-v2-rnnt-ru` | Recognition, transducer | ru | 172 MB | Unconfirmed |
 | `zipformer-small-en` | Recognition, transducer | en | 112 MB | Permitted |
@@ -1488,9 +1488,12 @@ separate punctuation model is required for Russian.
 | `campplus-sv-zh-en` | Speaker embeddings | multi | 28 MB | Permitted |
 | `wespeaker-voxceleb-resnet34` | Speaker embeddings | multi | 27 MB | Permitted |
 
-"Unconfirmed" means the model archive carries no machine-readable licence text. The
+"Unconfirmed" means nobody has established the terms from the download itself. The
 `registry.strict_license` setting refuses to download weights whose commercial use is
-not confirmed.
+not confirmed, so it is left unconfirmed until somebody has read the licence that ships
+with the archive. The two GigaAM v3 entries say MIT because both carry the MIT text
+beside the weights and their publisher states `license: mit` for the weights on Hugging
+Face; the v2 entries have not been checked the same way.
 
 The two streaming entries serve `/v1/realtime` and only that: a streaming export has no
 whole-file decoder, and asking the offline endpoints for one is refused with a message
