@@ -866,8 +866,10 @@ postproc:
 
 ### Hotword dictionaries
 
-A dictionary is a stored phrase list with a key somebody can type. A request names it
-instead of carrying the phrases:
+A dictionary is a phrase list kept on the server under a key somebody can type. It
+exists because a bias list is usually a property of the deployment rather than of the
+call: the same product names on every request, maintained by whoever knows the products
+rather than by whoever writes the client.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/transcribe \
@@ -876,18 +878,63 @@ curl -X POST http://127.0.0.1:8080/api/v1/transcribe \
   -F hotwords_dict=medical-terms
 ```
 
-Several keys are accepted (repeated, or comma-separated), and `hotwords` may be sent
-alongside: the phrases are merged, without repeats. A key that names nothing is a `400`
-rather than a silently unbiased transcript. The phrases are read when the request runs,
-so a queued job picks up an edit made while it waited. In the OpenAI dialect
-`hotwords_dict` works the same way, as an extension — it is the field to use instead of
-packing a vocabulary into `prompt` on every call.
+The key is the identity — there is no numeric id beside it, because every place a
+dictionary is named reads better with `medical-terms` in it, and two names for one thing
+is a question about which one is canonical.
 
-The score comes from the first dictionary that states one, unless the request sends
-`hotwords_score`, and falls back to `postproc.hotwords.default_score`.
+#### What a dictionary holds
 
-A deployment's own vocabulary need not be sent at all. Dictionaries named in the
-configuration apply to every request, ahead of whatever the request itself named:
+| Field | | |
+|---|---|---|
+| `key` | required | Lowercase latin letters, digits, `-` and `_`, starting with a letter or a digit, up to 64 characters. The intersection of what survives a URL, a form field and a comma-separated list. Folded to lower case wherever it arrives, so `Medical-Terms` in a request or in the configuration finds `medical-terms`. |
+| `name` | | What the UI shows, up to 200 characters. Defaults to the key. |
+| `description` | | Up to 2000 characters. Searchable; written into the text export as comments. |
+| `score` | | This dictionary's bias strength, 0–10. `0` means the server's `default_score`. How hard to push a list is a property of the list: product codes nobody says by accident take more than surnames that collide with ordinary words. |
+| `phrases` | | The list itself, up to `postproc.hotwords.max_phrases` entries of 200 characters each. |
+| `phrase_count` | read-only | Always reported, including in listings, which leave `phrases` out. |
+| `created_at`, `updated_at` | read-only | Replacing a dictionary keeps its `created_at`: it is the same dictionary whatever its contents are now. |
+| `matches` | read-only | Only in a search result: up to five phrases that matched, so a hit says why it is a hit. |
+
+Saving cleans the list, and what comes back is what was stored: phrases are trimmed,
+blanks and exact repeats are dropped, runs of whitespace inside a phrase become one
+space, and the author's order is kept — a phrase list is edited as a list, and sorting it
+would make every later diff unreadable. A phrase containing a line break is refused
+(`400`, `param: phrases`) rather than quietly becoming two.
+
+#### Naming one in a request
+
+`hotwords_dict` takes one key, several repeated (`hotwords_dict[]`), or several separated
+by commas, and `hotwords` may be sent beside it. The phrases are merged without repeats,
+in this order:
+
+1. dictionaries from `postproc.hotwords.default_dictionaries`,
+2. dictionaries the request named,
+3. phrases the request carried in `hotwords`.
+
+The strength is decided by the first of these that states one: the request's
+`hotwords_score`, then a dictionary the request named, then a configured one, then
+`postproc.hotwords.default_score`.
+
+A key that names nothing is a `400` with `param: hotwords_dict`, not a transcript that
+looks fine and was never biased. The phrases are read when the request runs, so a queued
+job picks up an edit made while it waited — which is the behaviour somebody fixing a
+wrong phrase expects.
+
+The OpenAI dialect takes `hotwords_dict` as an extension: it is the field to use instead
+of packing a vocabulary into `prompt` on every call. The `era` dialect has no equivalent,
+and streaming recognition cannot be biased at all (see below).
+
+What a client may be told back:
+
+| Warning | |
+|---|---|
+| `decoding_method_promoted` | The request asked for a bias and named no decoding method, so `modified_beam_search` was used instead of the model's greedy default. |
+| `hotwords_unavailable` | The bias was dropped, with the reason: this model cannot be biased, biasing is switched off (`postproc.hotwords.enabled`), or the variant budget is spent (`asr.variants.max`). |
+| `hotwords_dict_missing` | A dictionary named in the configuration no longer exists. The rest were still applied. |
+
+#### Dictionaries applied to every request
+
+A deployment's own vocabulary need not be sent at all:
 
 ```yaml
 postproc:
@@ -896,28 +943,49 @@ postproc:
     default_dictionaries: [medical-terms, staff-names]
 ```
 
-What a caller names is added to those rather than replacing them, and the caller's own
-dictionary decides the score when neither the request nor anything else does. Models
-that cannot be biased are skipped in silence — this is the server's setting, not the
-caller's, and a warning on every request to a CTC model would be noise nobody can act
-on. A configured dictionary that has been deleted is reported as a
-`hotwords_dict_missing` warning and the rest are still applied, because an operator
-removing a dictionary should not take every request on the server down with it; the
-server also says at startup whether the dictionaries it was configured with exist.
+What a caller names is added to these rather than replacing them. Models that cannot be
+biased are skipped in silence — this is the server's setting, not the caller's, and a
+warning on every request to a CTC model would be noise nobody can act on. A configured
+dictionary that has been deleted is a `hotwords_dict_missing` warning and the rest are
+still applied: an operator removing a dictionary should not take every request on the
+server down with it. Naming dictionaries while `postproc.hotwords.enabled` is false is
+refused at startup, as is a key no dictionary could have, and the server reports in its
+log whether the dictionaries it was configured with actually exist.
 
-| Method | Path | |
-|---|---|---|
-| `GET` | `/api/v1/hotwords` | List, with `?q=` searching keys, names, descriptions and the phrases themselves. Carries the server's biasing policy. |
-| `GET` | `/api/v1/hotwords/{key}` | One dictionary with its phrases; `?response_format=text` gives the plain file. |
-| `POST` | `/api/v1/hotwords` | Create. Refuses a key that exists. |
-| `PUT` | `/api/v1/hotwords/{key}` | Replace wholesale. |
-| `DELETE` | `/api/v1/hotwords/{key}` | Delete. |
-| `POST` | `/api/v1/hotwords/{key}/import` | Upload phrases, creating the dictionary when the key is new. `?mode=replace` swaps the list instead of adding to it. |
+#### The API
 
-Reading needs any key; writing needs an administrative one, because a dictionary changes
-what every caller's transcripts come out as. Keys are lowercase latin letters, digits,
-dashes and underscores — the intersection of what survives a URL, a form field and a
-comma-separated list.
+| Method | Path | | Key |
+|---|---|---|---|
+| `GET` | `/api/v1/hotwords` | List. `?q=` searches keys, names, descriptions and the phrases themselves; `?limit=` caps the page (200 at most, which is also the default). | any |
+| `GET` | `/api/v1/hotwords/{key}` | One dictionary with its phrases. `?response_format=text` returns the plain file instead. | any |
+| `POST` | `/api/v1/hotwords` | Create. `201` with the stored dictionary. | admin |
+| `PUT` | `/api/v1/hotwords/{key}` | Replace wholesale — phrases are not merged into what is there. | admin |
+| `DELETE` | `/api/v1/hotwords/{key}` | Delete. `204`. | admin |
+| `POST` | `/api/v1/hotwords/{key}/import` | Upload phrases, creating the dictionary when the key is new. | admin |
+
+Reading is open to any key and writing needs an administrative one, the same split as
+model administration and for the same reason: a dictionary changes what every caller's
+transcripts come out as.
+
+A listing answers with the dictionaries and the server's policy beside them, so a
+management screen can say whether a list it is being asked to curate will be applied at
+all:
+
+```json
+{
+  "data": [
+    { "key": "medical-terms", "name": "Medical terms", "phrase_count": 2,
+      "score": 1.8, "created_at": "…", "updated_at": "…" }
+  ],
+  "policy": {
+    "enabled": true, "default_score": 1.5, "max_variants": 1, "max_phrases": 5000,
+    "default_dictionaries": ["medical-terms"]
+  }
+}
+```
+
+A listing deliberately leaves the phrases out — a page of dictionaries is a page of
+names, not a dump of every list it searched. Fetch one dictionary for those.
 
 ```bash
 # create
@@ -926,22 +994,73 @@ curl -X POST http://127.0.0.1:8080/api/v1/hotwords \
   -d '{"key":"medical-terms","name":"Medical terms","score":1.8,
        "phrases":["кардиомиопатия","амиодарон"]}'
 
-# upload a file into it
+# or with the phrases as one block, which is what a textarea produces
+curl -X POST http://127.0.0.1:8080/api/v1/hotwords \
+  -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"key":"staff-names","text":"Иванов\nПетрова\nСидоренко"}'
+
+# upload a file into it: adds by default, ?mode=replace swaps the list
 curl -X POST "http://127.0.0.1:8080/api/v1/hotwords/medical-terms/import" \
   -H "Authorization: Bearer $ADMIN_KEY" -F file=@terms.txt
+
+# the same, as a raw body
+curl -X POST "http://127.0.0.1:8080/api/v1/hotwords/medical-terms/import" \
+  -H "Authorization: Bearer $ADMIN_KEY" --data-binary @terms.txt
+
+# search inside the phrases of every dictionary
+curl -s "http://127.0.0.1:8080/api/v1/hotwords?q=кардио" -H "Authorization: Bearer $KEY" \
+  | jq '.data[] | {key, matches}'
 ```
 
-An uploaded file is read in whichever of four shapes it arrives:
+An import keeps what the uploaded file does not state: a bare list of phrases does not
+blank out a name, a description or a score somebody set. Uploads are capped at 1 MiB,
+which is two orders of magnitude past what biasing does anything useful with.
 
-- one phrase per line, `#` starting a comment — the format the text export writes;
-- a one-column CSV, its header dropped if it is `phrase`, `word`, `term` or `text`;
+Failures are problem+json like the rest of the dialect:
+
+| Code | Status | |
+|---|---|---|
+| `dictionary_not_found` | 404 | No dictionary with that key. |
+| `dictionary_exists` | 409 | `POST` onto a key that exists; `PUT` replaces instead. |
+| `invalid_request` | 400 | A bad key, phrase, score or `mode`, with `param` naming the field. |
+| `not_implemented` | 501 | This server keeps no dictionaries, which is not the same as having none. |
+
+#### File formats
+
+An uploaded file is read in whichever of four shapes it arrives, decided by its contents
+rather than by its name:
+
+- one phrase per line, `#` starting a comment — the shape the text export writes;
+- a one-column CSV, its header dropped when it is `phrase`, `word`, `term` or `text`;
 - a comma-separated list, which is the same parser;
-- JSON: an array of phrases, or a whole dictionary as `GET` returns it, so an export
-  imports back unchanged.
+- JSON: an array of phrases, or a whole dictionary as `GET` returns it.
+
+So an export imports back unchanged, in either format:
+
+```bash
+curl -s "http://127.0.0.1:8080/api/v1/hotwords/medical-terms?response_format=text" \
+  -H "Authorization: Bearer $KEY" > medical-terms.txt
+```
+
+#### Where they live, and what they cost
+
+Dictionaries are rows in the same SQLite database as the job history
+(`storage.db_path`), so they survive restarts and upgrades and are included in a backup
+of that file. Deleting a dictionary deletes its phrases with it.
+
+The cost is memory, and it is worth knowing before curating a dozen lists. Hotwords are
+fixed when a recogniser is constructed, so each distinct merged phrase list needs its own
+resident copy of the model; `asr.variants.max` is the budget for those, and a request
+that cannot have one is served by the base instance with a `hotwords_unavailable`
+warning. The pool evicts variants before base instances. A handful of stable dictionaries
+is what the design is for — not a list that varies per request.
+
+Dictionaries can be created and curated on a server where biasing is switched off; they
+are simply not applied, and the policy in the listing says so.
 
 The web UI manages all of this on its **Dictionaries** screen: search across phrases,
-create and edit, upload and download, and a list of which installed models the
-dictionaries can actually be applied to.
+create and edit, upload and download, a mark on the ones applied to every request, and a
+list of which installed models the dictionaries can actually be applied to.
 
 ### Which models dictionaries work with
 
@@ -1106,6 +1225,15 @@ curl -s -H "Authorization: Bearer $KEY" \
   -X POST http://localhost:8080/api/v1/transcribe \
   -F file=@call.wav \
   | jq '{text, rtf: .stats.rtf, stages: .stats.stages_ms, words: .segments[0].words[:3]}'
+```
+
+**Recognition biased towards a stored dictionary**
+
+```bash
+curl -s -H "Authorization: Bearer $KEY" \
+  -X POST http://localhost:8080/api/v1/transcribe \
+  -F file=@call.wav -F hotwords_dict=medical-terms,staff-names \
+  | jq '{text, warnings}'
 ```
 
 **Diarization with a known speaker count**
