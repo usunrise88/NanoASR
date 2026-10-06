@@ -62,6 +62,11 @@ type HotwordPolicy struct {
 	MaxVariants int `json:"max_variants"`
 	// MaxPhrases bounds one dictionary.
 	MaxPhrases int `json:"max_phrases"`
+	// Defaults are the keys applied to every request on a model that can be
+	// biased, named by postproc.hotwords.default_dictionaries. Reported so a
+	// management screen can mark them: a dictionary that is already on every
+	// request reads very differently from one nobody has asked for yet.
+	Defaults []string `json:"default_dictionaries,omitempty"`
 }
 
 // Dictionaries stores hotword dictionaries.

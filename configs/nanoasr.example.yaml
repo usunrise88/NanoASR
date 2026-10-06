@@ -186,6 +186,11 @@ postproc:
     # Bound on one stored dictionary. Accuracy gives out long before this
     # does: the longer a bias list, the more often it fires in the wrong place.
     max_phrases: 5000
+    # Dictionaries applied to every request, ahead of whatever the request
+    # itself names, on every model that can be biased. Models that cannot are
+    # skipped without a warning: this is the server's setting, not the
+    # caller's. Keys are the ones on the Dictionaries screen.
+    default_dictionaries: []
 
 diarization:
   enabled: false

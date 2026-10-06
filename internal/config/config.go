@@ -301,6 +301,16 @@ type PostProc struct {
 type HotwordsPolicy struct {
 	Enabled      bool    `yaml:"enabled"`
 	DefaultScore float32 `yaml:"default_score"`
+	// DefaultDictionaries are applied to every request, ahead of whatever the
+	// request itself named, on every model that can be biased.
+	//
+	// It exists because a deployment's vocabulary is a property of the
+	// deployment: a clinic transcribing its own consultations wants its drug
+	// names on every call, and teaching every client to send a parameter is a
+	// worse place to keep that fact than one line here. Models that cannot be
+	// biased are skipped silently — a server-wide setting must not put a
+	// warning on every request to a model it was never meant for.
+	DefaultDictionaries []string `yaml:"default_dictionaries"`
 	// MaxPhrases bounds one stored dictionary. Accuracy gives out long before
 	// this does — the longer a bias list, the more often it fires in the wrong
 	// place — so it guards against a runaway import rather than describing a

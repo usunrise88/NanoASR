@@ -137,6 +137,7 @@ function HotwordsPage() {
               key={d.key}
               dictionary={d}
               canAdminister={canAdminister}
+              standing={(policy?.default_dictionaries ?? []).includes(d.key)}
               onEdit={() => setEditing(d.key)}
             />
           ))}
@@ -226,10 +227,14 @@ function SupportedModels({ models }: { models: ModelInfo[] }) {
 function DictionaryCard({
   dictionary,
   canAdminister,
+  standing,
   onEdit,
 }: {
   dictionary: Dictionary
   canAdminister: boolean
+  // Named by postproc.hotwords.default_dictionaries, so it is already on every
+  // request. Worth saying on the card: it changes what deleting it means.
+  standing: boolean
   onEdit: () => void
 }) {
   const t = useT()
@@ -251,6 +256,7 @@ function DictionaryCard({
           <span className="text-[13px] font-medium">{dictionary.name || dictionary.key}</span>
           <Badge>{dictionary.key}</Badge>
           <Badge>{t('hotwords.phrases', { count: dictionary.phrase_count })}</Badge>
+          {standing && <Badge tone="accent">{t('hotwords.standing')}</Badge>}
           {dictionary.score !== undefined && dictionary.score > 0 && (
             <Badge>{t('hotwords.scoreIs', { score: dictionary.score })}</Badge>
           )}
@@ -329,7 +335,7 @@ function DictionaryCard({
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title={t('hotwords.confirmDelete')}
-        description={t('hotwords.confirmDeleteBody')}
+        description={standing ? t('hotwords.confirmDeleteStanding') : t('hotwords.confirmDeleteBody')}
         footer={
           <>
             <Button onClick={() => setConfirmDelete(false)}>{t('common.cancel')}</Button>

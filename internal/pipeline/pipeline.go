@@ -45,6 +45,10 @@ type Options struct {
 	// there has to be a default.
 	HotwordsEnabled      bool
 	HotwordsDefaultScore float32
+	// HotwordDictionaries are applied to every request, ahead of whatever the
+	// request named, on models that can be biased. A deployment with a house
+	// vocabulary should not have to teach every client about it.
+	HotwordDictionaries []string
 
 	BatchMaxSize    int
 	BatchMaxSeconds int

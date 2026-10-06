@@ -212,6 +212,7 @@ func serve(ctx context.Context, args []string) (rerr error) {
 	}
 	srv.preload(ctx, cfg.ASR.DefaultModel, log)
 	go srv.preloadDiarizer(ctx, log)
+	srv.checkDefaultDictionaries(ctx, cfg.PostProc.Hotwords.DefaultDictionaries, log)
 
 	if err := srv.resume(ctx, log); err != nil {
 		return err
@@ -268,6 +269,7 @@ func serve(ctx context.Context, args []string) (rerr error) {
 			DefaultScore: cfg.PostProc.Hotwords.DefaultScore,
 			MaxVariants:  cfg.ASR.Variants.Max,
 			MaxPhrases:   cfg.PostProc.Hotwords.MaxPhrases,
+			Defaults:     cfg.PostProc.Hotwords.DefaultDictionaries,
 		},
 		MaxUploadBytes: cfg.Server.MaxUploadBytes,
 		ConfigSnapshot: snapshot,

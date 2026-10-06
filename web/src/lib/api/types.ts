@@ -169,6 +169,8 @@ export interface HotwordPolicy {
   default_score: number
   max_variants: number
   max_phrases: number
+  /** Keys applied to every request, from postproc.hotwords.default_dictionaries. */
+  default_dictionaries?: string[]
 }
 
 export interface DictionaryPage {

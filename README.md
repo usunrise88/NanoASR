@@ -886,6 +886,25 @@ packing a vocabulary into `prompt` on every call.
 The score comes from the first dictionary that states one, unless the request sends
 `hotwords_score`, and falls back to `postproc.hotwords.default_score`.
 
+A deployment's own vocabulary need not be sent at all. Dictionaries named in the
+configuration apply to every request, ahead of whatever the request itself named:
+
+```yaml
+postproc:
+  hotwords:
+    enabled: true
+    default_dictionaries: [medical-terms, staff-names]
+```
+
+What a caller names is added to those rather than replacing them, and the caller's own
+dictionary decides the score when neither the request nor anything else does. Models
+that cannot be biased are skipped in silence — this is the server's setting, not the
+caller's, and a warning on every request to a CTC model would be noise nobody can act
+on. A configured dictionary that has been deleted is reported as a
+`hotwords_dict_missing` warning and the rest are still applied, because an operator
+removing a dictionary should not take every request on the server down with it; the
+server also says at startup whether the dictionaries it was configured with exist.
+
 | Method | Path | |
 |---|---|---|
 | `GET` | `/api/v1/hotwords` | List, with `?q=` searching keys, names, descriptions and the phrases themselves. Carries the server's biasing policy. |

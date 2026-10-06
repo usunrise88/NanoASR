@@ -106,7 +106,9 @@
     "actionFailed": "The action failed",
     "confirmDelete": "Delete this dictionary?",
     "confirmDeleteBody": "Requests naming its key will start failing.",
-    "editTitle": "Edit dictionary"
+    "editTitle": "Edit dictionary",
+    "standing": "on every request",
+    "confirmDeleteStanding": "This dictionary is named in the configuration (postproc.hotwords.default_dictionaries) and applies to every request. Deleting it leaves the server warning on every request until the name is removed from the configuration."
   },
   "jobs": {
     "title": "Jobs",

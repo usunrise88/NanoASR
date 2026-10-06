@@ -19,7 +19,9 @@ import (
 // naming the reason. The alternative — failing the request — would turn an
 // optional bias list into a hard dependency on a memory budget.
 func (p *Pipeline) acquire(ctx context.Context, modelID string, req core.Request) (*pool.Lease, []core.Warning, error) {
-	req, dictWarn, err := p.applyDictionaries(ctx, req)
+	req, standing := p.withStandingDictionaries(ctx, modelID, req)
+
+	req, dictWarn, err := p.applyDictionaries(ctx, req, standing)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -62,19 +64,58 @@ func wantsVariant(req core.Request) bool {
 	return len(req.Hotwords) > 0 || req.DecodingMethod != "" || req.MaxActivePaths > 0
 }
 
+// withStandingDictionaries adds the server's own dictionaries to the ones the
+// request named, for a model that can actually use them.
+//
+// The capability check is the whole point of doing this here rather than in the
+// parser. A standing list is configured once for a deployment whose models may
+// not all be biasable — the streaming model behind the realtime dialect never
+// is — and a server-wide setting must not put a warning on every request to a
+// model it was never meant for. A dictionary the caller named is different:
+// that one is answered, because somebody asked for it.
+//
+// They go in front of the request's own keys, so what a caller adds is read as
+// an addition to the house vocabulary rather than a replacement for it.
+//
+// It returns how many keys it put in front, because a configured dictionary
+// that has gone missing is reported while one the caller named is refused, and
+// nothing downstream can otherwise tell the two apart. The count is a return
+// value rather than a field on core.Request: it is the pipeline talking to
+// itself, and a field would be one a dialect could set.
+func (p *Pipeline) withStandingDictionaries(ctx context.Context, modelID string, req core.Request) (core.Request, int) {
+	if len(p.opt.HotwordDictionaries) == 0 {
+		return req, 0
+	}
+	man, err := p.models.Manifest(ctx, modelID)
+	if err != nil {
+		// Not this function's failure to report: the acquire below is about to
+		// fail on the same model with a better message.
+		return req, 0
+	}
+	if ok, _ := asr.HotwordsCapability(man.Family, man.ModelingUnit, man.Files["bpe_vocab"] != ""); !ok {
+		return req, 0
+	}
+	req.HotwordDicts = append(append([]string{}, p.opt.HotwordDictionaries...), req.HotwordDicts...)
+	return req, len(p.opt.HotwordDictionaries)
+}
+
 // applyDictionaries turns the dictionary keys a request named into phrases on
 // the request itself, so everything downstream sees one list and does not have
 // to know where it came from.
 //
-// A key that names nothing is a client error rather than a warning. The
-// alternative — transcribing without the bias and mentioning it in passing —
-// hides a typo in a parameter behind a result that looks fine, and the usual
-// case for naming a dictionary is that somebody depends on it being applied.
+// A key the caller named and that names nothing is a client error rather than a
+// warning. The alternative — transcribing without the bias and mentioning it in
+// passing — hides a typo in a parameter behind a result that looks fine, and
+// the usual case for naming a dictionary is that somebody depends on it being
+// applied. A key from the configuration is the other way round: it is not this
+// caller's mistake, and failing every request on the server because an operator
+// deleted a dictionary would be a poor trade for a bias nobody asked for. That
+// one is reported and skipped.
 //
 // The phrases are read now, not when the job was queued: a dictionary edited
 // while a job waits is applied as it stands when the job runs, which is the
 // behaviour somebody fixing a wrong phrase expects.
-func (p *Pipeline) applyDictionaries(ctx context.Context, req core.Request) (core.Request, []core.Warning, error) {
+func (p *Pipeline) applyDictionaries(ctx context.Context, req core.Request, standingCount int) (core.Request, []core.Warning, error) {
 	if len(req.HotwordDicts) == 0 {
 		return req, nil, nil
 	}
@@ -86,38 +127,58 @@ func (p *Pipeline) applyDictionaries(ctx context.Context, req core.Request) (cor
 		}}, nil
 	}
 
+	var warn []core.Warning
 	seen := map[string]bool{}
-	dicts := make([]core.Dictionary, 0, len(req.HotwordDicts))
-	for _, key := range req.HotwordDicts {
+	// Two lists rather than one: a dictionary the caller named outranks a
+	// standing one when the score is being decided, however the phrases are
+	// ordered.
+	var standing, asked []core.Dictionary
+
+	for i, key := range req.HotwordDicts {
+		fromConfig := i < standingCount
 		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
+
 		d, err := p.dictionaries.Get(ctx, key)
 		if err != nil {
-			if core.AsError(err).Code == core.CodeDictionaryNotFound {
-				return req, nil, core.Errorf(core.CodeInvalidRequest,
-					"no hotword dictionary with the key %q", key).WithParam("hotwords_dict")
+			if core.AsError(err).Code != core.CodeDictionaryNotFound {
+				return req, nil, err
 			}
-			return req, nil, err
+			if fromConfig {
+				warn = append(warn, core.Warning{
+					Code: "hotwords_dict_missing",
+					Message: "the configured dictionary " + key + " no longer exists " +
+						"(postproc.hotwords.default_dictionaries); the rest were applied",
+				})
+				continue
+			}
+			return req, nil, core.Errorf(core.CodeInvalidRequest,
+				"no hotword dictionary with the key %q", key).WithParam("hotwords_dict")
 		}
-		dicts = append(dicts, d)
+		if fromConfig {
+			standing = append(standing, d)
+		} else {
+			asked = append(asked, d)
+		}
 	}
 
-	req.Hotwords = hotwords.Merge(dicts, req.Hotwords)
+	req.Hotwords = hotwords.Merge(append(standing, asked...), req.Hotwords)
 	// A dictionary carries the strength its author chose; an explicit score on
-	// the request outranks it. With several dictionaries and no score on the
-	// request, the first one that states a preference wins — picking the
-	// largest would let one aggressive list speak for the rest.
+	// the request outranks it, and a dictionary the caller named outranks one
+	// the configuration supplied. With several at the same rank the first one
+	// that states a preference wins — picking the largest would let one
+	// aggressive list speak for the rest.
 	if req.HotwordsScore == 0 {
-		for _, d := range dicts {
+		for _, d := range append(asked, standing...) {
 			if d.Score > 0 {
 				req.HotwordsScore = d.Score
 				break
 			}
 		}
 	}
-	return req, nil, nil
+	return req, warn, nil
 }
 
 // buildVariant turns request options into a recogniser variant, dropping the

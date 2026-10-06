@@ -213,3 +213,37 @@ func TestUnknownConfigKeyIsAStartupFailure(t *testing.T) {
 		t.Fatal("an unknown configuration key was accepted")
 	}
 }
+
+// A standing dictionary is named in the configuration and resolved against the
+// store at startup. What the configuration can check on its own is that the key
+// is one a dictionary could have.
+func TestDefaultDictionariesAreCheckedAndCanonicalised(t *testing.T) {
+	cfg := Default()
+	// The default is apikey with no keys, which is its own validation failure
+	// and not the one under test here.
+	cfg.Auth.Mode = "open"
+	cfg.Server.Addr = "127.0.0.1:8080"
+	cfg.ASR.Variants.Max = 1
+	cfg.PostProc.Hotwords.Enabled = true
+	cfg.PostProc.Hotwords.DefaultDictionaries = []string{" Medical-Terms "}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.PostProc.Hotwords.DefaultDictionaries[0]; got != "medical-terms" {
+		t.Errorf("key = %q, want it folded to the form a request would send", got)
+	}
+
+	cfg.PostProc.Hotwords.DefaultDictionaries = []string{"two words"}
+	if err := cfg.Validate(); err == nil {
+		t.Error("a key no dictionary could have was accepted")
+	}
+
+	// Naming dictionaries while the feature is off is the configuration that
+	// looks set up and does nothing.
+	cfg.PostProc.Hotwords.DefaultDictionaries = []string{"medical-terms"}
+	cfg.PostProc.Hotwords.Enabled = false
+	if err := cfg.Validate(); err == nil {
+		t.Error("default dictionaries were accepted with hotwords switched off")
+	}
+}

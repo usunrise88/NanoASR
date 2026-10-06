@@ -438,3 +438,126 @@ func TestDictionariesWithoutAStoreAreReported(t *testing.T) {
 		t.Errorf("message %q should name the dictionary", w.Message)
 	}
 }
+
+// A deployment's own vocabulary belongs to the deployment: configured once,
+// applied to every request, without every client having to learn about it.
+func TestStandingDictionariesApplyToEveryRequest(t *testing.T) {
+	h := newVariantHarness(t, biasableRegistry{}, variantOptions{
+		Options: Options{
+			HotwordsEnabled:      true,
+			HotwordsDefaultScore: 1.5,
+			HotwordDictionaries:  []string{"house"},
+		},
+		maxVariants: 1,
+	})
+	h.pipeline.WithDictionaries(&fakeDictionaries{byKey: map[string]core.Dictionary{
+		"house": {Key: "house", Score: 1.7, Phrases: []string{"ромашка"}},
+	}})
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{Audio: &fakeSource{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Warnings) > 0 && hasWarning(got.Warnings, "hotwords_unavailable") {
+		t.Errorf("warnings %+v say the standing dictionary was dropped", got.Warnings)
+	}
+	if len(h.loaded) != 1 {
+		t.Fatalf("loaded %d recognisers, want 1", len(h.loaded))
+	}
+	if v := h.loaded[0]; v.Hotwords != "ромашка" || v.HotwordsScore != 1.7 {
+		t.Errorf("variant = %+v, want the configured dictionary applied with its own score", v)
+	}
+}
+
+// What the caller adds is an addition to the house vocabulary, not a
+// replacement for it — and the caller's own dictionary decides the score,
+// because it is the more specific of the two.
+func TestARequestAddsToTheStandingDictionaries(t *testing.T) {
+	h := newVariantHarness(t, biasableRegistry{}, variantOptions{
+		Options: Options{
+			HotwordsEnabled:     true,
+			HotwordDictionaries: []string{"house"},
+		},
+		maxVariants: 1,
+	})
+	h.pipeline.WithDictionaries(&fakeDictionaries{byKey: map[string]core.Dictionary{
+		"house": {Key: "house", Score: 1.7, Phrases: []string{"ромашка"}},
+		"mine":  {Key: "mine", Score: 2.0, Phrases: []string{"василёк"}},
+	}})
+
+	if _, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio: &fakeSource{}, HotwordDicts: []string{"mine"}, Hotwords: []string{"лютик"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v := h.loaded[0]
+	if v.Hotwords != "ромашка\nвасилёк\nлютик" {
+		t.Errorf("variant hotwords = %q, want the standing list first", v.Hotwords)
+	}
+	if v.HotwordsScore != 2.0 {
+		t.Errorf("HotwordsScore = %v, want the request's own dictionary to decide", v.HotwordsScore)
+	}
+}
+
+// A server-wide setting must not put a warning on every request to a model it
+// was never meant for. The streaming model behind the realtime dialect is never
+// biasable, and neither is every CTC model in the catalog.
+func TestStandingDictionariesAreSkippedOnAModelThatCannotBeBiased(t *testing.T) {
+	h := newVariantHarness(t, fakeRegistry{}, variantOptions{
+		Options: Options{
+			HotwordsEnabled:     true,
+			HotwordDictionaries: []string{"house"},
+		},
+		maxVariants: 1,
+	})
+	dicts := &fakeDictionaries{byKey: map[string]core.Dictionary{
+		"house": {Key: "house", Phrases: []string{"ромашка"}},
+	}}
+	h.pipeline.WithDictionaries(dicts)
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{Audio: &fakeSource{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Warnings) != 0 {
+		t.Errorf("warnings %+v, want none: nobody asked for a bias on this model", got.Warnings)
+	}
+	if len(dicts.asked) != 0 {
+		t.Errorf("the store was read for %v on a model that cannot be biased", dicts.asked)
+	}
+	if len(h.loaded) != 1 || !h.loaded[0].Zero() {
+		t.Errorf("loaded %+v, want the base instance", h.loaded)
+	}
+}
+
+// Deleting a dictionary that the configuration still names must not take every
+// request on the server down with it. The caller's own key is the opposite case
+// and is still refused, which TestAnUnknownDictionaryIsRefused covers.
+func TestADeletedStandingDictionaryIsReportedNotFatal(t *testing.T) {
+	h := newVariantHarness(t, biasableRegistry{}, variantOptions{
+		Options: Options{
+			HotwordsEnabled:     true,
+			HotwordDictionaries: []string{"gone", "house"},
+		},
+		maxVariants: 1,
+	})
+	h.pipeline.WithDictionaries(&fakeDictionaries{byKey: map[string]core.Dictionary{
+		"house": {Key: "house", Phrases: []string{"ромашка"}},
+	}})
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{Audio: &fakeSource{}})
+	if err != nil {
+		t.Fatalf("a deleted standing dictionary failed the request: %v", err)
+	}
+	w, ok := findWarning(got.Warnings, "hotwords_dict_missing")
+	if !ok {
+		t.Fatalf("warnings %+v should name the dictionary that is gone", got.Warnings)
+	}
+	if !strings.Contains(w.Message, "gone") || !strings.Contains(w.Message, "default_dictionaries") {
+		t.Errorf("message %q should name the key and the setting", w.Message)
+	}
+	// The ones that are still there are still applied.
+	if v := h.loaded[0]; v.Hotwords != "ромашка" {
+		t.Errorf("variant hotwords = %q, want the surviving dictionary", v.Hotwords)
+	}
+}
