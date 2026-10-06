@@ -425,8 +425,15 @@ function DictionaryEditor({ editKey, onClose }: { editKey?: string; onClose: () 
       footer={
         <>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
+          {/* Saving before the dictionary has loaded would PUT an empty key,
+              which matches no route and comes back as an opaque 404. */}
           {!readOnly && (
-            <Button variant="primary" busy={busy} onClick={save}>
+            <Button
+              variant="primary"
+              busy={busy}
+              disabled={editKey !== undefined && existing.isLoading}
+              onClick={save}
+            >
               {t('common.save')}
             </Button>
           )}
@@ -505,12 +512,23 @@ function DictionaryEditor({ editKey, onClose }: { editKey?: string; onClose: () 
   )
 }
 
-/** Hands the browser a file without a round trip through the server. */
+/**
+ * Hands the browser a file without a round trip through the server.
+ *
+ * The anchor goes into the document and the object URL is revoked on a later
+ * tick: a detached <a download> does nothing in Firefox, and revoking in the
+ * same statement as the click cancels the download before it starts.
+ */
 function downloadText(filename: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }))
   const a = document.createElement('a')
   a.href = url
   a.download = filename
+  a.style.display = 'none'
+  document.body.append(a)
   a.click()
-  URL.revokeObjectURL(url)
+  setTimeout(() => {
+    a.remove()
+    URL.revokeObjectURL(url)
+  }, 0)
 }

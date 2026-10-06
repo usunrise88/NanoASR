@@ -281,3 +281,58 @@ func sum(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
+
+// A catalog revision may add a file role whose file ships inside a newer
+// archive and has no source.extra to fetch it with. Writing that name into the
+// manifest of an older installation would turn a working model into one that
+// cannot load — persistently, because the manifest is on disk.
+func TestCompleteDoesNotPointTheManifestAtAFileThatIsNotThere(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+
+	m := manifestWithExtra("https://example.test/bpe.model", sum([]byte("x")), 1)
+	m.Files = map[string]string{"model": "model.onnx", "tokens": "tokens.txt"}
+
+	dir := filepath.Join(root, m.Key())
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"model.onnx", "tokens.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installed := m
+	installed.Source.Extra = nil
+	if err := writeManifest(filepath.Join(dir, ManifestFile), installed); err != nil {
+		t.Fatal(err)
+	}
+
+	// The catalog today: the vocabulary, which is fetched, and a second file
+	// that is only inside a newer archive.
+	current := m
+	current.Files = map[string]string{
+		"model": "model.onnx", "tokens": "tokens.txt",
+		"bpe_vocab": "bpe.model", "lm": "lm.onnx",
+	}
+
+	r := remoteOver(t, root, newFakeDownloader(), current)
+	added, err := r.Complete(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 1 || added[0] != "bpe.model" {
+		t.Fatalf("added = %v, want only the file that was fetched", added)
+	}
+
+	back, err := ReadManifest(filepath.Join(dir, ManifestFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Files["lm"] != "" {
+		t.Errorf("manifest points at %q, which was never downloaded", back.Files["lm"])
+	}
+	if back.Files["bpe_vocab"] != "bpe.model" {
+		t.Errorf("manifest files = %v, want the fetched file wired", back.Files)
+	}
+}

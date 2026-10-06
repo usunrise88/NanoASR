@@ -1030,12 +1030,20 @@ Failures are problem+json like the rest of the dialect:
 An uploaded file is read in whichever of four shapes it arrives, decided by its contents
 rather than by its name:
 
-- one phrase per line, `#` starting a comment — the shape the text export writes;
-- a one-column CSV, its header dropped when it is `phrase`, `word`, `term` or `text`;
-- a comma-separated list, which is the same parser;
+- one phrase per line, with a line that starts with `#` taken as a comment — the shape
+  the text export writes. A `#` anywhere else is part of the phrase, so `C#` and
+  `SKU#4711` survive;
+- a one-column CSV, whose first line is dropped when it is `phrase`, `word`, `term` or
+  `text` — only the first line of the file, so a dictionary whose first phrase is the
+  word "text" keeps it;
+- a single line, which is also split on commas: that is what a list pasted out of a
+  spreadsheet cell looks like. A file of several lines is not split, because a phrase
+  there may contain a comma — `Иванов, Иван` is one entry;
 - JSON: an array of phrases, or a whole dictionary as `GET` returns it.
 
-So an export imports back unchanged, in either format:
+So an export imports back unchanged, in either format — the one corner is a phrase
+that itself begins with `#`, which the text form reads as a comment and the JSON form
+keeps:
 
 ```bash
 curl -s "http://127.0.0.1:8080/api/v1/hotwords/medical-terms?response_format=text" \

@@ -19,7 +19,17 @@ import (
 // naming the reason. The alternative — failing the request — would turn an
 // optional bias list into a hard dependency on a memory budget.
 func (p *Pipeline) acquire(ctx context.Context, modelID string, req core.Request) (*pool.Lease, []core.Warning, error) {
-	req, standing := p.withStandingDictionaries(ctx, modelID, req)
+	// The manifest decides whether a request is even expressible, and it is
+	// readable without loading anything. Read once: the standing dictionaries
+	// need it to know whether this model can use them, and the variant needs
+	// it a few lines later for the same reasons.
+	//
+	// A failure is not reported here. Acquire below fails on the same model
+	// with a better message, and a request that named no dictionary and wanted
+	// no variant should not start failing because a manifest lookup moved.
+	man, manErr := p.models.Manifest(ctx, modelID)
+
+	req, standing := p.withStandingDictionaries(man, manErr, req)
 
 	req, dictWarn, err := p.applyDictionaries(ctx, req, standing)
 	if err != nil {
@@ -30,12 +40,8 @@ func (p *Pipeline) acquire(ctx context.Context, modelID string, req core.Request
 		lease, err := p.models.Acquire(ctx, modelID)
 		return lease, dictWarn, err
 	}
-
-	// The manifest decides whether the request is even expressible, and it is
-	// readable without loading anything.
-	man, err := p.models.Manifest(ctx, modelID)
-	if err != nil {
-		return nil, nil, err
+	if manErr != nil {
+		return nil, nil, manErr
 	}
 
 	v, warn := p.buildVariant(req, man)
@@ -65,7 +71,8 @@ func wantsVariant(req core.Request) bool {
 }
 
 // withStandingDictionaries adds the server's own dictionaries to the ones the
-// request named, for a model that can actually use them.
+// request named, for a model that can actually use them. It takes the manifest
+// its caller already read rather than reading it again.
 //
 // The capability check is the whole point of doing this here rather than in the
 // parser. A standing list is configured once for a deployment whose models may
@@ -82,14 +89,8 @@ func wantsVariant(req core.Request) bool {
 // nothing downstream can otherwise tell the two apart. The count is a return
 // value rather than a field on core.Request: it is the pipeline talking to
 // itself, and a field would be one a dialect could set.
-func (p *Pipeline) withStandingDictionaries(ctx context.Context, modelID string, req core.Request) (core.Request, int) {
-	if len(p.opt.HotwordDictionaries) == 0 {
-		return req, 0
-	}
-	man, err := p.models.Manifest(ctx, modelID)
-	if err != nil {
-		// Not this function's failure to report: the acquire below is about to
-		// fail on the same model with a better message.
+func (p *Pipeline) withStandingDictionaries(man registry.Manifest, manErr error, req core.Request) (core.Request, int) {
+	if len(p.opt.HotwordDictionaries) == 0 || manErr != nil {
 		return req, 0
 	}
 	if ok, _ := asr.HotwordsCapability(man.Family, man.ModelingUnit, man.Files["bpe_vocab"] != ""); !ok {
@@ -235,15 +236,16 @@ func (p *Pipeline) buildVariant(req core.Request, man registry.Manifest) (asr.Va
 	// one that can serve it, and is told. A caller who did name greedy_search
 	// is left alone: they asked for something that cannot carry a bias, and
 	// the refusal below says so rather than overriding them.
-	if method != asr.ModifiedBeamSearch && req.DecodingMethod == "" &&
-		asr.DecodingSupport(man.Family, asr.ModifiedBeamSearch) == nil {
+	//
+	// It is decided here and applied after the support check, because a
+	// promotion for a bias that is then dropped is worse than no promotion: it
+	// loads a second resident copy of the model to run a slower search for
+	// nothing, and tells the caller both that the method changed and that the
+	// words were ignored.
+	promote := method != asr.ModifiedBeamSearch && req.DecodingMethod == "" &&
+		asr.DecodingSupport(man.Family, asr.ModifiedBeamSearch) == nil
+	if promote {
 		method = asr.ModifiedBeamSearch
-		v.DecodingMethod = method
-		warn = append(warn, core.Warning{
-			Code: "decoding_method_promoted",
-			Message: "hotwords apply during beam search, so this request decoded with " +
-				"modified_beam_search instead of the model's configured greedy_search",
-		})
 	}
 
 	hasVocab := man.Files["bpe_vocab"] != ""
@@ -254,6 +256,15 @@ func (p *Pipeline) buildVariant(req core.Request, man registry.Manifest) (asr.Va
 		return v, append(warn, core.Warning{
 			Code:    "hotwords_unavailable",
 			Message: core.AsError(err).Message + "; the words were ignored",
+		})
+	}
+
+	if promote {
+		v.DecodingMethod = method
+		warn = append(warn, core.Warning{
+			Code: "decoding_method_promoted",
+			Message: "hotwords apply during beam search, so this request decoded with " +
+				"modified_beam_search instead of the model's configured greedy_search",
 		})
 	}
 

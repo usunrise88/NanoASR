@@ -55,11 +55,21 @@ func (r *Remote) Complete(ctx context.Context, id string) ([]string, error) {
 	// Roles the catalog knows about and the installed manifest does not: the
 	// file may already be on disk, put there by hand, and still be invisible
 	// because nothing points at it.
+	//
+	// Only when the file is actually there, or will be in a moment. A future
+	// entry may name a file that ships inside a newer archive and has no
+	// source.extra to fetch it with, and writing that name into the manifest
+	// of an older installation would turn a working model into one that cannot
+	// load — persistently, because the manifest is on disk.
 	added := map[string]string{}
 	for role, name := range catalog.Files {
-		if local.Files[role] == "" {
-			added[role] = name
+		if local.Files[role] != "" {
+			continue
 		}
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil && !willFetch(missing, name) {
+			continue
+		}
+		added[role] = name
 	}
 	if len(missing) == 0 && len(added) == 0 {
 		return nil, nil
@@ -122,6 +132,16 @@ func (r *Remote) Complete(ctx context.Context, id string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// willFetch reports whether this run is about to download the named file.
+func willFetch(missing []ExtraFile, name string) bool {
+	for _, e := range missing {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func names(extras []ExtraFile) string {
