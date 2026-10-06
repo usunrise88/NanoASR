@@ -102,6 +102,22 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 		// Measured on GigaAM v3 RNNT with its own SentencePiece vocabulary in
 		// place, which answered "this model does not ship one".
 		if vocab := m.OptionalFilePath(dir, "bpe_vocab"); vocab != "" {
+			// What is on disk is usually a binary sentencepiece model, and
+			// sherpa-onnx reads only the text form. Handed the other one it
+			// calls exit(), so the file is rendered here and a file in
+			// neither format fails the load instead of the process.
+			text, converted, err := asr.BPEVocabulary(vocab)
+			if err != nil {
+				return nil, err
+			}
+			if converted {
+				path, cleanup, err := writeTemp("nanoasr-bpe-*.vocab", text)
+				if err != nil {
+					return nil, err
+				}
+				defer cleanup()
+				vocab = path
+			}
 			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
 			cfg.ModelConfig.BpeVocab = vocab
 		} else if v.Hotwords != "" && m.ModelingUnit == asr.UnitCJKChar {
@@ -244,15 +260,23 @@ func boolToInt(b bool) int {
 
 // writeHotwords materialises a bias list for sherpa-onnx to read during
 // construction, and returns the cleanup that removes it again.
+func writeHotwords(buf string) (path string, cleanup func(), err error) {
+	return writeTemp("nanoasr-hotwords-*.txt", buf+"\n")
+}
+
+// writeTemp puts contents somewhere sherpa-onnx can read it at construction
+// time, and returns the cleanup that removes it again.
 //
 // 0600 in the process's temp directory: a hotword list is the caller's
 // vocabulary — names, account numbers, product codes — and there is no reason
-// for it to be world-readable even for the moment it exists.
-func writeHotwords(buf string) (path string, cleanup func(), err error) {
-	f, err := os.CreateTemp("", "nanoasr-hotwords-*.txt")
+// for it to be world-readable even for the moment it exists. The subword
+// vocabulary beside it is not a secret, but it is written the same way rather
+// than inventing a second set of rules for the same temp directory.
+func writeTemp(pattern, contents string) (path string, cleanup func(), err error) {
+	f, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return "", func() {}, core.Errorf(core.CodeInternal,
-			"cannot write the hotwords file").WithCause(err)
+			"cannot write %s", pattern).WithCause(err)
 	}
 	name := f.Name()
 	cleanup = func() { _ = os.Remove(name) }
@@ -261,18 +285,18 @@ func writeHotwords(buf string) (path string, cleanup func(), err error) {
 		f.Close()
 		cleanup()
 		return "", func() {}, core.Errorf(core.CodeInternal,
-			"cannot secure the hotwords file").WithCause(err)
+			"cannot secure %s", name).WithCause(err)
 	}
-	if _, err := f.WriteString(buf + "\n"); err != nil {
+	if _, err := f.WriteString(contents); err != nil {
 		f.Close()
 		cleanup()
 		return "", func() {}, core.Errorf(core.CodeInternal,
-			"cannot write the hotwords file").WithCause(err)
+			"cannot write %s", name).WithCause(err)
 	}
 	if err := f.Close(); err != nil {
 		cleanup()
 		return "", func() {}, core.Errorf(core.CodeInternal,
-			"cannot close the hotwords file").WithCause(err)
+			"cannot close %s", name).WithCause(err)
 	}
 	return name, cleanup, nil
 }
