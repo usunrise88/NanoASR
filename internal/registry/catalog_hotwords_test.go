@@ -19,7 +19,7 @@ func TestWhichCatalogModelsCanBeBiased(t *testing.T) {
 	want := map[string]bool{
 		"gigaam-v2-ctc-ru":             false, // CTC: nothing to bias during
 		"gigaam-v3-ctc-punct-ru":       false, // CTC
-		"gigaam-v3-rnnt-punct-ru":      false, // transducer, subwords, no vocabulary file
+		"gigaam-v3-rnnt-punct-ru":      true,  // transducer, subwords, vocabulary fetched beside the archive
 		"gigaam-v2-rnnt-ru":            false, // transducer, but a character vocabulary
 		"t-one-ctc-ru":                 false, // streaming CTC
 		"streaming-zipformer-small-ru": false, // streaming: biased at load, not per request

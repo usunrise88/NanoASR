@@ -113,6 +113,10 @@ models:
       decoder: decoder.onnx
       joiner: joiner.onnx
       tokens: tokens.txt
+      # GigaAM's own SentencePiece vocabulary, fetched beside the archive — see
+      # source.extra below. It is what makes this the one catalog entry hotword
+      # dictionaries can be applied to.
+      bpe_vocab: bpe.model
     features:
       sample_rate: 16000
       dim: 64
@@ -124,6 +128,20 @@ models:
       url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16.tar.bz2
       sha256: f9620a0099019c6afcee26525ef9ed3297fa50dd5691c1902af0c948fc1a470b
       size_bytes: 170197019
+      # The archive carries tokens.txt but not the tokenizer it was generated
+      # from, and sherpa-onnx needs the tokenizer to turn a hotword into the
+      # token ids the decoder emits. It is published by GigaAM rather than by
+      # the exporter, so it is fetched from there: 250 KB against the archive's
+      # 162 MB, under the same MIT licence as the weights.
+      #
+      # Checked: the 1024 pieces it holds match tokens.txt id for id, and its
+      # md5 is the one recorded in sherpa-onnx's own export script
+      # (scripts/nemo/GigaAM/export-onnx-rnnt-v3-punct.py).
+      extra:
+        - name: bpe.model
+          url: https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt_tokenizer.model
+          sha256: 828c12c991019eef952a960661f25a92d6ad279591e2ea466b4aeddf1d20a18a
+          size_bytes: 255336
     license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
     commercial_use: unknown
     notes: >-

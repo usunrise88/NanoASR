@@ -1066,34 +1066,51 @@ list of which installed models the dictionaries can actually be applied to.
 
 | Model | Hotwords | Why |
 |---|---|---|
+| `gigaam-v3-rnnt-punct-ru` | **yes** | transducer, subwords, and its SentencePiece vocabulary is fetched with the model |
 | `gigaam-v2-ctc-ru` | no | CTC: there is no beam to bias |
 | `gigaam-v3-ctc-punct-ru` | no | CTC |
-| `gigaam-v3-rnnt-punct-ru` | no | transducer with subwords, but the archive ships no vocabulary file |
 | `gigaam-v2-rnnt-ru` | no | transducer with a character vocabulary, which sherpa-onnx cannot tokenise hotwords for |
 | `t-one-ctc-ru` | no | streaming CTC |
 | `streaming-zipformer-small-ru` | no | streaming: a recogniser is biased when it is built, not per request |
-| `zipformer-small-en` | no | transducer with subwords, no vocabulary file |
+| `zipformer-small-en` | no | transducer with subwords, and no vocabulary file is published for it |
 
-So: nothing in the built-in catalog today. The gap is one file, not a missing feature —
-`gigaam-v3-rnnt-punct-ru` becomes biasable the moment its SentencePiece vocabulary sits
-beside the weights:
+`gigaam-v3-rnnt-punct-ru` is the entry to use for biasing, and it is also the Russian
+model with the best vocabulary — 1024 subwords, punctuation and capitals of its own, and
+per-word confidence.
+
+The vocabulary is a second download of 250 KB beside the 162 MB archive, because the
+people who package the weights and the people who publish the tokenizer are not the same
+ones: sherpa-onnx exports the model, and GigaAM publishes
+`v3_e2e_rnnt_tokenizer.model`, which is what turns a hotword into the token ids the
+decoder actually emits. The catalog names it, pins its sha256 and installs it into the
+model directory as `bpe.model`. Both hosts must be reachable:
+`github.com` (`objects.githubusercontent.com`) and
+`cdn.chatwm.opensmodel.sberdevices.ru`.
+
+**A model installed by an earlier version** has the weights and not the vocabulary, and
+nothing re-downloads 162 MB to add 250 KB. One command completes it:
 
 ```bash
-curl -LO https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt_tokenizer.model
-cp v3_e2e_rnnt_tokenizer.model .models/gigaam-v3-rnnt-punct-ru@2025-12-16/bpe.model
-# then add  bpe_vocab: bpe.model  under files: in that directory's model.yaml
+nanoasr models pull gigaam-v3-rnnt-punct-ru
+#   gigaam-v3-rnnt-punct-ru  /var/lib/nanoasr/models/gigaam-v3-rnnt-punct-ru@2025-12-16
+#                            + bpe.model
 ```
 
-Both forms are accepted: the binary SentencePiece model as downloaded, or a text
-`<piece> <score>` vocabulary. sherpa-onnx itself reads only the second and calls `exit()`
-on the first, so NanoASR converts at load time rather than handing it over to find out.
-GigaAM is MIT-licensed, and `nanoasr models inspect <dir>` wires the file into a draft
-manifest for you.
+It is an explicit instruction rather than something the server does to itself at startup:
+reaching the network because a catalog entry changed is a surprise on a machine that was
+working. The manifest beside the weights is edited rather than rewritten, so anything
+added there by hand survives.
 
-Streaming recognition cannot be biased at all, whatever the model: a streaming
-recogniser settles its hotwords when it is constructed, so a per-session list would mean
-a second resident copy of the model for the life of a connection. The realtime dialect
-reports this to clients that send `prompt`.
+Either form of the file works: the binary SentencePiece model as published, or a text
+`<piece> <score>` vocabulary. sherpa-onnx reads only the second and calls `exit()` on the
+first, so NanoASR converts at load time rather than handing it over to find out. A model
+assembled by hand is wired up by `nanoasr models inspect <dir>`, which drafts a manifest
+with the file in it.
+
+Streaming recognition cannot be biased at all, whatever the model: a streaming recogniser
+settles its hotwords when it is constructed, so a per-session list would mean a second
+resident copy of the model for the life of a connection. The realtime dialect reports
+this to clients that send `prompt`.
 
 ## Diarization
 
@@ -1402,6 +1419,26 @@ nanoasr models inspect ./my-model --probe sample.wav
 `models inspect` determines a model's family and vocabulary, extracts metadata from the
 `.onnx` files and produces a draft manifest for adding the model to the registry. The
 `--probe` flag tests each candidate `features.dim` value in a separate process.
+
+A catalog entry may also name files that its archive does not contain, each pinned the
+same way and installed into the model directory beside the weights:
+
+```yaml
+source:
+  url: https://…/model.tar.bz2
+  sha256: …
+  extra:
+    - name: bpe.model
+      url: https://…/v3_e2e_rnnt_tokenizer.model
+      sha256: …
+```
+
+It exists because a model's packager and its publisher are not always the same people —
+`gigaam-v3-rnnt-punct-ru` is the case that needed it. The name has to be a bare file name
+and the checksum is required, so a catalog mirror cannot write outside the model
+directory or hand over bytes nobody pinned. `nanoasr models pull` on a model that is
+already installed fetches the ones it is missing and wires them into the manifest beside
+the weights, which is how an installation from an earlier version catches up.
 
 Models are loaded on demand, evicted by LRU and can be hot-swapped. Concurrent residency
 is bounded by `asr.max_resident_models` and `asr.max_model_rss_mb`.

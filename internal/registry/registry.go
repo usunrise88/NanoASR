@@ -39,4 +39,12 @@ type Registry interface {
 // "..", absolute paths or symlinks; cap total unpacked size and file count.
 type Downloader interface {
 	Download(ctx context.Context, m Manifest, destDir string) (<-chan core.DownloadProgress, error)
+	// FetchExtra downloads one file a manifest names beside its archive,
+	// verifying it the same way, into dest.
+	//
+	// Separate from Download because it serves a model that is already
+	// installed: an entry that gained a file after the weights were fetched is
+	// completed with a quarter of a megabyte rather than with another hundred
+	// and seventy.
+	FetchExtra(ctx context.Context, m Manifest, e ExtraFile, dest string) error
 }
