@@ -83,6 +83,33 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 			BlankPenalty:   m.Runtime.BlankPenalty,
 		}
 
+		// modeling_unit means two different things to two different readers.
+		// Our word assembler always needs it, and gets it from the manifest.
+		// sherpa-onnx only uses it to tokenise hotwords, and refuses to start
+		// when told "bpe" without a vocabulary file to go with it — which is
+		// most transducer releases.
+		//
+		// So it is passed down when the pair is complete, and also when the
+		// unit needs no vocabulary file at all: cjkchar looks each character
+		// up in the tokens file. Nothing in the catalog is in that second
+		// case — the Russian entries are character models or subword models
+		// with no vocabulary beside them.
+		//
+		// This has to run before the hotwords block below, and the order is
+		// the whole of it: the support check reads ModelConfig.BpeVocab, so
+		// while it ran first that field was still empty and every bpe model
+		// was told it had no vocabulary, however complete its manifest was.
+		// Measured on GigaAM v3 RNNT with its own SentencePiece vocabulary in
+		// place, which answered "this model does not ship one".
+		if vocab := m.OptionalFilePath(dir, "bpe_vocab"); vocab != "" {
+			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
+			cfg.ModelConfig.BpeVocab = vocab
+		} else if v.Hotwords != "" && m.ModelingUnit == asr.UnitCJKChar {
+			// cjkchar is the one unit sherpa-onnx can tokenise hotwords in
+			// without a companion vocabulary file.
+			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
+		}
+
 		// Hotwords reach sherpa-onnx as a file. The offline recogniser config
 		// has no in-memory variant — HotwordsBuf exists only on the streaming
 		// struct — so one has to be written.
@@ -108,25 +135,6 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 			defer cleanup()
 			cfg.HotwordsFile = path
 			cfg.HotwordsScore = v.HotwordsScore
-		}
-
-		// modeling_unit means two different things to two different readers.
-		// Our word assembler always needs it, and gets it from the manifest.
-		// sherpa-onnx only uses it to tokenise hotwords, and refuses to start
-		// when told "bpe" without a vocabulary file to go with it — which is
-		// most transducer releases.
-		//
-		// So it is passed down when the pair is complete, and also when the
-		// unit needs no vocabulary file at all: for a character model the
-		// characters are the tokens. That second case is the only reason
-		// hotwords are reachable for the Russian models in the catalog.
-		if vocab := m.OptionalFilePath(dir, "bpe_vocab"); vocab != "" {
-			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
-			cfg.ModelConfig.BpeVocab = vocab
-		} else if v.Hotwords != "" && m.ModelingUnit == asr.UnitCJKChar {
-			// cjkchar is the one unit sherpa-onnx can tokenise hotwords in
-			// without a companion vocabulary file.
-			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
 		}
 
 		// Last line of defence. What is being prevented here is not a bad
