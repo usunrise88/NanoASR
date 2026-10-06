@@ -16,6 +16,8 @@ const (
 	CodeModelForbidden        Code = "model_forbidden"
 	CodeModelNotFound         Code = "model_not_found"
 	CodeJobNotFound           Code = "job_not_found"
+	CodeDictionaryNotFound    Code = "dictionary_not_found"
+	CodeDictionaryExists      Code = "dictionary_exists"
 	CodeFileTooLarge          Code = "file_too_large"
 	CodeDurationExceeded      Code = "duration_exceeded"
 	CodeUnsupportedMediaType  Code = "unsupported_media_type"
@@ -74,8 +76,10 @@ func (c Code) HTTPStatus() int {
 		return http.StatusUnauthorized
 	case CodeModelForbidden:
 		return http.StatusForbidden
-	case CodeModelNotFound, CodeJobNotFound:
+	case CodeModelNotFound, CodeJobNotFound, CodeDictionaryNotFound:
 		return http.StatusNotFound
+	case CodeDictionaryExists:
+		return http.StatusConflict
 	case CodeFileTooLarge, CodeDurationExceeded:
 		return http.StatusRequestEntityTooLarge
 	case CodeUnsupportedMediaType:

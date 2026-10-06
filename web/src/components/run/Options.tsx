@@ -1,5 +1,6 @@
-import { Stack } from '@/components/layout'
-import { Field, Input, Select, Switch } from '@/components/ui'
+import { Inline, Stack } from '@/components/layout'
+import { Button, Field, Input, Select, Switch } from '@/components/ui'
+import { useDictionaryList } from '@/lib/api/hooks'
 import type { ModelInfo, TranscribeOptions } from '@/lib/api/types'
 import { useT } from '@/lib/i18n'
 
@@ -31,6 +32,12 @@ export function RunOptions({
   // so it follows the manifest: a model that writes its own marks needs no
   // option, and one that does not cannot be made to.
   const canPunctuate = model?.capabilities.punctuation_builtin ?? false
+  // Whether a bias list will reach the decoder at all, and why not. The server
+  // answers both per model; repeating the reason here is what stops somebody
+  // typing a vocabulary into a field that is going to ignore it.
+  const canBias = model?.capabilities.hotwords ?? true
+  const biasReason = model?.capabilities.hotwords_reason ?? t('home.unsupported')
+  const dictionaries = useDictionaryList()
 
   return (
     <Stack gap={4}>
@@ -69,7 +76,14 @@ export function RunOptions({
         />
       </Field>
 
-      <Field label={t('home.hotwords')} description={t('home.hotwordsHint')}>
+      {/* Biasing is a property of the model, like punctuation above: a model
+          without the machinery cannot be made to have it, so the fields stay
+          visible — the list is still worth writing — and say what will happen
+          to them. */}
+      <Field
+        label={t('home.hotwords')}
+        description={canBias ? t('home.hotwordsHint') : biasReason}
+      >
         <Input
           value={(value.hotwords ?? []).join(', ')}
           disabled={disabled}
@@ -85,6 +99,41 @@ export function RunOptions({
           }
         />
       </Field>
+
+      {/* A group of toggles rather than a Field: there is no single control for
+          a label to point at, and a label pointing at nothing is worse than a
+          heading that says what the group is. */}
+      {dictionaries.length > 0 && (
+        <Stack gap={1}>
+          <span className="text-[13px] font-medium">{t('home.dictionaries')}</span>
+          <Inline gap={2}>
+            {dictionaries.map((d) => {
+              const picked = (value.hotwords_dict ?? []).includes(d.key)
+              return (
+                <Button
+                  key={d.key}
+                  size="sm"
+                  variant={picked ? 'primary' : 'secondary'}
+                  disabled={disabled ?? false}
+                  onClick={() =>
+                    set(
+                      'hotwords_dict',
+                      picked
+                        ? (value.hotwords_dict ?? []).filter((k) => k !== d.key)
+                        : [...(value.hotwords_dict ?? []), d.key],
+                    )
+                  }
+                >
+                  {d.name || d.key}
+                </Button>
+              )
+            })}
+          </Inline>
+          <span className="text-[12px] text-[var(--text-muted)]">
+            {t('home.dictionariesHint')}
+          </span>
+        </Stack>
+      )}
 
       <Stack gap={3}>
         <Switch

@@ -48,6 +48,8 @@ func (a *Adapter) Mount(mux *http.ServeMux, svc core.Service, deps adapter.Deps)
 		WriteProblem(w, r, core.Errorf(core.CodeModelForbidden,
 			"this API key is not permitted to administer models"))
 	})
+	a.mountDictionaries(mux, deps, admin)
+
 	for pattern, h := range map[string]http.HandlerFunc{
 		"POST /api/v1/models/{id}/download": a.download(deps), // SSE progress
 		"POST /api/v1/models/{id}/load":     a.load(deps),

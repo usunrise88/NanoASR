@@ -70,7 +70,11 @@ export interface Result {
   text: string
   timestamp_source: TimestampSource
   segments: Segment[]
-  silence: Silence[]
+  /**
+   * Null when VAD did not run — "nothing was measured", which is not the same
+   * as "no silence was found". Readers have to tell the two apart.
+   */
+  silence: Silence[] | null
   speakers?: Speaker[]
   stats: Stats
   warnings?: Warning[]
@@ -109,6 +113,10 @@ export interface Capabilities {
   confidence: boolean
   language_detect: boolean
   punctuation_builtin: boolean
+  /** Whether this model can be biased towards a hotword dictionary. */
+  hotwords: boolean
+  /** Why it cannot, in words a person can act on. Empty when it can. */
+  hotwords_reason?: string
 }
 
 export interface ModelInfo {
@@ -136,6 +144,40 @@ export interface DownloadProgress {
   error?: string
 }
 
+/**
+ * A stored hotword dictionary.
+ *
+ * `phrases` is absent in a listing — a page of dictionaries is a page of names
+ * — so `phrase_count` is the one to read there, and `matches` says which
+ * phrases a search matched.
+ */
+export interface Dictionary {
+  key: string
+  name: string
+  description?: string
+  phrases?: string[]
+  phrase_count: number
+  matches?: string[]
+  score?: number
+  created_at: string
+  updated_at: string
+}
+
+/** What the server will do with a dictionary once a request names one. */
+export interface HotwordPolicy {
+  enabled: boolean
+  default_score: number
+  max_variants: number
+  max_phrases: number
+  /** Keys applied to every request, from postproc.hotwords.default_dictionaries. */
+  default_dictionaries?: string[]
+}
+
+export interface DictionaryPage {
+  data: Dictionary[]
+  policy: HotwordPolicy
+}
+
 /** Parameters accepted by POST /api/v1/jobs. */
 export interface TranscribeOptions {
   model?: string
@@ -148,6 +190,8 @@ export interface TranscribeOptions {
   punctuate?: boolean
   itn?: boolean
   hotwords?: string[]
+  /** Keys of stored dictionaries, merged with hotwords above by the server. */
+  hotwords_dict?: string[]
   hotwords_score?: number
   strict?: boolean
 }

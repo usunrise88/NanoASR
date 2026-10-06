@@ -23,6 +23,7 @@ export function AppHeader() {
           <Inline gap={4}>
             <NavLink to="/" label={t('nav.new')} />
             <NavLink to="/models" label={t('nav.models')} />
+            <NavLink to="/hotwords" label={t('nav.hotwords')} />
             <NavLink to="/jobs" label={t('nav.jobs')} />
           </Inline>
         </nav>

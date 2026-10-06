@@ -5,7 +5,8 @@
   "nav": {
     "new": "New run",
     "models": "Models",
-    "jobs": "Jobs"
+    "jobs": "Jobs",
+    "hotwords": "Dictionaries"
   },
   "home": {
     "title": "Transcribe",
@@ -36,7 +37,9 @@
     "itnHint": "Spelled-out numbers, money and dates into digits",
     "later": "Arrives in M5",
     "numSpeakers": "Number of speakers",
-    "numSpeakersHint": "0 lets the server work it out from the audio"
+    "numSpeakersHint": "0 lets the server work it out from the audio",
+    "dictionaries": "Hotword dictionaries",
+    "dictionariesHint": "Stored phrase lists. Managed on the Dictionaries screen."
   },
   "models": {
     "title": "Models",
@@ -60,7 +63,52 @@
     "downloaded": "Model downloaded",
     "actionFailed": "The action did not go through",
     "revision": "Revision",
-    "memoryEstimate": "Memory, estimated"
+    "memoryEstimate": "Memory, estimated",
+    "hotwords": "Hotword dictionaries",
+    "hotwordsYes": "supported",
+    "hotwordsNo": "not supported"
+  },
+  "hotwords": {
+    "title": "Hotword dictionaries",
+    "description": "Phrase lists recognition is biased towards. A request names a dictionary by key instead of carrying the list.",
+    "list": "Dictionaries",
+    "new": "New dictionary",
+    "search": "Search",
+    "searchHint": "By key, name, description and the phrases themselves",
+    "empty": "No dictionaries yet",
+    "emptyHint": "Create one, or upload a file of phrases — one per line.",
+    "noMatches": "Nothing found",
+    "noMatchesHint": "The search looks inside the phrases too, not only at the names.",
+    "unavailable": "This server keeps no dictionaries",
+    "models": "Which models this works with",
+    "modelsNone": "None of the installed models can be biased. Dictionaries can still be prepared — they will apply once a model that supports it is installed.",
+    "modelNo": "cannot be biased",
+    "policyOn": "Biasing is on, default strength {{score}}. 1.5–2.0 is the working range: above it the model starts inserting listed phrases where they were not said.",
+    "policyOff": "Dictionaries are stored but not applied",
+    "policyDisabled": "Set postproc.hotwords.enabled in the configuration — and asr.variants.max has to be above zero.",
+    "policyNoVariants": "asr.variants.max is zero. Biasing needs a second resident copy of the model, and that setting is its budget.",
+    "key": "Key",
+    "keyHint": "Lowercase latin letters, digits, dashes and underscores. This is the name a request uses: hotwords_dict=key",
+    "name": "Name",
+    "descriptionLabel": "Description",
+    "score": "Bias strength",
+    "scoreHint": "0 takes the server's default",
+    "scoreIs": "strength {{score}}",
+    "phrases": "{{count}} phrases",
+    "phrasesLabel": "Phrases ({{count}})",
+    "phrasesHint": "One per line. Repeats and blank lines are dropped on save.",
+    "edit": "Open",
+    "view": "View",
+    "export": "Download",
+    "import": "Upload a file",
+    "imported": "File imported",
+    "saved": "Saved",
+    "actionFailed": "The action failed",
+    "confirmDelete": "Delete this dictionary?",
+    "confirmDeleteBody": "Requests naming its key will start failing.",
+    "editTitle": "Edit dictionary",
+    "standing": "on every request",
+    "confirmDeleteStanding": "This dictionary is named in the configuration (postproc.hotwords.default_dictionaries) and applies to every request. Deleting it leaves the server warning on every request until the name is removed from the configuration."
   },
   "jobs": {
     "title": "Jobs",
@@ -153,6 +201,8 @@
     "cancel": "Cancel",
     "close": "Close",
     "error": "Something went wrong",
-    "unauthorized": "An API key is needed"
+    "unauthorized": "An API key is needed",
+    "save": "Save",
+    "delete": "Delete"
   }
 }

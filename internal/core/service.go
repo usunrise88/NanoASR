@@ -50,6 +50,18 @@ type Capabilities struct {
 	Confidence         bool `json:"confidence"`
 	LanguageDetect     bool `json:"language_detect"`
 	PunctuationBuiltin bool `json:"punctuation_builtin"`
+	// Hotwords reports whether this model can be biased towards a phrase list
+	// — an inline one or a stored dictionary. It is a property of the export
+	// rather than of the family: sherpa-onnx biases a transducer during beam
+	// search, by looking each phrase up in the model's own vocabulary, so a
+	// subword model that ships no vocabulary file cannot be biased however
+	// good it is.
+	Hotwords bool `json:"hotwords"`
+	// HotwordsReason says why not, in the words a person can act on. Empty
+	// when Hotwords is true. It exists because "unsupported" alone sends
+	// somebody looking for a setting, and the answer is usually a missing file
+	// or the wrong kind of model.
+	HotwordsReason string `json:"hotwords_reason,omitempty"`
 }
 
 // ModelInfo is the operator-facing view of one model.

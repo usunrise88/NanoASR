@@ -22,6 +22,10 @@ VERSION="${NANOASR_VERSION:-}"
 PREFIX="${NANOASR_PREFIX:-/opt/nanoasr}"
 DATA_DIR="${NANOASR_DATA_DIR:-/var/lib/nanoasr}"
 ADDR="${NANOASR_ADDR:-127.0.0.1:8080}"
+# Whether an address was asked for at all, which is a different question
+# from what it is: an upgrade keeps the configuration, so a flag that was
+# given and not applied has to be reported rather than silently dropped.
+ADDR_SET=0; [[ -n "${NANOASR_ADDR:-}" ]] && ADDR_SET=1
 SVC_USER="${NANOASR_USER:-nanoasr}"
 SERVICE="${NANOASR_SERVICE:-nanoasr}"
 WITH_UI="${NANOASR_UI:-1}"
@@ -99,7 +103,7 @@ while [[ $# -gt 0 ]]; do
     --version)     VERSION="${2:?--version needs a tag}"; shift 2 ;;
     --prefix)      PREFIX="${2:?--prefix needs a directory}"; shift 2 ;;
     --data-dir)    DATA_DIR="${2:?--data-dir needs a directory}"; shift 2 ;;
-    --addr)        ADDR="${2:?--addr needs host:port}"; shift 2 ;;
+    --addr)        ADDR="${2:?--addr needs host:port}"; ADDR_SET=1; shift 2 ;;
     --user)        SVC_USER="${2:?--user needs a name}"; shift 2 ;;
     --service)     SERVICE="${2:?--service needs a name}"; shift 2 ;;
     --no-ui)       WITH_UI=0; shift ;;
@@ -271,6 +275,67 @@ config_has_keys() {
   [[ "$out" != *"no keys in"* ]]
 }
 
+# config_value reads one two-space-indented key out of the configuration.
+#
+# A kept configuration is the only place the truth about an upgrade lives: the
+# flags say what was asked for, the file says what the server will do, and on
+# an upgrade those are not the same thing. Through $SUDO because the file is
+# 0600 to the service account; awk rather than a pipe to head so there is no
+# SIGPIPE to trip over under pipefail.
+config_value() {
+  local key="$1" out
+  [[ -f "$CONFIG" ]] || return 1
+  out="$($SUDO awk -v k="$key" '
+    index($0, "  " k ":") == 1 { sub("^  " k ":[ \t]*", ""); sub("#.*", ""); print; exit }
+  ' "$CONFIG" 2>/dev/null)" || return 1
+  out="$(printf '%s' "$out" | tr -d "\"' ")"
+  [[ -n "$out" ]] || return 1
+  printf '%s' "$out"
+}
+
+config_has_realtime() {
+  local dialects
+  dialects="$(config_value dialects)" || return 1
+  [[ "$dialects" == *realtime* ]]
+}
+
+# effective_addr is what the server will actually listen on: the
+# configuration's value when there is one, and what was asked for when there is
+# not. On a fresh install the two agree, because init was handed $ADDR.
+effective_addr() {
+  local addr
+  if addr="$(config_value addr)"; then
+    printf '%s' "$addr"
+  else
+    printf '%s' "$ADDR"
+  fi
+}
+
+# flags_not_applied names the init-only flags an upgrade swallowed.
+#
+# Keeping the configuration is right — rewriting a file somebody else owns is
+# not an upgrade's business — but a flag that reaches only `nanoasr init` then
+# does nothing, and saying nothing about it is how somebody comes to believe
+# the server moved to an address it never moved to.
+flags_not_applied() {
+  if [[ "$ADDR_SET" == "1" ]]; then
+    local addr; addr="$(effective_addr)"
+    if [[ "$addr" != "$ADDR" ]]; then
+      warn "--addr was not applied: an upgrade keeps the configuration.
+    $SERVICE listens on $addr. To move it, set server.addr in $CONFIG
+    and restart, or override it for the service alone:
+      systemctl edit $SERVICE   ->   [Service] Environment=NANOASR_ADDR=$ADDR"
+    fi
+  fi
+  if [[ "$REALTIME" == "1" ]] && ! config_has_realtime; then
+    warn "--realtime was not applied: an upgrade keeps the configuration.
+    Add realtime to api.dialects in $CONFIG, then fetch the streaming model
+    and restart:
+      sudo -u $SVC_USER $PREFIX/nanoasr models pull -configured -config $CONFIG
+      systemctl restart $SERVICE"
+  fi
+}
+
 # write_unit derives the unit from the one in the archive, so that the hardening
 # it carries stays defined in one place and only the paths move.
 write_unit() {
@@ -289,10 +354,15 @@ write_unit() {
   $SUDO systemctl daemon-reload
 }
 
-# probe_url turns a listen address into one curl can ask: a server bound to
+# probe_url turns the listen address into one curl can ask: a server bound to
 # every interface is reached over the loopback like any other.
+#
+# The address comes from the configuration rather than from $ADDR, because on
+# an upgrade those differ and the one worth printing is the one the server will
+# use. Advertising a URL nobody is listening on is worse than printing none.
 probe_url() {
-  local host="${ADDR%:*}" port="${ADDR##*:}"
+  local addr; addr="$(effective_addr)"
+  local host="${addr%:*}" port="${addr##*:}"
   case "$host" in
     ""|"0.0.0.0"|"::"|"[::]"|"*") host=127.0.0.1 ;;
   esac
@@ -346,6 +416,7 @@ install_nanoasr() {
       as_service_user "$PREFIX/nanoasr" models pull -configured -config "$CONFIG" ||
         warn "could not fetch every configured model; the server will fetch what is missing when first needed"
     fi
+    flags_not_applied
   else
     say "writing the configuration and fetching the models (this is gigabytes)"
     local init_args=(init -config "$CONFIG" -data-dir "$DATA_DIR" -addr "$ADDR" -force)
@@ -517,7 +588,7 @@ EOF
   cat >&2 <<EOF
   curl -sS $url/v1/audio/transcriptions \\
     -H "Authorization: Bearer <the user key>" \\
-    -F file=@audio.wav -F model=whisper-1
+    -F file=@audio.wav
 
   docs       $url/docs    (no key needed)
 
@@ -525,7 +596,7 @@ EOF
   uninstall  curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash -s -- --uninstall
   gpu        curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash -s -- --gpu
 EOF
-  if [[ "$REALTIME" == "1" ]]; then
+  if config_has_realtime; then
     cat >&2 <<EOF
 
   Streaming recognition is at ${url/http/ws}/v1/realtime — see $url/docs.

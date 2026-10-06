@@ -22,13 +22,15 @@ func testPage() Page {
 			Name:    "openai",
 			Title:   "OpenAI audio API",
 			Summary: "Drop-in for the audio endpoints.",
+			Enabled: true,
 			Routes: []adapter.Route{
 				{Method: "POST", Path: "/v1/audio/transcriptions", Summary: "Transcribe a file."},
 				{Method: "GET", Path: "/v1/models", Summary: "List models."},
 			},
 		}, {
-			Name:  "realtime",
-			Title: "Realtime",
+			Name:    "realtime",
+			Title:   "Realtime",
+			Enabled: true,
 			Routes: []adapter.Route{{
 				Method: "GET", Path: "/v1/realtime?intent=transcription",
 				Summary: "Open a session.",
@@ -193,4 +195,52 @@ func keysOf[V any](m map[string]V) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// A dialect this build carries but the configuration does not name is said to
+// be off, by name, and its routes are withheld from the page and from
+// openapi.json. Being silent about it is what sent somebody looking for
+// /v1/realtime through the release notes, the configuration and the server log
+// before finding that the dialect was simply not in api.dialects.
+func TestThePageNamesADialectThatIsOffWithoutServingIt(t *testing.T) {
+	p := testPage()
+	p.Dialects = append(p.Dialects, adapter.Doc{
+		Name:    "era",
+		Title:   "Era platform API",
+		Summary: "The dialect of the service this replaces.",
+		Enabled: false,
+		Routes: []adapter.Route{{
+			Method: "POST", Path: "/asr", Summary: "Transcribe a file.",
+		}},
+	})
+
+	h, err := Handler(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(t, h, "/docs").Body.String()
+	for _, want := range []string{"era", "Era platform API", "api.dialects"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page does not mention %q for a dialect that is off", want)
+		}
+	}
+	// Its route must not read as something this server answers.
+	if strings.Contains(body, "/asr") {
+		t.Error("the page advertises a route of a dialect that is not enabled")
+	}
+
+	var doc struct {
+		Paths map[string]map[string]any `json:"paths"`
+	}
+	if err := json.Unmarshal(get(t, h, "/docs/openapi.json").Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := doc.Paths["/asr"]; found {
+		t.Error("openapi.json describes a route that is not served; a generated client would 404")
+	}
+	// The enabled ones are still there.
+	if _, found := doc.Paths["/v1/audio/transcriptions"]; !found {
+		t.Error("openapi.json lost an endpoint that is served")
+	}
 }

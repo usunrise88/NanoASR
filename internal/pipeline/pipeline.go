@@ -45,6 +45,10 @@ type Options struct {
 	// there has to be a default.
 	HotwordsEnabled      bool
 	HotwordsDefaultScore float32
+	// HotwordDictionaries are applied to every request, ahead of whatever the
+	// request named, on models that can be biased. A deployment with a house
+	// vocabulary should not have to teach every client about it.
+	HotwordDictionaries []string
 
 	BatchMaxSize    int
 	BatchMaxSeconds int
@@ -70,6 +74,14 @@ func (p *Pipeline) WithDiarizer(d diarize.Diarizer) *Pipeline {
 // their own config block.
 func (p *Pipeline) WithPostProc(f *postproc.Factory) *Pipeline {
 	p.postproc = f
+	return p
+}
+
+// WithDictionaries attaches the hotword dictionary store, for requests that
+// name a list by key instead of carrying it. Separate from New for the same
+// reason as the two above: optional, server-wide, and built elsewhere.
+func (p *Pipeline) WithDictionaries(d core.Dictionaries) *Pipeline {
+	p.dictionaries = d
 	return p
 }
 
@@ -111,6 +123,11 @@ type Pipeline struct {
 	// Supplied by Attach; nil on a server built without a queue.
 	queue *job.Queue
 	store job.Store
+
+	// Supplied by WithDictionaries; nil on a server with no store behind it,
+	// which is the one case where a request naming a dictionary cannot be
+	// honoured and has to be told so.
+	dictionaries core.Dictionaries
 }
 
 func New(decoder *audio.Router, segmenter vad.Segmenter, models *pool.Pool, governor *pool.Governor, opt Options) *Pipeline {

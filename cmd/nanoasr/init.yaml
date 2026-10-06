@@ -112,7 +112,11 @@ diarization:
 
 storage:
   db_path: {{.DBPath}}
-  temp_dir: ""
+  # Written out rather than left empty, which would resolve to one shared
+  # directory under the system temp dir. Two servers on one machine would then
+  # share a spool, and the startup sweep deletes every file whose job is not in
+  # its own database — which is to say the other server's queued audio.
+  temp_dir: {{.TempDir}}
 
 log:
   level: info

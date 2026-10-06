@@ -160,6 +160,16 @@ function InstalledModel({
             </Detail>
           )}
           {model.ref_count > 0 && <Detail label={t('models.refs')}>{model.ref_count}</Detail>}
+          {/* Whether a hotword dictionary can be applied to this model. The
+              reason matters more than the answer: it is usually a missing
+              vocabulary file rather than a setting. */}
+          {model.kind === 'asr' && (
+            <Detail label={t('models.hotwords')}>
+              {model.capabilities.hotwords
+                ? t('models.hotwordsYes')
+                : (model.capabilities.hotwords_reason ?? t('models.hotwordsNo'))}
+            </Detail>
+          )}
           {model.license && <Detail label={t('models.license')}>{model.license}</Detail>}
         </Stack>
 

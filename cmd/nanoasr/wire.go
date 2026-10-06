@@ -154,10 +154,11 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 
 			HotwordsEnabled:      cfg.PostProc.Hotwords.Enabled,
 			HotwordsDefaultScore: cfg.PostProc.Hotwords.DefaultScore,
+			HotwordDictionaries:  cfg.PostProc.Hotwords.DefaultDictionaries,
 			BatchMaxSize:         cfg.ASR.Batch.MaxSize,
 			BatchMaxSeconds:      cfg.ASR.Batch.MaxSeconds,
 			NumThreads:           cfg.ASR.NumThreads,
-		}).WithDiarizer(diarizer).WithPostProc(post)
+		}).WithDiarizer(diarizer).WithPostProc(post).WithDictionaries(store.Dictionaries())
 
 	hooks := webhook.New(webhook.Options{
 		Secret:       cfg.Jobs.WebhookSecret,
@@ -400,6 +401,40 @@ func (s *server) preload(ctx context.Context, id string, log *slog.Logger) {
 		return
 	}
 	log.Info("default model loaded", "model", id)
+}
+
+// checkDefaultDictionaries says at startup whether the dictionaries the
+// configuration names actually exist.
+//
+// Not fatal, and deliberately so: the configuration is read before anyone can
+// create a dictionary, so refusing to start would make a fresh install with a
+// prepared configuration unbootable. What it must not do is stay quiet — a
+// standing bias list that silently applies to nothing is exactly the kind of
+// setting somebody believes is working for months.
+func (s *server) checkDefaultDictionaries(ctx context.Context, keys []string, log *slog.Logger) {
+	if len(keys) == 0 || s.store == nil {
+		return
+	}
+	dicts := s.store.Dictionaries()
+	var missing []string
+	for _, key := range keys {
+		if _, err := dicts.Get(ctx, key); err != nil {
+			if core.AsError(err).Code == core.CodeDictionaryNotFound {
+				missing = append(missing, key)
+				continue
+			}
+			log.Warn("cannot read a configured hotword dictionary", "dictionary", key, "err", err)
+			return
+		}
+	}
+	if len(missing) > 0 {
+		log.Warn("configured hotword dictionaries do not exist",
+			"dictionaries", strings.Join(missing, ", "),
+			"note", "postproc.hotwords.default_dictionaries; create them or remove the names")
+		return
+	}
+	log.Info("hotword dictionaries applied to every request",
+		"dictionaries", strings.Join(keys, ", "))
 }
 
 // preloadDiarizer loads a lazily loaded diarizer in the background, so the

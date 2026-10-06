@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/usunrise88/nanoasr/internal/hotwords"
 )
 
 // Default returns a configuration that starts a working server on any machine.
@@ -101,7 +103,7 @@ func Default() Config {
 		},
 		PostProc: PostProc{
 			ITN:      ITN{Locale: "ru"},
-			Hotwords: HotwordsPolicy{DefaultScore: 1.5},
+			Hotwords: HotwordsPolicy{DefaultScore: 1.5, MaxPhrases: hotwords.DefaultMaxPhrases},
 		},
 		Diarization: Diarization{
 			// Measured on 16 minutes of two-speaker Russian dialogue with a
@@ -197,6 +199,12 @@ func (c *Config) Autotune() {
 	// A subdirectory of our own, not the system temp directory itself: the
 	// spool holds uploaded audio at 0700, and startup cleanup should be walking
 	// our files rather than everyone else's.
+	//
+	// It is still shared between two servers on one machine, and the sweep
+	// removes every spool file whose job is absent from the database it just
+	// read — the other server's queued audio included. `nanoasr init` writes an
+	// explicit path under the data directory for that reason; this fallback is
+	// for a configuration that names none, and a second server wants its own.
 	if c.Storage.TempDir == "" {
 		c.Storage.TempDir = filepath.Join(os.TempDir(), "nanoasr-spool")
 	}

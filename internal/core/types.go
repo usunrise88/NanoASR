@@ -67,7 +67,11 @@ type Request struct {
 	Punctuate bool
 	ITN       bool
 
-	Hotwords      []string
+	Hotwords []string
+	// HotwordDicts names stored dictionaries by key. Their phrases are read
+	// when the request runs and merged with Hotwords above, so a client can
+	// name a curated list instead of carrying one.
+	HotwordDicts  []string
 	HotwordsScore float32
 
 	// Strict turns capability downgrades into errors instead of warnings.

@@ -480,6 +480,11 @@ func (p *Pool) List() []core.ModelInfo {
 		if e.rec != nil {
 			caps = e.rec.Capabilities()
 		}
+		// The recogniser reports what it can produce; whether it can be biased
+		// follows from the manifest, and a loaded model must not answer that
+		// question differently from the same model listed on disk.
+		caps.Hotwords, caps.HotwordsReason = asr.HotwordsCapability(
+			e.manifest.Family, e.manifest.ModelingUnit, e.manifest.Files["bpe_vocab"] != "")
 		out = append(out, core.ModelInfo{
 			ID:           e.baseID,
 			Variant:      e.variant.String(),

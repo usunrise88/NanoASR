@@ -83,6 +83,49 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 			BlankPenalty:   m.Runtime.BlankPenalty,
 		}
 
+		// modeling_unit means two different things to two different readers.
+		// Our word assembler always needs it, and gets it from the manifest.
+		// sherpa-onnx only uses it to tokenise hotwords, and refuses to start
+		// when told "bpe" without a vocabulary file to go with it — which is
+		// most transducer releases.
+		//
+		// So it is passed down when the pair is complete, and also when the
+		// unit needs no vocabulary file at all: cjkchar looks each character
+		// up in the tokens file. Nothing in the catalog is in that second
+		// case — the Russian entries are character models or subword models
+		// with no vocabulary beside them.
+		//
+		// This has to run before the hotwords block below, and the order is
+		// the whole of it: the support check reads ModelConfig.BpeVocab, so
+		// while it ran first that field was still empty and every bpe model
+		// was told it had no vocabulary, however complete its manifest was.
+		// Measured on GigaAM v3 RNNT with its own SentencePiece vocabulary in
+		// place, which answered "this model does not ship one".
+		if vocab := m.OptionalFilePath(dir, "bpe_vocab"); vocab != "" {
+			// What is on disk is usually a binary sentencepiece model, and
+			// sherpa-onnx reads only the text form. Handed the other one it
+			// calls exit(), so the file is rendered here and a file in
+			// neither format fails the load instead of the process.
+			text, converted, err := asr.BPEVocabulary(vocab)
+			if err != nil {
+				return nil, err
+			}
+			if converted {
+				path, cleanup, err := writeTemp("nanoasr-bpe-*.vocab", text)
+				if err != nil {
+					return nil, err
+				}
+				defer cleanup()
+				vocab = path
+			}
+			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
+			cfg.ModelConfig.BpeVocab = vocab
+		} else if v.Hotwords != "" && m.ModelingUnit == asr.UnitCJKChar {
+			// cjkchar is the one unit sherpa-onnx can tokenise hotwords in
+			// without a companion vocabulary file.
+			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
+		}
+
 		// Hotwords reach sherpa-onnx as a file. The offline recogniser config
 		// has no in-memory variant — HotwordsBuf exists only on the streaming
 		// struct — so one has to be written.
@@ -108,25 +151,6 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 			defer cleanup()
 			cfg.HotwordsFile = path
 			cfg.HotwordsScore = v.HotwordsScore
-		}
-
-		// modeling_unit means two different things to two different readers.
-		// Our word assembler always needs it, and gets it from the manifest.
-		// sherpa-onnx only uses it to tokenise hotwords, and refuses to start
-		// when told "bpe" without a vocabulary file to go with it — which is
-		// most transducer releases.
-		//
-		// So it is passed down when the pair is complete, and also when the
-		// unit needs no vocabulary file at all: for a character model the
-		// characters are the tokens. That second case is the only reason
-		// hotwords are reachable for the Russian models in the catalog.
-		if vocab := m.OptionalFilePath(dir, "bpe_vocab"); vocab != "" {
-			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
-			cfg.ModelConfig.BpeVocab = vocab
-		} else if v.Hotwords != "" && m.ModelingUnit == asr.UnitCJKChar {
-			// cjkchar is the one unit sherpa-onnx can tokenise hotwords in
-			// without a companion vocabulary file.
-			cfg.ModelConfig.ModelingUnit = m.ModelingUnit
 		}
 
 		// Last line of defence. What is being prevented here is not a bad
@@ -236,15 +260,23 @@ func boolToInt(b bool) int {
 
 // writeHotwords materialises a bias list for sherpa-onnx to read during
 // construction, and returns the cleanup that removes it again.
+func writeHotwords(buf string) (path string, cleanup func(), err error) {
+	return writeTemp("nanoasr-hotwords-*.txt", buf+"\n")
+}
+
+// writeTemp puts contents somewhere sherpa-onnx can read it at construction
+// time, and returns the cleanup that removes it again.
 //
 // 0600 in the process's temp directory: a hotword list is the caller's
 // vocabulary — names, account numbers, product codes — and there is no reason
-// for it to be world-readable even for the moment it exists.
-func writeHotwords(buf string) (path string, cleanup func(), err error) {
-	f, err := os.CreateTemp("", "nanoasr-hotwords-*.txt")
+// for it to be world-readable even for the moment it exists. The subword
+// vocabulary beside it is not a secret, but it is written the same way rather
+// than inventing a second set of rules for the same temp directory.
+func writeTemp(pattern, contents string) (path string, cleanup func(), err error) {
+	f, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return "", func() {}, core.Errorf(core.CodeInternal,
-			"cannot write the hotwords file").WithCause(err)
+			"cannot write %s", pattern).WithCause(err)
 	}
 	name := f.Name()
 	cleanup = func() { _ = os.Remove(name) }
@@ -253,18 +285,18 @@ func writeHotwords(buf string) (path string, cleanup func(), err error) {
 		f.Close()
 		cleanup()
 		return "", func() {}, core.Errorf(core.CodeInternal,
-			"cannot secure the hotwords file").WithCause(err)
+			"cannot secure %s", name).WithCause(err)
 	}
-	if _, err := f.WriteString(buf + "\n"); err != nil {
+	if _, err := f.WriteString(contents); err != nil {
 		f.Close()
 		cleanup()
 		return "", func() {}, core.Errorf(core.CodeInternal,
-			"cannot write the hotwords file").WithCause(err)
+			"cannot write %s", name).WithCause(err)
 	}
 	if err := f.Close(); err != nil {
 		cleanup()
 		return "", func() {}, core.Errorf(core.CodeInternal,
-			"cannot close the hotwords file").WithCause(err)
+			"cannot close %s", name).WithCause(err)
 	}
 	return name, cleanup, nil
 }

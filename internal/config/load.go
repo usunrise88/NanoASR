@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/usunrise88/nanoasr/internal/hotwords"
 )
 
 // Load builds the effective configuration: defaults, then the YAML file if the
@@ -252,6 +254,23 @@ func (c *Config) validatePostProc() error {
 	if c.PostProc.Hotwords.Enabled && c.ASR.Variants.Max == 0 {
 		return fmt.Errorf("postproc.hotwords.enabled is true but asr.variants.max is 0; " +
 			"per-request hotwords need a second resident model instance to load into")
+	}
+
+	// A standing dictionary is named here and resolved against the store at
+	// startup. Whether it exists is checked there, where the store is open;
+	// what is checked here is that the key is one a dictionary could have, so
+	// a typo with a capital or a comma in it fails at the line that holds it
+	// rather than silently matching nothing on every request.
+	for i, key := range c.PostProc.Hotwords.DefaultDictionaries {
+		canonical, err := hotwords.ValidKey(key)
+		if err != nil {
+			return fmt.Errorf("postproc.hotwords.default_dictionaries[%d]: %w", i, err)
+		}
+		c.PostProc.Hotwords.DefaultDictionaries[i] = canonical
+	}
+	if len(c.PostProc.Hotwords.DefaultDictionaries) > 0 && !c.PostProc.Hotwords.Enabled {
+		return fmt.Errorf("postproc.hotwords.default_dictionaries is set but " +
+			"postproc.hotwords.enabled is false; the dictionaries would be stored and never applied")
 	}
 	return nil
 }
