@@ -9,7 +9,12 @@ import {
 
 import {
   cancelJob,
+  createDictionary,
+  deleteDictionary,
   downloadPath,
+  getDictionary,
+  importDictionary,
+  listDictionaries,
   getJob,
   jobEventsPath,
   listCatalog,
@@ -18,11 +23,13 @@ import {
   loadModel,
   pinModel,
   reloadModel,
+  replaceDictionary,
   submitJob,
   unloadModel,
 } from './client'
 import { stream } from './sse'
-import { isTerminal, type DownloadProgress, type Job, type JobFilter, type ModelInfo } from './types'
+import type { DictionaryInput } from './client'
+import { isTerminal, type Dictionary, type DownloadProgress, type Job, type JobFilter, type ModelInfo } from './types'
 
 /** Query keys, in one place so an invalidation cannot miss a reader. */
 export const keys = {
@@ -30,6 +37,8 @@ export const keys = {
   catalog: ['catalog'] as const,
   jobs: (filter: JobFilter) => ['jobs', filter] as const,
   job: (id: string) => ['job', id] as const,
+  dictionaries: (query: string) => ['hotwords', query] as const,
+  dictionary: (key: string) => ['hotword', key] as const,
 }
 
 export function useModels() {
@@ -103,6 +112,61 @@ export const useLoadModel = () => useModelAction(loadModel)
 export const useUnloadModel = () => useModelAction(unloadModel)
 export const usePinModel = () => useModelAction(pinModel)
 export const useReloadModel = () => useModelAction(reloadModel)
+
+// --- hotword dictionaries ----------------------------------------------------
+
+/**
+ * The dictionary list, with the server's biasing policy beside it.
+ *
+ * The search runs on the server because it looks inside the phrases as well as
+ * at the names, and a listing deliberately does not carry the phrases.
+ * placeholderData keeps the previous page on screen while a new query is in
+ * flight, so typing does not blank the list on every keystroke.
+ */
+export function useDictionaries(query: string) {
+  return useQuery({
+    queryKey: keys.dictionaries(query),
+    queryFn: () => listDictionaries(query),
+    placeholderData: (previous) => previous,
+  })
+}
+
+export function useDictionary(key: string | undefined) {
+  return useQuery({
+    queryKey: keys.dictionary(key ?? ''),
+    queryFn: () => getDictionary(key as string),
+    enabled: key !== undefined && key !== '',
+  })
+}
+
+/** Every write invalidates both the listing and the one that changed. */
+function useDictionaryMutation<V>(fn: (value: V) => Promise<unknown>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['hotwords'] })
+      void qc.invalidateQueries({ queryKey: ['hotword'] })
+    },
+  })
+}
+
+export const useCreateDictionary = () => useDictionaryMutation<DictionaryInput>(createDictionary)
+export const useReplaceDictionary = () => useDictionaryMutation<DictionaryInput>(replaceDictionary)
+export const useDeleteDictionary = () => useDictionaryMutation<string>(deleteDictionary)
+export const useImportDictionary = () =>
+  useDictionaryMutation<{ key: string; file: File; mode: 'append' | 'replace' }>(
+    ({ key, file, mode }) => importDictionary(key, file, mode),
+  )
+
+/**
+ * Every dictionary the server knows, for the run screen's picker. Empty on a
+ * server that keeps none, which is also what a 501 looks like from here.
+ */
+export function useDictionaryList(): Dictionary[] {
+  const { data } = useDictionaries('')
+  return data?.data ?? []
+}
 
 /**
  * Follows a job's transitions until it is terminal.

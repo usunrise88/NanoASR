@@ -157,7 +157,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 			BatchMaxSize:         cfg.ASR.Batch.MaxSize,
 			BatchMaxSeconds:      cfg.ASR.Batch.MaxSeconds,
 			NumThreads:           cfg.ASR.NumThreads,
-		}).WithDiarizer(diarizer).WithPostProc(post)
+		}).WithDiarizer(diarizer).WithPostProc(post).WithDictionaries(store.Dictionaries())
 
 	hooks := webhook.New(webhook.Options{
 		Secret:       cfg.Jobs.WebhookSecret,

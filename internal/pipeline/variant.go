@@ -2,9 +2,11 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 
 	"github.com/usunrise88/nanoasr/internal/asr"
 	"github.com/usunrise88/nanoasr/internal/core"
+	"github.com/usunrise88/nanoasr/internal/hotwords"
 	"github.com/usunrise88/nanoasr/internal/pool"
 	"github.com/usunrise88/nanoasr/internal/registry"
 )
@@ -17,9 +19,14 @@ import (
 // naming the reason. The alternative — failing the request — would turn an
 // optional bias list into a hard dependency on a memory budget.
 func (p *Pipeline) acquire(ctx context.Context, modelID string, req core.Request) (*pool.Lease, []core.Warning, error) {
+	req, dictWarn, err := p.applyDictionaries(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	if !wantsVariant(req) {
 		lease, err := p.models.Acquire(ctx, modelID)
-		return lease, nil, err
+		return lease, dictWarn, err
 	}
 
 	// The manifest decides whether the request is even expressible, and it is
@@ -30,6 +37,7 @@ func (p *Pipeline) acquire(ctx context.Context, modelID string, req core.Request
 	}
 
 	v, warn := p.buildVariant(req, man)
+	warn = append(dictWarn, warn...)
 	if v.Zero() {
 		lease, err := p.models.Acquire(ctx, modelID)
 		return lease, warn, err
@@ -52,6 +60,64 @@ func (p *Pipeline) acquire(ctx context.Context, modelID string, req core.Request
 
 func wantsVariant(req core.Request) bool {
 	return len(req.Hotwords) > 0 || req.DecodingMethod != "" || req.MaxActivePaths > 0
+}
+
+// applyDictionaries turns the dictionary keys a request named into phrases on
+// the request itself, so everything downstream sees one list and does not have
+// to know where it came from.
+//
+// A key that names nothing is a client error rather than a warning. The
+// alternative — transcribing without the bias and mentioning it in passing —
+// hides a typo in a parameter behind a result that looks fine, and the usual
+// case for naming a dictionary is that somebody depends on it being applied.
+//
+// The phrases are read now, not when the job was queued: a dictionary edited
+// while a job waits is applied as it stands when the job runs, which is the
+// behaviour somebody fixing a wrong phrase expects.
+func (p *Pipeline) applyDictionaries(ctx context.Context, req core.Request) (core.Request, []core.Warning, error) {
+	if len(req.HotwordDicts) == 0 {
+		return req, nil, nil
+	}
+	if p.dictionaries == nil {
+		return req, []core.Warning{{
+			Code: "hotwords_unavailable",
+			Message: "this server keeps no hotword dictionaries, so " +
+				strings.Join(req.HotwordDicts, ", ") + " could not be applied",
+		}}, nil
+	}
+
+	seen := map[string]bool{}
+	dicts := make([]core.Dictionary, 0, len(req.HotwordDicts))
+	for _, key := range req.HotwordDicts {
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		d, err := p.dictionaries.Get(ctx, key)
+		if err != nil {
+			if core.AsError(err).Code == core.CodeDictionaryNotFound {
+				return req, nil, core.Errorf(core.CodeInvalidRequest,
+					"no hotword dictionary with the key %q", key).WithParam("hotwords_dict")
+			}
+			return req, nil, err
+		}
+		dicts = append(dicts, d)
+	}
+
+	req.Hotwords = hotwords.Merge(dicts, req.Hotwords)
+	// A dictionary carries the strength its author chose; an explicit score on
+	// the request outranks it. With several dictionaries and no score on the
+	// request, the first one that states a preference wins — picking the
+	// largest would let one aggressive list speak for the rest.
+	if req.HotwordsScore == 0 {
+		for _, d := range dicts {
+			if d.Score > 0 {
+				req.HotwordsScore = d.Score
+				break
+			}
+		}
+	}
+	return req, nil, nil
 }
 
 // buildVariant turns request options into a recogniser variant, dropping the
@@ -95,7 +161,28 @@ func (p *Pipeline) buildVariant(req core.Request, man registry.Manifest) (asr.Va
 		method = man.Runtime.DecodingMethod
 	}
 	if method == "" {
-		method = "greedy_search"
+		method = asr.GreedySearch
+	}
+
+	// Biasing happens during beam search, and every model in the catalog is
+	// configured to decode greedily. Leaving the caller to work that out meant
+	// hotwords sent on their own were dropped with a warning on a model that
+	// could have honoured them — and the OpenAI dialect, which maps prompt to
+	// hotwords, has no way to ask for a decoding method at all.
+	//
+	// So a request that asks for hotwords and does not state a method gets the
+	// one that can serve it, and is told. A caller who did name greedy_search
+	// is left alone: they asked for something that cannot carry a bias, and
+	// the refusal below says so rather than overriding them.
+	if method != asr.ModifiedBeamSearch && req.DecodingMethod == "" &&
+		asr.DecodingSupport(man.Family, asr.ModifiedBeamSearch) == nil {
+		method = asr.ModifiedBeamSearch
+		v.DecodingMethod = method
+		warn = append(warn, core.Warning{
+			Code: "decoding_method_promoted",
+			Message: "hotwords apply during beam search, so this request decoded with " +
+				"modified_beam_search instead of the model's configured greedy_search",
+		})
 	}
 
 	hasVocab := man.Files["bpe_vocab"] != ""

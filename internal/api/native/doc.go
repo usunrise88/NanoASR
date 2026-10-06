@@ -15,8 +15,10 @@ func (*Adapter) Doc() adapter.Doc {
 			Path:    "/api/v1/transcribe",
 			Summary: "Transcribe an uploaded file and wait for the result.",
 			Detail: "multipart/form-data with file, plus model, language, channel_mode, " +
-				"diarize, num_speakers, punctuate, itn, hotwords, decoding_method and " +
-				"word_timestamps. Cancelling the request stops the decode between " +
+				"diarize, num_speakers, punctuate, itn, hotwords, hotwords_dict, " +
+				"hotwords_score, decoding_method and word_timestamps. hotwords_dict " +
+				"names stored dictionaries by key and merges their phrases into " +
+				"hotwords. Cancelling the request stops the decode between " +
 				"batches rather than at the end of the file.",
 		}, {
 			Method:  "POST",
@@ -80,6 +82,46 @@ func (*Adapter) Doc() adapter.Doc {
 			Summary: "Swap in another revision without dropping requests.",
 			Detail:  "The new instance is loaded and warmed before the pointer moves.",
 			Admin:   true,
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/hotwords",
+			Summary: "List hotword dictionaries, with the server's biasing policy.",
+			Detail: "q searches keys, names, descriptions and the phrases themselves; " +
+				"limit caps the page. Phrases are left out of a listing — fetch one " +
+				"dictionary for those — and policy says whether biasing is switched " +
+				"on at all, which models it can apply to being a separate question " +
+				"answered per model in /api/v1/models.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/hotwords/{key}",
+			Summary: "One dictionary and its phrases.",
+			Detail:  "response_format=text returns the plain file the import endpoint reads back.",
+		}, {
+			Method:  "POST",
+			Path:    "/api/v1/hotwords",
+			Summary: "Create a dictionary.",
+			Detail: "JSON: key, name, description, score, and either phrases as a list " +
+				"or text as one block. Refuses a key that already exists; PUT replaces.",
+			Admin: true,
+		}, {
+			Method:  "PUT",
+			Path:    "/api/v1/hotwords/{key}",
+			Summary: "Replace a dictionary wholesale.",
+			Admin:   true,
+		}, {
+			Method:  "DELETE",
+			Path:    "/api/v1/hotwords/{key}",
+			Summary: "Delete a dictionary.",
+			Admin:   true,
+		}, {
+			Method:  "POST",
+			Path:    "/api/v1/hotwords/{key}/import",
+			Summary: "Upload phrases into a dictionary, creating it if the key is new.",
+			Detail: "multipart with a file field, or the file as the request body. " +
+				"One phrase per line with # comments, a one-column CSV, a JSON array " +
+				"of phrases, or a JSON dictionary as exported here. mode=append is " +
+				"the default; mode=replace swaps the phrase list.",
+			Admin: true,
 		}, {
 			Method:  "GET",
 			Path:    "/api/v1/config",

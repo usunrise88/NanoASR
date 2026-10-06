@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/usunrise88/nanoasr/internal/hotwords"
 )
 
 // Default returns a configuration that starts a working server on any machine.
@@ -101,7 +103,7 @@ func Default() Config {
 		},
 		PostProc: PostProc{
 			ITN:      ITN{Locale: "ru"},
-			Hotwords: HotwordsPolicy{DefaultScore: 1.5},
+			Hotwords: HotwordsPolicy{DefaultScore: 1.5, MaxPhrases: hotwords.DefaultMaxPhrases},
 		},
 		Diarization: Diarization{
 			// Measured on 16 minutes of two-speaker Russian dialogue with a

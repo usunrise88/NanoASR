@@ -57,7 +57,8 @@ Key implementation properties:
 - Segment batching bounded by count and total duration.
 - Per-request model selection; several models resident in parallel.
 - `greedy_search` and `modified_beam_search` decoding methods.
-- Recognition biasing towards a supplied word list (hotwords).
+- Recognition biasing towards a supplied word list (hotwords), either sent with the
+  request or kept on the server as a named dictionary and asked for by key.
 - Streaming recognition while the audio is still arriving, over a websocket, with
   partial hypotheses and automatic utterance boundaries.
 - CPU or NVIDIA GPU, chosen by one setting and verified at startup rather than
@@ -551,6 +552,7 @@ setting. It asks for an API key on the first `401` response.
 | Result | Player with word highlighting, speaker filter, search and export |
 | Jobs | History, statuses, filters, cancellation, result review |
 | Models | Catalog, weight downloads, residency, pinning, hot swap |
+| Dictionaries | Hotword lists: search across phrases, create and edit, upload and download, and which installed models they apply to |
 | Settings | Effective server configuration, read-only |
 
 The interface runs entirely on top of the public API and has no endpoints of its own.
@@ -594,7 +596,7 @@ as RFC 9457 `application/problem+json`.
 
 Request parameters: `model`, `language`, `response_format`, `channel_mode`,
 `decoding_method`, `max_active_paths`, `diarize`, `num_speakers`, `punctuate`, `itn`,
-`hotwords[]`, `hotwords_score`, `strict`, `webhook_url`.
+`hotwords[]`, `hotwords_dict[]`, `hotwords_score`, `strict`, `webhook_url`.
 
 Response formats: `json`, `text`, `srt`, `vtt`.
 
@@ -616,6 +618,8 @@ fields they do not know.
 Differences from the original API:
 
 - `/v1/audio/translations` returns `501`: no translation models are shipped.
+- `hotwords_dict` is an extension: name a stored dictionary instead of packing a
+  vocabulary into `prompt` on every call.
 - `prompt` is interpreted as a comma-separated hotword list rather than as a language
   model prompt.
 - `temperature` is accepted and has no effect: the decoders do not sample.
@@ -825,16 +829,25 @@ organisation names, terminology. The mechanism adjusts probabilities rather than
 vocabulary: a listed phrase may still be absent from the result, or may appear where it
 was not spoken.
 
-Preconditions:
+Preconditions, all three:
 
 1. The model family is `transducer`.
-2. `decoding_method: modified_beam_search`.
+2. Decoding is `modified_beam_search`. A request that sends hotwords without naming a
+   method is promoted to it automatically, with a `decoding_method_promoted` warning; a
+   request that explicitly asks for `greedy_search` is left alone and told why the bias
+   was not applied.
 3. The modelling unit can tokenise the phrase: `cjkchar` requires nothing further, while
-   `bpe` and `cjkchar+bpe` require a `bpe_vocab` file in the model manifest.
+   `bpe` and `cjkchar+bpe` require a `bpe_vocab` file beside the weights.
+
+Whether a given model meets them is answered per model in `GET /api/v1/models`
+(`capabilities.hotwords`, with `capabilities.hotwords_reason` when it does not), on the
+models screen, and on the dictionaries screen of the web UI.
 
 The recommended list size is tens of phrases. The limit is set by accuracy rather than
 performance: the longer the list, the more often the bias applies in the wrong place.
-Only phrases the model actually gets wrong belong in the list.
+Only phrases the model actually gets wrong belong in the list. `hotwords_score` controls
+the strength; 1.5–2.0 is the working range, and 10 makes a recogniser repeat the list
+back at you instead of transcribing — that is measured, not a figure of speech.
 
 The list forms part of the model pool key: each distinct hotword set requires its own
 resident instance. The mechanism is meant for a stable vocabulary, not for a parameter
@@ -843,21 +856,106 @@ that varies between requests.
 ```yaml
 asr:
   variants:
-    max: 1
-    allow_hotwords: true
+    max: 1                      # the budget for those extra instances
 postproc:
   hotwords:
     enabled: true
     default_score: 1.5
+    max_phrases: 5000           # bound on one stored dictionary
 ```
 
-`hotwords_score` controls the strength of the bias; 1.5–2.0 is the working range. In the
-OpenAI dialect the list arrives through `prompt` without a score, and
-`postproc.hotwords.default_score` applies.
+### Hotword dictionaries
 
-The models in the built-in catalog do not meet the preconditions above: the Russian
-models use `char` or subwords without a vocabulary file. A catalog entry carrying
-`bpe_vocab` is required for the mechanism to take effect.
+A dictionary is a stored phrase list with a key somebody can type. A request names it
+instead of carrying the phrases:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/transcribe \
+  -H "Authorization: Bearer $KEY" \
+  -F file=@call.wav \
+  -F hotwords_dict=medical-terms
+```
+
+Several keys are accepted (repeated, or comma-separated), and `hotwords` may be sent
+alongside: the phrases are merged, without repeats. A key that names nothing is a `400`
+rather than a silently unbiased transcript. The phrases are read when the request runs,
+so a queued job picks up an edit made while it waited. In the OpenAI dialect
+`hotwords_dict` works the same way, as an extension — it is the field to use instead of
+packing a vocabulary into `prompt` on every call.
+
+The score comes from the first dictionary that states one, unless the request sends
+`hotwords_score`, and falls back to `postproc.hotwords.default_score`.
+
+| Method | Path | |
+|---|---|---|
+| `GET` | `/api/v1/hotwords` | List, with `?q=` searching keys, names, descriptions and the phrases themselves. Carries the server's biasing policy. |
+| `GET` | `/api/v1/hotwords/{key}` | One dictionary with its phrases; `?response_format=text` gives the plain file. |
+| `POST` | `/api/v1/hotwords` | Create. Refuses a key that exists. |
+| `PUT` | `/api/v1/hotwords/{key}` | Replace wholesale. |
+| `DELETE` | `/api/v1/hotwords/{key}` | Delete. |
+| `POST` | `/api/v1/hotwords/{key}/import` | Upload phrases, creating the dictionary when the key is new. `?mode=replace` swaps the list instead of adding to it. |
+
+Reading needs any key; writing needs an administrative one, because a dictionary changes
+what every caller's transcripts come out as. Keys are lowercase latin letters, digits,
+dashes and underscores — the intersection of what survives a URL, a form field and a
+comma-separated list.
+
+```bash
+# create
+curl -X POST http://127.0.0.1:8080/api/v1/hotwords \
+  -H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"key":"medical-terms","name":"Medical terms","score":1.8,
+       "phrases":["кардиомиопатия","амиодарон"]}'
+
+# upload a file into it
+curl -X POST "http://127.0.0.1:8080/api/v1/hotwords/medical-terms/import" \
+  -H "Authorization: Bearer $ADMIN_KEY" -F file=@terms.txt
+```
+
+An uploaded file is read in whichever of four shapes it arrives:
+
+- one phrase per line, `#` starting a comment — the format the text export writes;
+- a one-column CSV, its header dropped if it is `phrase`, `word`, `term` or `text`;
+- a comma-separated list, which is the same parser;
+- JSON: an array of phrases, or a whole dictionary as `GET` returns it, so an export
+  imports back unchanged.
+
+The web UI manages all of this on its **Dictionaries** screen: search across phrases,
+create and edit, upload and download, and a list of which installed models the
+dictionaries can actually be applied to.
+
+### Which models dictionaries work with
+
+| Model | Hotwords | Why |
+|---|---|---|
+| `gigaam-v2-ctc-ru` | no | CTC: there is no beam to bias |
+| `gigaam-v3-ctc-punct-ru` | no | CTC |
+| `gigaam-v3-rnnt-punct-ru` | no | transducer with subwords, but the archive ships no vocabulary file |
+| `gigaam-v2-rnnt-ru` | no | transducer with a character vocabulary, which sherpa-onnx cannot tokenise hotwords for |
+| `t-one-ctc-ru` | no | streaming CTC |
+| `streaming-zipformer-small-ru` | no | streaming: a recogniser is biased when it is built, not per request |
+| `zipformer-small-en` | no | transducer with subwords, no vocabulary file |
+
+So: nothing in the built-in catalog today. The gap is one file, not a missing feature —
+`gigaam-v3-rnnt-punct-ru` becomes biasable the moment its SentencePiece vocabulary sits
+beside the weights:
+
+```bash
+curl -LO https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt_tokenizer.model
+cp v3_e2e_rnnt_tokenizer.model .models/gigaam-v3-rnnt-punct-ru@2025-12-16/bpe.model
+# then add  bpe_vocab: bpe.model  under files: in that directory's model.yaml
+```
+
+Both forms are accepted: the binary SentencePiece model as downloaded, or a text
+`<piece> <score>` vocabulary. sherpa-onnx itself reads only the second and calls `exit()`
+on the first, so NanoASR converts at load time rather than handing it over to find out.
+GigaAM is MIT-licensed, and `nanoasr models inspect <dir>` wires the file into a draft
+manifest for you.
+
+Streaming recognition cannot be biased at all, whatever the model: a streaming
+recogniser settles its hotwords when it is constructed, so a per-session list would mean
+a second resident copy of the model for the life of a connection. The realtime dialect
+reports this to clients that send `prompt`.
 
 ## Diarization
 

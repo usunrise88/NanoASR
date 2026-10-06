@@ -435,3 +435,24 @@ func hasWarning(ws []core.Warning, code string) bool {
 	}
 	return false
 }
+
+// hotwords_dict is this dialect's one addition to OpenAI's parameter list: a
+// client with a curated vocabulary names it instead of sending the phrases on
+// every call, which is what prompt forced.
+func TestTranscriptionsAcceptsDictionaryKeys(t *testing.T) {
+	svc := &fakeService{result: sampleResult()}
+	postTranscription(t, newServer(t, svc, fakeModels{}), nil,
+		field{"hotwords_dict", "Medical, staff-names"},
+		field{"hotwords_dict[]", "products"})
+
+	want := []string{"medical", "staff-names", "products"}
+	if len(svc.got.HotwordDicts) != len(want) {
+		t.Fatalf("HotwordDicts = %q, want %q", svc.got.HotwordDicts, want)
+	}
+	for i := range want {
+		if svc.got.HotwordDicts[i] != want[i] {
+			t.Fatalf("HotwordDicts = %q, want %q (lower case, both forms)",
+				svc.got.HotwordDicts, want)
+		}
+	}
+}

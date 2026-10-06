@@ -21,7 +21,7 @@ import (
 
 // schemaVersion is bumped whenever Schema changes shape. Migrations are
 // numbered and applied by hand; there is no generator on purpose.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // defaultLimit caps a history page when the caller does not say.
 const defaultLimit = 50

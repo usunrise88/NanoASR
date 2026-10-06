@@ -116,21 +116,26 @@ func parseParams(r *http.Request, source core.AudioSource) (params, error) {
 		}
 		p.request.HotwordsScore = float32(score)
 	}
-	p.request.Hotwords = hotwords(r)
+	p.request.Hotwords = commaList(r, "hotwords")
+	// Dictionary keys are lower case by definition, so a caller who typed one
+	// in capitals gets the dictionary rather than "no such dictionary".
+	for _, key := range commaList(r, "hotwords_dict") {
+		p.request.HotwordDicts = append(p.request.HotwordDicts, strings.ToLower(key))
+	}
 
 	return p, nil
 }
 
-// hotwords accepts the repeated form as well as one comma-separated field,
+// commaList accepts the repeated form as well as one comma-separated field,
 // because both are natural to write and neither is wrong.
-func hotwords(r *http.Request) []string {
+func commaList(r *http.Request, name string) []string {
 	var raw []string
 	if r.MultipartForm != nil {
-		raw = append(raw, r.MultipartForm.Value["hotwords[]"]...)
-		raw = append(raw, r.MultipartForm.Value["hotwords"]...)
+		raw = append(raw, r.MultipartForm.Value[name+"[]"]...)
+		raw = append(raw, r.MultipartForm.Value[name]...)
 	} else {
-		raw = append(raw, r.Form["hotwords[]"]...)
-		raw = append(raw, r.Form["hotwords"]...)
+		raw = append(raw, r.Form[name+"[]"]...)
+		raw = append(raw, r.Form[name]...)
 	}
 
 	var out []string

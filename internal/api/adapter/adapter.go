@@ -23,6 +23,14 @@ type Deps struct {
 	// Realtime is nil unless a streaming model is loaded, which is the normal
 	// case: a dialect that needs it must say so rather than assume.
 	Realtime core.RealtimeService
+	// Dictionaries is the hotword dictionary store, nil on a server built
+	// without one. A dialect that offers dictionary management must say so
+	// rather than assume, the same way Realtime is handled.
+	Dictionaries core.Dictionaries
+	// HotwordPolicy is what this server will do with a dictionary once it has
+	// one. A management screen that could not say "biasing is switched off
+	// here" would let somebody curate a list for an hour before finding out.
+	HotwordPolicy core.HotwordPolicy
 	// MaxUploadBytes is enforced by middleware too; dialects need it to report
 	// the limit in their own error shape.
 	MaxUploadBytes int64

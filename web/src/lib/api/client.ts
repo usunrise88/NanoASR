@@ -1,6 +1,8 @@
 import { apiKey, reportAuthRequired } from '@/lib/auth'
 
 import type {
+  Dictionary,
+  DictionaryPage,
   DownloadProgress,
   Job,
   JobFilter,
@@ -200,6 +202,77 @@ export function reloadModel(id: string, revision: string): Promise<ModelInfo> {
   )
 }
 
+// --- hotword dictionaries ----------------------------------------------------
+
+export function listDictionaries(query = ''): Promise<DictionaryPage> {
+  const q = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''
+  return request<DictionaryPage>(`/hotwords${q}`)
+}
+
+export function getDictionary(key: string): Promise<Dictionary> {
+  return request<Dictionary>(`/hotwords/${encodeURIComponent(key)}`)
+}
+
+/** The write shape: phrases as a list, or `text` as one block from a textarea. */
+export interface DictionaryInput {
+  key: string
+  name?: string
+  description?: string
+  score?: number
+  phrases?: string[]
+  text?: string
+}
+
+/** POST refuses an existing key; PUT replaces one. */
+export function createDictionary(input: DictionaryInput): Promise<Dictionary> {
+  return request<Dictionary>('/hotwords', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export function replaceDictionary(input: DictionaryInput): Promise<Dictionary> {
+  return request<Dictionary>(`/hotwords/${encodeURIComponent(input.key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteDictionary(key: string): Promise<void> {
+  return request<void>(`/hotwords/${encodeURIComponent(key)}`, { method: 'DELETE' })
+}
+
+/**
+ * Uploads a file of phrases. `mode` decides whether it adds to the dictionary
+ * or replaces its contents; the server creates the dictionary when the key is
+ * new, which is what makes a drop zone one request instead of two.
+ */
+export function importDictionary(
+  key: string,
+  file: File,
+  mode: 'append' | 'replace' = 'append',
+): Promise<Dictionary> {
+  const form = new FormData()
+  form.set('file', file)
+  return request<Dictionary>(
+    `/hotwords/${encodeURIComponent(key)}/import?mode=${mode}`,
+    { method: 'POST', body: form },
+  )
+}
+
+/** The plain-text export, which the import endpoint reads back. */
+export async function exportDictionary(key: string): Promise<string> {
+  const response = await fetch(
+    `${BASE}/hotwords/${encodeURIComponent(key)}?response_format=text`,
+    { headers: authHeaders() },
+  )
+  if (response.status === 401) reportAuthRequired()
+  if (!response.ok) throw await toError(response)
+  return response.text()
+}
+
 export function downloadPath(id: string): string {
   return `${BASE}/models/${encodeURIComponent(id)}/download`
 }
@@ -208,4 +281,4 @@ export function jobEventsPath(id: string): string {
   return `${BASE}/jobs/${encodeURIComponent(id)}/events`
 }
 
-export type { DownloadProgress }
+export type { Dictionary, DownloadProgress }

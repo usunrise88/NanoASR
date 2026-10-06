@@ -113,9 +113,17 @@ export function Grid({
 }
 
 /** Card is the standard raised container. */
-export function Card({ children, className }: WithChildren) {
+export function Card({
+  children,
+  className,
+  // The one hook a card carries: which row of data it is. The player marks its
+  // words the same way, and it is what lets a test scope to one card on a page
+  // that may hold a dozen similar ones.
+  'data-item': dataItem,
+}: WithChildren & { 'data-item'?: string }) {
   return (
     <div
+      data-item={dataItem}
       className={cn(
         'rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4',
         className,

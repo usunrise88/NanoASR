@@ -260,8 +260,15 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		return out
 	}
 	if err := adapter.MountAll(mux, cfg.API.Dialects, srv.service, adapter.Deps{
-		Models:         srv.models,
-		Realtime:       srv.realtimeService(),
+		Models:       srv.models,
+		Realtime:     srv.realtimeService(),
+		Dictionaries: srv.store.Dictionaries(),
+		HotwordPolicy: core.HotwordPolicy{
+			Enabled:      cfg.PostProc.Hotwords.Enabled,
+			DefaultScore: cfg.PostProc.Hotwords.DefaultScore,
+			MaxVariants:  cfg.ASR.Variants.Max,
+			MaxPhrases:   cfg.PostProc.Hotwords.MaxPhrases,
+		},
 		MaxUploadBytes: cfg.Server.MaxUploadBytes,
 		ConfigSnapshot: snapshot,
 	}); err != nil {

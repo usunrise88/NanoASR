@@ -108,6 +108,21 @@ func HotwordsSupport(family, modelingUnit, decodingMethod string, hasBPEVocab bo
 	}
 }
 
+// HotwordsCapability answers "can this model be biased at all", for a model
+// that may not be loaded, and says why not when it cannot.
+//
+// The question a person asks is about the model, not about one request, so the
+// decoding method is the best one available rather than whatever is configured:
+// a model that decodes greedily today can be asked for beam search by the
+// request that wants a bias. What it cannot do is change its family or grow a
+// vocabulary file, and those are the answers worth reporting.
+func HotwordsCapability(family, modelingUnit string, hasBPEVocab bool) (bool, string) {
+	if err := HotwordsSupport(family, modelingUnit, ModifiedBeamSearch, hasBPEVocab); err != nil {
+		return false, core.AsError(err).Message
+	}
+	return true, ""
+}
+
 // Decoding methods sherpa-onnx accepts.
 const (
 	GreedySearch       = "greedy_search"

@@ -128,6 +128,13 @@ func (m *Models) describe(man registry.Manifest, state core.ModelState) core.Mod
 	if state != core.ModelAbsent {
 		caps.PunctuationBuiltin = m.vocabularyPunctuates(man)
 	}
+	// Biasing is answered for every state, the catalog included: somebody
+	// choosing what to download needs to know which entries can carry a
+	// dictionary before they spend the gigabyte.
+	if man.EffectiveKind() == registry.KindASR {
+		caps.Hotwords, caps.HotwordsReason = asr.HotwordsCapability(
+			man.Family, man.ModelingUnit, man.Files["bpe_vocab"] != "")
+	}
 	return core.ModelInfo{
 		ID:           man.ID,
 		Revision:     man.Revision,

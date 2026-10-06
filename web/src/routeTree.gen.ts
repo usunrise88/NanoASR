@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as HotwordsRouteImport } from './routes/hotwords'
 import { Route as JobsRouteImport } from './routes/jobs'
 import { Route as ModelsRouteImport } from './routes/models'
 import { Route as SettingsRouteImport } from './routes/settings'
@@ -18,6 +19,11 @@ import { Route as ResultJobIdRouteImport } from './routes/result.$jobId'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HotwordsRoute = HotwordsRouteImport.update({
+  id: '/hotwords',
+  path: '/hotwords',
   getParentRoute: () => rootRouteImport,
 } as any)
 const JobsRoute = JobsRouteImport.update({
@@ -43,6 +49,7 @@ const ResultJobIdRoute = ResultJobIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/hotwords': typeof HotwordsRoute
   '/jobs': typeof JobsRoute
   '/models': typeof ModelsRoute
   '/settings': typeof SettingsRoute
@@ -50,6 +57,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/hotwords': typeof HotwordsRoute
   '/jobs': typeof JobsRoute
   '/models': typeof ModelsRoute
   '/settings': typeof SettingsRoute
@@ -58,6 +66,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/hotwords': typeof HotwordsRoute
   '/jobs': typeof JobsRoute
   '/models': typeof ModelsRoute
   '/settings': typeof SettingsRoute
@@ -65,14 +74,23 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/jobs' | '/models' | '/settings' | '/result/$jobId'
+  fullPaths:
+    '/' | '/hotwords' | '/jobs' | '/models' | '/settings' | '/result/$jobId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/jobs' | '/models' | '/settings' | '/result/$jobId'
-  id: '__root__' | '/' | '/jobs' | '/models' | '/settings' | '/result/$jobId'
+  to: '/' | '/hotwords' | '/jobs' | '/models' | '/settings' | '/result/$jobId'
+  id:
+    | '__root__'
+    | '/'
+    | '/hotwords'
+    | '/jobs'
+    | '/models'
+    | '/settings'
+    | '/result/$jobId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  HotwordsRoute: typeof HotwordsRoute
   JobsRoute: typeof JobsRoute
   ModelsRoute: typeof ModelsRoute
   SettingsRoute: typeof SettingsRoute
@@ -86,6 +104,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/hotwords': {
+      id: '/hotwords'
+      path: '/hotwords'
+      fullPath: '/hotwords'
+      preLoaderRoute: typeof HotwordsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/jobs': {
@@ -121,6 +146,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  HotwordsRoute: HotwordsRoute,
   JobsRoute: JobsRoute,
   ModelsRoute: ModelsRoute,
   SettingsRoute: SettingsRoute,

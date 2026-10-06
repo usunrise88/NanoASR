@@ -4,7 +4,7 @@ export type { ButtonProps, ButtonSize, ButtonVariant, IconButtonProps } from './
 export { Dialog, Popover, Sheet } from './Surfaces'
 export type { PopoverProps, SurfaceProps } from './Surfaces'
 
-export { Field, Input, Select, Switch } from './Field'
+export { Field, Input, Select, Switch, Textarea } from './Field'
 export type { FieldProps, SelectProps, SwitchProps } from './Field'
 
 export { Badge, Detail, EmptyState, ErrorState, Progress } from './Display'

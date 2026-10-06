@@ -1,8 +1,20 @@
 import { Field as BaseField } from '@base-ui/react/field'
 import { Switch as BaseSwitch } from '@base-ui/react/switch'
-import type { InputHTMLAttributes, ReactNode } from 'react'
+import { createContext, useContext, useId } from 'react'
+import type { InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 'react'
 
 import { cn } from '@/lib/cn'
+
+/**
+ * The id a Field hands to the control inside it.
+ *
+ * Without it the label is a sibling of the input with nothing tying the two
+ * together: a screen reader announces an unlabelled text box, and clicking the
+ * label does nothing. Passing the id through context rather than asking every
+ * call site to invent one keeps `<Field label=…><Input/></Field>` the whole of
+ * what a form has to write.
+ */
+const FieldId = createContext<string | undefined>(undefined)
 
 /**
  * Form controls, wrapped once.
@@ -28,10 +40,13 @@ export interface FieldProps {
 }
 
 export function Field({ label, description, error, children }: FieldProps) {
+  const id = useId()
   return (
     <BaseField.Root className="flex flex-col gap-1.5">
-      <BaseField.Label className="text-[13px] font-medium">{label}</BaseField.Label>
-      {children}
+      <BaseField.Label htmlFor={id} className="text-[13px] font-medium">
+        {label}
+      </BaseField.Label>
+      <FieldId.Provider value={id}>{children}</FieldId.Provider>
       {description && !error && (
         <p className="text-[12px] text-[var(--text-muted)]">{description}</p>
       )}
@@ -40,8 +55,25 @@ export function Field({ label, description, error, children }: FieldProps) {
   )
 }
 
-export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(control, className)} {...rest} />
+export function Input({ className, id, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+  const fieldId = useContext(FieldId)
+  return <input id={id ?? fieldId} className={cn(control, className)} {...rest} />
+}
+
+/**
+ * A multi-line input, for the one thing in this product that is genuinely a
+ * list: the phrases of a hotword dictionary. It borrows the control styling
+ * rather than its height, which is the caller's to set.
+ */
+export function Textarea({ className, id, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const fieldId = useContext(FieldId)
+  return (
+    <textarea
+      id={id ?? fieldId}
+      className={cn(control, 'h-auto py-2 leading-5', className)}
+      {...rest}
+    />
+  )
 }
 
 export interface SelectProps {
@@ -61,9 +93,10 @@ export interface SelectProps {
  * would have to reimplement to draw a nicer arrow.
  */
 export function Select({ value, onChange, options, disabled, id }: SelectProps) {
+  const fieldId = useContext(FieldId)
   return (
     <select
-      id={id}
+      id={id ?? fieldId}
       value={value}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}

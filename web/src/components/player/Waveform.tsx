@@ -24,7 +24,10 @@ export function Waveform({
 }: {
   peaks: Peaks | undefined
   duration: number
-  silence: Silence[]
+  // Null when the server ran without VAD: there are no measured gaps to draw,
+  // which is a different thing from an empty list and used to be a white
+  // screen — "n is not iterable" from the loop below.
+  silence: Silence[] | null
   currentTime: number
   onSeek: (seconds: number) => void
   height?: number
@@ -57,7 +60,7 @@ export function Waveform({
       // Silence first, as a band behind the wave: it is context for the shape
       // on top of it, not a mark of its own.
       ctx.fillStyle = styles.getPropertyValue('--wave-silence').trim()
-      for (const gap of silence) {
+      for (const gap of silence ?? []) {
         const x = gap.start * perSecond
         ctx.fillRect(x, 0, Math.max(1, (gap.end - gap.start) * perSecond), height)
       }

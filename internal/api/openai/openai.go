@@ -171,6 +171,7 @@ type params struct {
 	model     string
 	language  string
 	prompt    string
+	dicts     []string
 	format    string
 	wantWords bool
 	strict    bool
@@ -183,6 +184,7 @@ func parseParams(r *http.Request) (params, error) {
 		model:    strings.TrimSpace(r.FormValue("model")),
 		language: strings.TrimSpace(r.FormValue("language")),
 		prompt:   strings.TrimSpace(r.FormValue("prompt")),
+		dicts:    dictKeys(r),
 		format:   strings.TrimSpace(r.FormValue("response_format")),
 		strict:   isTruthy(r.Header.Get("X-NanoASR-Strict")),
 	}
@@ -255,7 +257,31 @@ func (p params) toRequest(source core.AudioSource) core.Request {
 			}
 		}
 	}
+	req.HotwordDicts = p.dicts
 	return req
+}
+
+// dictKeys reads hotwords_dict, which OpenAI's API does not have.
+//
+// An extension rather than a reinterpretation of something that exists: prompt
+// is already spoken for, and a client sending a two-hundred-phrase vocabulary
+// through it on every call is the thing dictionaries were added to stop. An
+// OpenAI client that does not know the field simply never sends it.
+func dictKeys(r *http.Request) []string {
+	// Forces the body to be parsed when nothing else has yet: r.Form is empty
+	// until something asks for a field, and a dictionary silently dropped
+	// because of evaluation order would be a bad way to find that out.
+	_ = r.FormValue("hotwords_dict")
+
+	var out []string
+	for _, entry := range append(r.Form["hotwords_dict"], r.Form["hotwords_dict[]"]...) {
+		for _, key := range strings.Split(entry, ",") {
+			if k := strings.ToLower(strings.TrimSpace(key)); k != "" {
+				out = append(out, k)
+			}
+		}
+	}
+	return out
 }
 
 func (p params) warnings() []core.Warning {

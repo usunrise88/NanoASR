@@ -106,6 +106,8 @@ asr:
   # warning; raising this trades memory for per-request control.
   variants:
     max: 0
+    # Ignored, and kept only so configurations that set it still start:
+    # postproc.hotwords.enabled is the switch, and it needs max above it > 0.
     allow_hotwords: false
 
 # Streaming recognition, served by the realtime dialect over a websocket.
@@ -181,6 +183,9 @@ postproc:
   hotwords:
     enabled: false              # requires asr.variants.max > 0
     default_score: 1.5
+    # Bound on one stored dictionary. Accuracy gives out long before this
+    # does: the longer a bias list, the more often it fires in the wrong place.
+    max_phrases: 5000
 
 diarization:
   enabled: false

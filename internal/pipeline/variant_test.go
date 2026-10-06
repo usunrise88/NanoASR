@@ -244,3 +244,197 @@ func TestDecodingMethodDroppedWhenTheFamilyCannotRunIt(t *testing.T) {
 		t.Errorf("variant %+v reached the loader with an unsupported method", h.loaded[0])
 	}
 }
+
+// greedyBiasable is the shape every catalog entry actually has: a model that
+// could be biased, configured to decode greedily because that is what ordinary
+// traffic should use.
+type greedyBiasable struct{ biasableRegistry }
+
+func (r greedyBiasable) Resolve(ctx context.Context, id string) (registry.Manifest, error) {
+	m, err := r.biasableRegistry.Resolve(ctx, id)
+	if err != nil {
+		return m, err
+	}
+	m.Runtime.DecodingMethod = asr.GreedySearch
+	return m, nil
+}
+
+// fakeDictionaries is the store, with only what the pipeline reads from it.
+type fakeDictionaries struct {
+	byKey map[string]core.Dictionary
+	asked []string
+}
+
+func (f *fakeDictionaries) Get(_ context.Context, key string) (core.Dictionary, error) {
+	f.asked = append(f.asked, key)
+	d, ok := f.byKey[key]
+	if !ok {
+		return core.Dictionary{}, core.Errorf(core.CodeDictionaryNotFound, "no such dictionary: %s", key)
+	}
+	return d, nil
+}
+
+func (f *fakeDictionaries) List(context.Context, string, int) ([]core.Dictionary, error) {
+	return nil, nil
+}
+func (f *fakeDictionaries) Save(_ context.Context, d core.Dictionary) (core.Dictionary, error) {
+	return d, nil
+}
+func (f *fakeDictionaries) Delete(context.Context, string) error { return nil }
+
+func TestADictionaryKeyBringsItsPhrasesAndItsScore(t *testing.T) {
+	h := newVariantHarness(t, biasableRegistry{}, variantOptions{
+		Options:     Options{HotwordsEnabled: true, HotwordsDefaultScore: 1.5},
+		maxVariants: 1,
+	})
+	dicts := &fakeDictionaries{byKey: map[string]core.Dictionary{
+		"medical": {Key: "medical", Score: 1.9, Phrases: []string{"кардиомиопатия", "амиодарон"}},
+	}}
+	h.pipeline.WithDictionaries(dicts)
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio: &fakeSource{}, HotwordDicts: []string{"medical"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWarning(got.Warnings, "hotwords_unavailable") {
+		t.Errorf("warnings %+v say the dictionary was dropped", got.Warnings)
+	}
+	if len(h.loaded) != 1 {
+		t.Fatalf("loaded %d recognisers, want 1", len(h.loaded))
+	}
+	v := h.loaded[0]
+	if v.Hotwords != "кардиомиопатия\nамиодарон" {
+		t.Errorf("variant hotwords = %q, want the dictionary's phrases", v.Hotwords)
+	}
+	// The dictionary's own score outranks the server default: how hard to push
+	// a list is a property of the list.
+	if v.HotwordsScore != 1.9 {
+		t.Errorf("HotwordsScore = %v, want the dictionary's 1.9", v.HotwordsScore)
+	}
+}
+
+func TestADictionaryAndInlineHotwordsMergeWithoutRepeats(t *testing.T) {
+	h := newVariantHarness(t, biasableRegistry{}, variantOptions{
+		Options:     Options{HotwordsEnabled: true, HotwordsDefaultScore: 1.5},
+		maxVariants: 1,
+	})
+	h.pipeline.WithDictionaries(&fakeDictionaries{byKey: map[string]core.Dictionary{
+		"a": {Key: "a", Phrases: []string{"ромашка", "василёк"}},
+	}})
+
+	if _, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio:    &fakeSource{},
+		Hotwords: []string{"василёк", "лютик"},
+		// The same dictionary named twice must not produce a different
+		// variant from naming it once.
+		HotwordDicts: []string{"a", "a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.loaded[0].Hotwords; got != "ромашка\nвасилёк\nлютик" {
+		t.Errorf("variant hotwords = %q, want the merged list", got)
+	}
+}
+
+// A key that names nothing is a typo in a parameter. Transcribing without the
+// bias and mentioning it in a warning would hide it behind a result that looks
+// correct.
+func TestAnUnknownDictionaryIsRefused(t *testing.T) {
+	h := newVariantHarness(t, biasableRegistry{}, variantOptions{
+		Options:     Options{HotwordsEnabled: true},
+		maxVariants: 1,
+	})
+	h.pipeline.WithDictionaries(&fakeDictionaries{byKey: map[string]core.Dictionary{}})
+
+	_, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio: &fakeSource{}, HotwordDicts: []string{"absent"},
+	})
+	if err == nil {
+		t.Fatal("a request naming a dictionary that does not exist was accepted")
+	}
+	e := core.AsError(err)
+	if e.Code != core.CodeInvalidRequest || e.Param != "hotwords_dict" {
+		t.Errorf("error = %+v, want invalid_request on hotwords_dict", e)
+	}
+	if !strings.Contains(e.Message, "absent") {
+		t.Errorf("message %q should name the key", e.Message)
+	}
+}
+
+// Every model in the catalog decodes greedily, and hotwords only apply during
+// beam search. A request that asks for a bias and names no method gets the one
+// that can carry it.
+func TestHotwordsPromoteGreedyDecodingToBeamSearch(t *testing.T) {
+	h := newVariantHarness(t, greedyBiasable{}, variantOptions{
+		Options:     Options{HotwordsEnabled: true, HotwordsDefaultScore: 1.5},
+		maxVariants: 1,
+	})
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio: &fakeSource{}, Hotwords: []string{"ромашка"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWarning(got.Warnings, "hotwords_unavailable") {
+		t.Fatalf("warnings %+v say the hotwords were dropped", got.Warnings)
+	}
+	if !hasWarning(got.Warnings, "decoding_method_promoted") {
+		t.Errorf("warnings %+v should say the decoding method changed", got.Warnings)
+	}
+	if v := h.loaded[0]; v.DecodingMethod != asr.ModifiedBeamSearch || v.Hotwords != "ромашка" {
+		t.Errorf("variant = %+v, want beam search carrying the phrase", v)
+	}
+}
+
+// Promotion is for a caller who said nothing about decoding. One who asked for
+// greedy_search asked for something that cannot carry a bias, and is told that
+// rather than overridden.
+func TestAnExplicitGreedySearchIsNotOverridden(t *testing.T) {
+	h := newVariantHarness(t, greedyBiasable{}, variantOptions{
+		Options:     Options{HotwordsEnabled: true},
+		maxVariants: 1,
+	})
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio: &fakeSource{}, Hotwords: []string{"ромашка"},
+		DecodingMethod: asr.GreedySearch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWarning(got.Warnings, "decoding_method_promoted") {
+		t.Errorf("warnings %+v overrode a decoding method the caller chose", got.Warnings)
+	}
+	if !hasWarning(got.Warnings, "hotwords_unavailable") {
+		t.Errorf("warnings %+v should say why the bias was not applied", got.Warnings)
+	}
+	if v := h.loaded[0]; v.DecodingMethod != asr.GreedySearch {
+		t.Errorf("variant = %+v, want the method the caller asked for", v)
+	}
+}
+
+// A server with no store behind it cannot resolve a key, and says so instead of
+// failing the transcription.
+func TestDictionariesWithoutAStoreAreReported(t *testing.T) {
+	h := newVariantHarness(t, biasableRegistry{}, variantOptions{
+		Options:     Options{HotwordsEnabled: true},
+		maxVariants: 1,
+	})
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio: &fakeSource{}, HotwordDicts: []string{"medical"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, ok := findWarning(got.Warnings, "hotwords_unavailable")
+	if !ok {
+		t.Fatalf("warnings %+v should say the dictionary could not be read", got.Warnings)
+	}
+	if !strings.Contains(w.Message, "medical") {
+		t.Errorf("message %q should name the dictionary", w.Message)
+	}
+}

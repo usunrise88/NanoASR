@@ -45,6 +45,31 @@ CREATE TABLE IF NOT EXISTS api_keys (
   disabled   INTEGER NOT NULL DEFAULT 0
 );
 
+-- Hotword dictionaries: a named phrase list a request can ask for by key.
+--
+-- The phrases are rows rather than a JSON column so that searching for one
+-- across every dictionary is a query rather than a scan in Go. phrase_lc and
+-- search carry the same text folded to lower case, because SQLite's own lower()
+-- and LIKE fold ASCII only, and these lists are mostly Russian.
+CREATE TABLE IF NOT EXISTS hotword_dicts (
+  key         TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  score       REAL NOT NULL DEFAULT 0,
+  search      TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS hotword_phrases (
+  dict_key  TEXT NOT NULL REFERENCES hotword_dicts(key) ON DELETE CASCADE,
+  ord       INTEGER NOT NULL,
+  phrase    TEXT NOT NULL,
+  phrase_lc TEXT NOT NULL,
+  PRIMARY KEY (dict_key, ord)
+);
+CREATE INDEX IF NOT EXISTS hotword_phrases_lc ON hotword_phrases(phrase_lc);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version    INTEGER PRIMARY KEY,
   applied_at INTEGER NOT NULL
