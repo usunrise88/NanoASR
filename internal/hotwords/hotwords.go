@@ -12,7 +12,6 @@ package hotwords
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -113,7 +112,7 @@ func Clean(d core.Dictionary, maxPhrases int) (core.Dictionary, error) {
 			MaxScore, d.Score).WithParam("score")
 	}
 
-	phrases, err := CleanPhrases(d.Phrases, maxPhrases)
+	phrases, err := cleanPhrases(d.Phrases, maxPhrases)
 	if err != nil {
 		return d, err
 	}
@@ -122,9 +121,9 @@ func Clean(d core.Dictionary, maxPhrases int) (core.Dictionary, error) {
 	return d, nil
 }
 
-// CleanPhrases trims, drops the empties and the repeats, and refuses what
+// cleanPhrases trims, drops the empties and the repeats, and refuses what
 // cannot be sent to a recogniser.
-func CleanPhrases(in []string, maxPhrases int) ([]string, error) {
+func cleanPhrases(in []string, maxPhrases int) ([]string, error) {
 	if maxPhrases <= 0 {
 		maxPhrases = DefaultMaxPhrases
 	}
@@ -174,10 +173,11 @@ func CleanPhrases(in []string, maxPhrases int) ([]string, error) {
 //     was sending hotwords[] inline;
 //   - a JSON object, which is what this server exports, so an export imports
 //     again unchanged;
-//   - anything else: one phrase per line, blank lines ignored, "#" starting a
-//     comment, and commas separating phrases on a line — which makes a
-//     one-column CSV and a comma-separated list the same file as far as this
-//     is concerned.
+//   - anything else: one phrase per line, blank lines ignored, and a line
+//     starting with "#" taken as a comment. A file that is a single line is
+//     also split on commas, which is what a list pasted out of a spreadsheet
+//     cell looks like; a multi-line file is not, because a phrase there may
+//     contain a comma.
 //
 // What comes back carries only what the file said. The caller decides what the
 // key is when the file did not name one.
@@ -207,21 +207,36 @@ func Parse(data []byte) (core.Dictionary, error) {
 		return d, nil
 	}
 
+	// One phrase per line. A single line may instead be the comma-separated
+	// form, which is how a list pasted out of a spreadsheet cell or out of a
+	// hotwords= parameter arrives. Commas are not split in a multi-line file,
+	// because a phrase there may contain one — "Иванов, Иван" is one entry, and
+	// an export has to import back as what it was.
+	lines := strings.Split(string(data), "\n")
+	oneLine := countNonBlank(lines) == 1
+
 	var phrases []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = line[:i]
+	for i, line := range lines {
+		// A comment is a line that starts with #. Further in it is text: C#,
+		// F# and SKU#4711 are the kind of thing a bias list is written for.
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
 		}
-		for _, part := range strings.Split(line, ",") {
+		parts := []string{line}
+		if oneLine {
+			parts = strings.Split(line, ",")
+		}
+		for _, part := range parts {
 			p := strings.TrimSpace(part)
 			if p == "" {
 				continue
 			}
-			// A spreadsheet exports its column name with the column. Keeping
-			// it would bias a recogniser towards the word "phrase", which is
-			// the kind of thing nobody notices until it appears in a
-			// transcript.
-			if len(phrases) == 0 && isColumnHeader(p) {
+			// A spreadsheet exports its column name with the column, and it
+			// is the very first line of the file that carries it. Not the
+			// first phrase: after a comment header — which is what this
+			// package's own text export writes — the first phrase is a phrase,
+			// even when it happens to be the word "text".
+			if i == 0 && isColumnHeader(p) {
 				continue
 			}
 			phrases = append(phrases, p)
@@ -234,9 +249,10 @@ func Parse(data []byte) (core.Dictionary, error) {
 	return core.Dictionary{Phrases: phrases}, nil
 }
 
-// isColumnHeader reports whether a first line is a spreadsheet's column name
-// rather than a phrase. Only the names a column of hotwords plausibly carries,
-// and only in first position: "word" further down the file is a word.
+// isColumnHeader reports whether the first line of a file is a spreadsheet's
+// column name rather than a phrase. Only the names a column of hotwords
+// plausibly carries, and only on that first line: "word" further down is a
+// word somebody wants recognised.
 func isColumnHeader(s string) bool {
 	switch strings.ToLower(s) {
 	case "phrase", "phrases", "word", "words", "hotword", "hotwords", "term", "terms", "text":
@@ -246,7 +262,11 @@ func isColumnHeader(s string) bool {
 }
 
 // Text renders a dictionary's phrases as the plain file Parse reads back: the
-// header names it, and "#" makes those lines comments rather than phrases.
+// header names it, and "#" at the start of those lines makes them comments.
+//
+// Round trips for everything but a phrase that itself begins with "#", which
+// comes back as a comment. The JSON export has no such corner, and the field
+// documentation says so.
 func Text(d core.Dictionary) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n", d.Key)
@@ -272,7 +292,11 @@ func Text(d core.Dictionary) string {
 // request naming the same two dictionaries twice does not build two different
 // recogniser variants of the same thing.
 func Merge(dicts []core.Dictionary, extra []string) []string {
-	out := make([]string, 0, len(extra))
+	size := len(extra)
+	for _, d := range dicts {
+		size += len(d.Phrases)
+	}
+	out := make([]string, 0, size)
 	seen := map[string]bool{}
 	add := func(phrases []string) {
 		for _, p := range phrases {
@@ -290,24 +314,16 @@ func Merge(dicts []core.Dictionary, extra []string) []string {
 	return out
 }
 
-// Search reports the phrases of a dictionary that contain the query, folded to
-// lower case, capped at most.
-func Search(phrases []string, query string, most int) []string {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return nil
-	}
-	var hits []string
-	for _, p := range phrases {
-		if strings.Contains(strings.ToLower(p), q) {
-			hits = append(hits, p)
-			if len(hits) == most {
-				break
-			}
+// countNonBlank is how Parse tells a comma-separated list from a file whose
+// phrases may contain commas.
+func countNonBlank(lines []string) int {
+	n := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			n++
 		}
 	}
-	sort.SliceStable(hits, func(i, j int) bool { return len(hits[i]) < len(hits[j]) })
-	return hits
+	return n
 }
 
 func truncate(s string, runes int) string {

@@ -26,10 +26,14 @@ type Dictionary struct {
 	Description string `json:"description,omitempty"`
 
 	// Phrases is the list itself. A listing leaves it out — a page of
-	// dictionaries is a page of names, not of their contents — so a client
-	// reading it there must not take nil for "empty": PhraseCount is the one
-	// that is always answered.
-	Phrases     []string `json:"phrases,omitempty"`
+	// dictionaries is a page of names, not of their contents.
+	//
+	// Not omitempty, so the two cases a client has to tell apart look
+	// different on the wire: a listing sends null, meaning "not included
+	// here", and a dictionary that genuinely holds nothing sends []. With
+	// omitempty an empty dictionary was indistinguishable from a listing row,
+	// and the only honest answer was "read the documentation".
+	Phrases     []string `json:"phrases"`
 	PhraseCount int      `json:"phrase_count"`
 
 	// Matches are the phrases a search matched, capped. A listing that
@@ -85,6 +89,15 @@ type Dictionaries interface {
 	// patching is deliberate: a phrase list is edited as a list, and a partial
 	// update API for it would be a merge nobody asked for.
 	Save(ctx context.Context, d Dictionary) (Dictionary, error)
+	// Create stores a dictionary that does not exist yet, answering
+	// CodeDictionaryExists when the key is taken.
+	//
+	// Separate from Save because the question is not "does it exist" but "does
+	// it exist at the moment of writing": two clients creating the same key
+	// would both pass a read-then-write check, and the second would silently
+	// replace the first — which is the outcome creating rather than replacing
+	// exists to prevent.
+	Create(ctx context.Context, d Dictionary) (Dictionary, error)
 	// Delete removes one. A dictionary a request still names afterwards is
 	// reported to that request rather than silently ignored.
 	Delete(ctx context.Context, key string) error

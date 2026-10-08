@@ -107,6 +107,29 @@ type Source struct {
 	URL       string `yaml:"url,omitempty" json:"url"`
 	SHA256    string `yaml:"sha256,omitempty" json:"sha256"`
 	SizeBytes int64  `yaml:"size_bytes,omitempty" json:"size_bytes"`
+	// Extra are files a model needs that its archive does not contain, fetched
+	// beside it and installed into the same directory.
+	//
+	// It exists because a model's publisher and its exporter are not always the
+	// same people: sherpa-onnx packages GigaAM's weights, and GigaAM publishes
+	// the SentencePiece vocabulary those weights were trained against, without
+	// which the recogniser works and cannot be biased. Naming the second file
+	// here is the difference between a feature that works on install and a page
+	// of instructions.
+	Extra []ExtraFile `yaml:"extra,omitempty" json:"extra,omitempty"`
+}
+
+// ExtraFile is one file fetched alongside a model archive.
+//
+// Name is what it is called in the model directory, so files: can refer to it
+// like anything the archive brought. It is a bare file name on purpose: an
+// entry that could write "../../etc/..." would make a catalog mirror a way to
+// write anywhere the server can.
+type ExtraFile struct {
+	Name      string `yaml:"name" json:"name"`
+	URL       string `yaml:"url" json:"url"`
+	SHA256    string `yaml:"sha256" json:"sha256"`
+	SizeBytes int64  `yaml:"size_bytes,omitempty" json:"size_bytes,omitempty"`
 }
 
 // Key is the cache identity of a specific revision of a model.
@@ -147,6 +170,25 @@ func (m Manifest) Validate() error {
 		if _, err := m.FilePath("/", role); err != nil {
 			return core.Errorf(core.CodeInvalidRequest,
 				"model %s: file %q has an unusable path %q", m.ID, role, name)
+		}
+	}
+	for i, extra := range m.Source.Extra {
+		switch {
+		case extra.Name == "":
+			return core.Errorf(core.CodeInvalidRequest,
+				"model %s: source.extra[%d] has no name", m.ID, i)
+		case extra.Name != filepath.Base(extra.Name) || extra.Name == "." || extra.Name == "..":
+			return core.Errorf(core.CodeInvalidRequest,
+				"model %s: source.extra[%d] name %q must be a bare file name", m.ID, i, extra.Name)
+		case extra.URL == "":
+			return core.Errorf(core.CodeInvalidRequest,
+				"model %s: source.extra[%d] (%s) has no url", m.ID, i, extra.Name)
+		case extra.SHA256 == "":
+			// Same rule as the archive, and for the same reason: a file this
+			// server downloads and then loads is a supply-chain hole without
+			// one.
+			return core.Errorf(core.CodeInvalidRequest,
+				"model %s: source.extra[%d] (%s) has no sha256", m.ID, i, extra.Name)
 		}
 	}
 	if m.Source.URL != "" && m.Source.SHA256 == "" {

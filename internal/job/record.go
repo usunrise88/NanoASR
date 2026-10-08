@@ -42,7 +42,13 @@ type Params struct {
 	Punctuate bool `json:"punctuate,omitempty"`
 	ITN       bool `json:"itn,omitempty"`
 
-	Hotwords      []string `json:"hotwords,omitempty"`
+	Hotwords []string `json:"hotwords,omitempty"`
+	// HotwordDicts has to be stored like everything else: a queued job is
+	// rebuilt from this record when it runs, and a request that named a
+	// dictionary and came back unbiased — with no warning, because by then
+	// nothing knows a dictionary was asked for — is the worst shape this
+	// feature can fail in.
+	HotwordDicts  []string `json:"hotwords_dict,omitempty"`
 	HotwordsScore float32  `json:"hotwords_score,omitempty"`
 
 	Strict     bool        `json:"strict,omitempty"`
@@ -63,6 +69,7 @@ func ParamsOf(req core.Request) Params {
 		Punctuate:      req.Punctuate,
 		ITN:            req.ITN,
 		Hotwords:       req.Hotwords,
+		HotwordDicts:   req.HotwordDicts,
 		HotwordsScore:  req.HotwordsScore,
 		Strict:         req.Strict,
 		Source:         req.Source,
@@ -84,6 +91,7 @@ func (p Params) Request(audio core.AudioSource, apiKeyID string) core.Request {
 		Punctuate:      p.Punctuate,
 		ITN:            p.ITN,
 		Hotwords:       p.Hotwords,
+		HotwordDicts:   p.HotwordDicts,
 		HotwordsScore:  p.HotwordsScore,
 		Strict:         p.Strict,
 		Source:         p.Source,

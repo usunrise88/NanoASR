@@ -18,15 +18,27 @@ import (
 // fakeDownloader installs a working model directory without touching the
 // network, and counts how many times it was asked to.
 type fakeDownloader struct {
-	calls   atomic.Int32
-	started chan struct{} // closed on the first call
-	release chan struct{} // downloads block until this is closed
-	fail    string
-	once    sync.Once
+	calls     atomic.Int32
+	extras    atomic.Int32
+	extraFail string
+	started   chan struct{} // closed on the first call
+	release   chan struct{} // downloads block until this is closed
+	fail      string
+	once      sync.Once
 }
 
 func newFakeDownloader() *fakeDownloader {
 	return &fakeDownloader{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+// FetchExtra writes the file's name as its contents, which is enough for a
+// test that cares whether the file arrived and under what name.
+func (f *fakeDownloader) FetchExtra(_ context.Context, _ Manifest, e ExtraFile, dest string) error {
+	f.extras.Add(1)
+	if f.extraFail != "" {
+		return errors.New(f.extraFail)
+	}
+	return os.WriteFile(dest, []byte(e.Name), 0o644)
 }
 
 func (f *fakeDownloader) Download(ctx context.Context, m Manifest, destDir string) (<-chan core.DownloadProgress, error) {

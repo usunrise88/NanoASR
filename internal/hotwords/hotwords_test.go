@@ -113,7 +113,7 @@ func TestParseReadsTheThreeShapes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := CleanPhrases(d.Phrases, 0)
+			got, err := cleanPhrases(d.Phrases, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -202,20 +202,6 @@ func TestMergeKeepsOrderAndDropsRepeats(t *testing.T) {
 	}
 }
 
-func TestSearchFindsPhrasesWhateverTheCase(t *testing.T) {
-	phrases := []string{"Кардиомиопатия", "амиодарон", "Иванов"}
-	got := Search(phrases, "кардио", 5)
-	if len(got) != 1 || got[0] != "Кардиомиопатия" {
-		t.Errorf("hits = %q", got)
-	}
-	if got := Search(phrases, "", 5); got != nil {
-		t.Errorf("an empty query matched %q", got)
-	}
-	if got := Search(phrases, "о", 2); len(got) != 2 {
-		t.Errorf("hits = %q, want the cap honoured", got)
-	}
-}
-
 func contains(list []string, want string) bool {
 	for _, s := range list {
 		if s == want {
@@ -255,5 +241,75 @@ func TestParseDropsASpreadsheetColumnHeader(t *testing.T) {
 	}
 	if !contains(again.Phrases, "word") {
 		t.Errorf("phrases = %q, want a later \"word\" kept", again.Phrases)
+	}
+}
+
+// The round trip the README promises, on the phrases that used to break it:
+// "#" inside a phrase is text, a comma inside a phrase is text, and a first
+// phrase that happens to be the word "text" is a phrase.
+func TestAnExportImportsBackWithAwkwardPhrases(t *testing.T) {
+	original, err := Clean(core.Dictionary{
+		Key:         "awkward",
+		Name:        "Неудобные",
+		Description: "C# и запятые",
+		Phrases:     []string{"C#", "SKU#4711", "Иванов, Иван", "text", "F# for .NET"},
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	back, err := Parse([]byte(Text(original)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := cleanPhrases(back.Phrases, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, "|") != strings.Join(original.Phrases, "|") {
+		t.Errorf("phrases = %q, want %q", got, original.Phrases)
+	}
+}
+
+// The comma-separated form is still read, because that is what a list pasted
+// out of a spreadsheet cell or out of a hotwords= parameter looks like.
+func TestASingleLineIsStillSplitOnCommas(t *testing.T) {
+	d, err := Parse([]byte("ромашка, василёк, лютик\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Phrases) != 3 {
+		t.Errorf("phrases = %q, want three", d.Phrases)
+	}
+}
+
+// A comment is a line that starts with #. Further along a line it is text.
+func TestHashIsOnlyACommentAtTheStartOfALine(t *testing.T) {
+	d, err := Parse([]byte("# наши артикулы\nSKU#4711\n   # ещё\nC#\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(d.Phrases, "|") != "SKU#4711|C#" {
+		t.Errorf("phrases = %q", d.Phrases)
+	}
+}
+
+// The column header is the first line of the file, not the first phrase: a
+// dictionary whose first entry is "word" must keep it.
+func TestAColumnHeaderIsOnlyDroppedOnTheFirstLine(t *testing.T) {
+	d, err := Parse([]byte("# заголовок словаря\nword\nслово\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(d.Phrases, "word") {
+		t.Errorf("phrases = %q, want the first phrase kept after a comment", d.Phrases)
+	}
+
+	csv, err := Parse([]byte("phrase\nромашка\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(csv.Phrases, "phrase") {
+		t.Errorf("phrases = %q, want the real column header dropped", csv.Phrases)
 	}
 }

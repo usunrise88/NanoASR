@@ -149,7 +149,7 @@ func (d *HTTPDownloader) run(ctx context.Context, m Manifest, destDir string, pr
 	defer os.RemoveAll(work)
 
 	archive := filepath.Join(work, archiveName(m.Source.URL))
-	if err := d.fetch(ctx, m, archive, progress); err != nil {
+	if err := d.fetch(ctx, archiveWant(m, d.limits.MaxArchiveBytes), archive, progress); err != nil {
 		return err
 	}
 
@@ -169,6 +169,13 @@ func (d *HTTPDownloader) run(ctx context.Context, m Manifest, destDir string, pr
 		return err
 	}
 
+	// The files the archive does not carry, into the same directory, before
+	// anything is visible under the model's name: a half-complete model is
+	// worse than one that failed to install, because it loads.
+	if err := d.fetchExtras(ctx, m, unpacked, progress); err != nil {
+		return err
+	}
+
 	target := filepath.Join(destDir, m.Key())
 	if err := os.RemoveAll(target); err != nil {
 		return core.Errorf(core.CodeInternal, "cannot replace %s", target).WithCause(err)
@@ -183,10 +190,81 @@ func (d *HTTPDownloader) run(ctx context.Context, m Manifest, destDir string, pr
 	return writeManifest(filepath.Join(target, ManifestFile), m)
 }
 
-// fetch downloads the archive, resuming a partial file when one is present,
-// and verifies the checksum before anyone unpacks anything.
-func (d *HTTPDownloader) fetch(ctx context.Context, m Manifest, dest string, progress chan<- core.DownloadProgress) error {
-	urls := append([]string{m.Source.URL}, mirrorURLs(d.mirrors, m.Source.URL)...)
+// want is one thing to download: the archive, or a file named beside it.
+//
+// It exists so that fetching an extra file is the same code path as fetching
+// the archive — the resume, the retries, the mirrors, the size cap and above
+// all the checksum are not worth having twice.
+type want struct {
+	modelID   string
+	url       string
+	sha256    string
+	sizeBytes int64
+	// limit is the ceiling on this file. The archive gets the archive limit;
+	// a file beside it is a vocabulary or a configuration, not a model.
+	limit int64
+}
+
+func archiveWant(m Manifest, limit int64) want {
+	return want{modelID: m.ID, url: m.Source.URL, sha256: m.Source.SHA256,
+		sizeBytes: m.Source.SizeBytes, limit: limit}
+}
+
+func extraWant(m Manifest, e ExtraFile, limit int64) want {
+	return want{modelID: m.ID, url: e.URL, sha256: e.SHA256,
+		sizeBytes: e.SizeBytes, limit: limit}
+}
+
+// FetchExtra downloads one file named beside the archive into dest, with the
+// same verification, retries and mirrors as the archive itself.
+func (d *HTTPDownloader) FetchExtra(ctx context.Context, m Manifest, e ExtraFile, dest string) error {
+	if err := requireHTTPS(e.URL); err != nil {
+		return err
+	}
+	if err := d.fetch(ctx, extraWant(m, e, d.limits.MaxFileBytes), dest, nil); err != nil {
+		return core.Errorf(core.CodeModelUnavailable,
+			"model %s: cannot fetch %s", m.ID, e.Name).WithCause(err)
+	}
+	// A download is written 0600 so a resumed one is nobody else's business
+	// while it is partial. A model file is not a secret, and the ones the
+	// archive brings land 0644: a vocabulary that alone was unreadable to the
+	// service account would be a model that loads everywhere except where it
+	// was installed by one user and is run by another.
+	if err := os.Chmod(dest, 0o644); err != nil {
+		return core.Errorf(core.CodeInternal,
+			"model %s: cannot set permissions on %s", m.ID, e.Name).WithCause(err)
+	}
+	return nil
+}
+
+// fetchExtras downloads the files a manifest names beside its archive into a
+// directory that already holds the unpacked model.
+//
+// A name that collides with something the archive brought is refused rather
+// than resolved: whichever file won would be a silent decision about which
+// bytes the model is loaded from.
+func (d *HTTPDownloader) fetchExtras(ctx context.Context, m Manifest, dir string, progress chan<- core.DownloadProgress) error {
+	for _, extra := range m.Source.Extra {
+		if err := requireHTTPS(extra.URL); err != nil {
+			return err
+		}
+		dest := filepath.Join(dir, extra.Name)
+		if _, err := os.Stat(dest); err == nil {
+			return core.Errorf(core.CodeInvalidRequest,
+				"model %s: the archive already contains %s, which source.extra also names",
+				m.ID, extra.Name)
+		}
+		if err := d.FetchExtra(ctx, m, extra, dest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fetch downloads one file, resuming a partial one when it is present, and
+// verifies the checksum before anyone unpacks or loads anything.
+func (d *HTTPDownloader) fetch(ctx context.Context, w want, dest string, progress chan<- core.DownloadProgress) error {
+	urls := append([]string{w.url}, mirrorURLs(d.mirrors, w.url)...)
 
 	var lastErr error
 	for _, raw := range urls {
@@ -204,7 +282,7 @@ func (d *HTTPDownloader) fetch(ctx context.Context, m Manifest, dest string, pro
 				}
 			}
 
-			err := d.attempt(ctx, m, raw, dest, progress)
+			err := d.attempt(ctx, w, raw, dest, progress)
 			if err == nil {
 				return nil
 			}
@@ -221,10 +299,11 @@ func (d *HTTPDownloader) fetch(ctx context.Context, m Manifest, dest string, pro
 	// operator reading "could not download" without the checksum or the HTTP
 	// status has nothing to act on.
 	return core.Errorf(core.CodeInternal,
-		"could not download model %s from any source: %v", m.ID, lastErr).WithCause(lastErr)
+		"could not download %s for model %s from any source: %v",
+		path.Base(w.url), w.modelID, lastErr).WithCause(lastErr)
 }
 
-func (d *HTTPDownloader) attempt(ctx context.Context, m Manifest, rawURL, dest string, progress chan<- core.DownloadProgress) error {
+func (d *HTTPDownloader) attempt(ctx context.Context, w want, rawURL, dest string, progress chan<- core.DownloadProgress) error {
 	if err := requireHTTPS(rawURL); err != nil {
 		return err
 	}
@@ -259,17 +338,18 @@ func (d *HTTPDownloader) attempt(ctx context.Context, m Manifest, rawURL, dest s
 		}
 	case http.StatusPartialContent:
 	case http.StatusNotFound, http.StatusForbidden, http.StatusGone:
-		return permanentf("model archive is not available at %s (%s)", rawURL, resp.Status)
+		return permanentf("%s is not available at %s (%s)", path.Base(rawURL), rawURL, resp.Status)
 	default:
 		return fmt.Errorf("unexpected status %s from %s", resp.Status, rawURL)
 	}
 
-	total := m.Source.SizeBytes
+	total := w.sizeBytes
 	if total <= 0 && resp.ContentLength > 0 {
 		total = offset + resp.ContentLength
 	}
-	if total > d.limits.MaxArchiveBytes {
-		return permanentf("archive is %d bytes, over the %d byte limit", total, d.limits.MaxArchiveBytes)
+	if total > w.limit {
+		return permanentf("%s is %d bytes, over the %d byte limit",
+			path.Base(rawURL), total, w.limit)
 	}
 
 	flags := os.O_CREATE | os.O_WRONLY
@@ -284,7 +364,7 @@ func (d *HTTPDownloader) attempt(ctx context.Context, m Manifest, rawURL, dest s
 	}
 
 	written, err := copyWithProgress(ctx, io.MultiWriter(f, hasher), resp.Body,
-		m.ID, offset, total, d.limits.MaxArchiveBytes, progress)
+		w.modelID, offset, total, w.limit, progress)
 	closeErr := f.Close()
 	if err != nil {
 		return err
@@ -294,11 +374,12 @@ func (d *HTTPDownloader) attempt(ctx context.Context, m Manifest, rawURL, dest s
 	}
 
 	got := hex.EncodeToString(hasher.Sum(nil))
-	if !strings.EqualFold(got, m.Source.SHA256) {
+	if !strings.EqualFold(got, w.sha256) {
 		// A mismatch means the bytes on disk are worthless; keeping them would
 		// make the next attempt resume onto a corrupt prefix.
 		_ = os.Remove(dest)
-		return permanentf("checksum mismatch for %s: got %s, expected %s", m.ID, got, m.Source.SHA256)
+		return permanentf("checksum mismatch for %s: got %s, expected %s",
+			path.Base(rawURL), got, w.sha256)
 	}
 	_ = written
 	return nil

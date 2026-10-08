@@ -293,10 +293,39 @@ config_value() {
   printf '%s' "$out"
 }
 
+# config_has_realtime reads api.dialects, in either shape YAML allows:
+#
+#   dialects: [openai, native, realtime]
+#   dialects:
+#     - openai
+#     - realtime
+#
+# config_value reads a value that sits on the key's own line, which the second
+# shape does not have. Getting this wrong is not harmless: the upgrade path
+# tells the operator to add a dialect that is already there, and the closing
+# banner hides a websocket endpoint the server is serving.
 config_has_realtime() {
-  local dialects
-  dialects="$(config_value dialects)" || return 1
-  [[ "$dialects" == *realtime* ]]
+  [[ -f "$CONFIG" ]] || return 1
+  $SUDO awk '
+    index($0, "  dialects:") == 1 {
+      line = $0
+      sub("#.*", "", line)
+      if (line ~ /realtime/) { found = 1; exit }
+      block = 1
+      next
+    }
+    block {
+      line = $0
+      sub("#.*", "", line)
+      # The list ends at the first line that is not one of its items.
+      if (line !~ /^[ \t]*-/) {
+        if (line ~ /[^ \t]/) exit
+        next
+      }
+      if (line ~ /realtime/) { found = 1; exit }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$CONFIG" 2>/dev/null
 }
 
 # effective_addr is what the server will actually listen on: the

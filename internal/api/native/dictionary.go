@@ -2,9 +2,9 @@ package native
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
@@ -156,20 +156,17 @@ func (*Adapter) saveDictionary(deps adapter.Deps, replace bool) http.HandlerFunc
 			return
 		}
 
-		if !replace {
-			if _, err := store.Get(r.Context(), d.Key); err == nil {
-				WriteProblem(w, r, core.Errorf(core.CodeDictionaryExists,
-					"a dictionary with the key %q already exists; PUT replaces it", d.Key).
-					WithParam("key"))
-				return
-			} else if core.AsError(err).Code != core.CodeDictionaryNotFound {
-				WriteProblem(w, r, err)
-				return
-			}
+		// Create rather than read-then-Save: two clients posting the same key
+		// would both find it free and the second would replace the first.
+		save := store.Create
+		if replace {
+			save = store.Save
 		}
-
-		saved, err := store.Save(r.Context(), d)
+		saved, err := save(r.Context(), d)
 		if err != nil {
+			if e := core.AsError(err); e.Code == core.CodeDictionaryExists {
+				e.Message += "; PUT replaces it"
+			}
 			WriteProblem(w, r, err)
 			return
 		}
@@ -220,7 +217,7 @@ func (*Adapter) importDictionary(deps adapter.Deps) http.HandlerFunc {
 		// The file first, so the body is read under this endpoint's own cap
 		// rather than under the 32 MiB net/http buys when FormValue parses a
 		// multipart body on its own.
-		data, err := uploadedFile(r)
+		data, err := uploadedFile(w, r)
 		if err != nil {
 			WriteProblem(w, r, err)
 			return
@@ -289,9 +286,22 @@ func (*Adapter) importDictionary(deps adapter.Deps) http.HandlerFunc {
 // uploadedFile reads the phrases out of either shape an upload arrives in: a
 // multipart form with a file in it, as a browser and curl -F send, or the file
 // as the request body, as curl --data-binary does.
-func uploadedFile(r *http.Request) ([]byte, error) {
+//
+// The ceiling is put on the body before anything parses it. ParseMultipartForm
+// bounds what it keeps in memory and spools the rest to disk, so without this a
+// two-gigabyte upload would be written out in full and only then measured.
+func uploadedFile(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	// Slack for the multipart framing around the file itself.
+	r.Body = http.MaxBytesReader(w, r.Body, maxDictionaryUpload+(1<<16))
+
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
 		if err := r.ParseMultipartForm(maxDictionaryUpload); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				return nil, core.Errorf(core.CodeFileTooLarge,
+					"a dictionary file is at most %d KiB", maxDictionaryUpload/1024).
+					WithParam("file")
+			}
 			return nil, core.Errorf(core.CodeInvalidRequest,
 				"cannot read the upload: %v", err).WithParam("file")
 		}
@@ -309,11 +319,16 @@ func uploadedFile(r *http.Request) ([]byte, error) {
 func readCapped(r io.Reader) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(r, maxDictionaryUpload+1))
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return nil, core.Errorf(core.CodeFileTooLarge,
+				"a dictionary file is at most %d KiB", maxDictionaryUpload/1024).WithParam("file")
+		}
 		return nil, core.Errorf(core.CodeInvalidRequest, "cannot read the upload: %v", err)
 	}
 	if len(data) > maxDictionaryUpload {
 		return nil, core.Errorf(core.CodeFileTooLarge,
-			"a dictionary file is at most %s", strconv.Itoa(maxDictionaryUpload/1024)+" KiB")
+			"a dictionary file is at most %d KiB", maxDictionaryUpload/1024).WithParam("file")
 	}
 	return data, nil
 }

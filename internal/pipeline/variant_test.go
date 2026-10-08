@@ -280,6 +280,10 @@ func (f *fakeDictionaries) List(context.Context, string, int) ([]core.Dictionary
 func (f *fakeDictionaries) Save(_ context.Context, d core.Dictionary) (core.Dictionary, error) {
 	return d, nil
 }
+
+func (f *fakeDictionaries) Create(_ context.Context, d core.Dictionary) (core.Dictionary, error) {
+	return d, nil
+}
 func (f *fakeDictionaries) Delete(context.Context, string) error { return nil }
 
 func TestADictionaryKeyBringsItsPhrasesAndItsScore(t *testing.T) {
@@ -560,4 +564,47 @@ func TestADeletedStandingDictionaryIsReportedNotFatal(t *testing.T) {
 	if v := h.loaded[0]; v.Hotwords != "ромашка" {
 		t.Errorf("variant hotwords = %q, want the surviving dictionary", v.Hotwords)
 	}
+}
+
+// Promoting the decoding method for a bias that is then dropped is worse than
+// not promoting: it loads a second resident copy of the model to run a slower
+// search for nothing, and the caller is told both that the method changed and
+// that the words were ignored.
+func TestNoPromotionWhenTheBiasCannotBeApplied(t *testing.T) {
+	h := newVariantHarness(t, charTransducer{}, variantOptions{
+		Options:     Options{HotwordsEnabled: true},
+		maxVariants: 1,
+	})
+
+	got, err := h.pipeline.Transcribe(context.Background(), core.Request{
+		Audio: &fakeSource{}, Hotwords: []string{"ромашка"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWarning(got.Warnings, "decoding_method_promoted") {
+		t.Errorf("warnings %+v promoted a method for a bias that was dropped", got.Warnings)
+	}
+	if !hasWarning(got.Warnings, "hotwords_unavailable") {
+		t.Errorf("warnings %+v should say the bias was dropped", got.Warnings)
+	}
+	if len(h.loaded) != 1 || !h.loaded[0].Zero() {
+		t.Errorf("loaded %+v, want the base instance and no variant", h.loaded)
+	}
+}
+
+// charTransducer is the shape that made this visible: a transducer, so beam
+// search is available, over a character vocabulary, which sherpa-onnx cannot
+// tokenise hotwords for. gigaam-v2-rnnt-ru is exactly this.
+type charTransducer struct{ fakeRegistry }
+
+func (r charTransducer) Resolve(ctx context.Context, id string) (registry.Manifest, error) {
+	m, err := r.fakeRegistry.Resolve(ctx, id)
+	if err != nil {
+		return m, err
+	}
+	m.Family = "transducer"
+	m.ModelingUnit = asr.UnitChar
+	m.Runtime.DecodingMethod = asr.GreedySearch
+	return m, nil
 }

@@ -482,9 +482,13 @@ func (p *Pool) List() []core.ModelInfo {
 		}
 		// The recogniser reports what it can produce; whether it can be biased
 		// follows from the manifest, and a loaded model must not answer that
-		// question differently from the same model listed on disk.
-		caps.Hotwords, caps.HotwordsReason = asr.HotwordsCapability(
-			e.manifest.Family, e.manifest.ModelingUnit, e.manifest.Files["bpe_vocab"] != "")
+		// question differently from the same model listed on disk — which
+		// includes the kind guard, or a resident VAD would explain at length
+		// why it is not a transducer.
+		if e.manifest.EffectiveKind() == registry.KindASR {
+			caps.Hotwords, caps.HotwordsReason = asr.HotwordsCapability(
+				e.manifest.Family, e.manifest.ModelingUnit, e.manifest.Files["bpe_vocab"] != "")
+		}
 		out = append(out, core.ModelInfo{
 			ID:           e.baseID,
 			Variant:      e.variant.String(),

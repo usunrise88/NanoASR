@@ -51,6 +51,14 @@ func (m *memoryDictionaries) Get(_ context.Context, key string) (core.Dictionary
 	return d, nil
 }
 
+func (m *memoryDictionaries) Create(ctx context.Context, d core.Dictionary) (core.Dictionary, error) {
+	if _, ok := m.byKey[d.Key]; ok {
+		return d, core.Errorf(core.CodeDictionaryExists,
+			"a dictionary with the key %q already exists", d.Key).WithParam("key")
+	}
+	return m.Save(ctx, d)
+}
+
 func (m *memoryDictionaries) Save(_ context.Context, d core.Dictionary) (core.Dictionary, error) {
 	d.PhraseCount = len(d.Phrases)
 	m.byKey[d.Key] = d
@@ -383,5 +391,23 @@ func TestImportReadsModeFromTheFormToo(t *testing.T) {
 	got, _ := store.Get(context.Background(), "staff")
 	if strings.Join(got.Phrases, "|") != "Кузнецов" {
 		t.Errorf("phrases = %q, want the form's mode=replace honoured", got.Phrases)
+	}
+}
+
+// The cap belongs on the body, not on what is read back out of it: without it
+// net/http spools the whole upload to the temp directory before anyone
+// measures it.
+func TestAnOversizedUploadIsRefusedWithoutBeingStored(t *testing.T) {
+	srv := dictServer(t, newMemoryDictionaries())
+
+	big := strings.Repeat("ромашка\n", 400_000) // comfortably over 1 MiB
+	resp := send(t, srv, http.MethodPost, "/api/v1/hotwords/big/import", "text/plain", big)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+	var p problem
+	decode(t, resp, &p)
+	if p.Code != string(core.CodeFileTooLarge) {
+		t.Errorf("code = %q", p.Code)
 	}
 }

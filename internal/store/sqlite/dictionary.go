@@ -98,10 +98,18 @@ func (s *DictionaryStore) withMatches(ctx context.Context, dicts []core.Dictiona
 		keys = append(keys, dicts[i].Key)
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
+	// The cap belongs in the query. Twenty dictionaries of five thousand
+	// phrases each, searched for "а" on every keystroke, is a hundred thousand
+	// rows over the wire to keep a hundred.
 	rows, err := s.db.QueryContext(ctx, `
-SELECT dict_key, phrase FROM hotword_phrases
-WHERE dict_key IN (`+placeholders+`) AND instr(phrase_lc, ?) > 0
-ORDER BY dict_key, ord`, append(keys, q)...)
+SELECT dict_key, phrase FROM (
+  SELECT dict_key, phrase,
+         ROW_NUMBER() OVER (PARTITION BY dict_key ORDER BY ord) AS rn
+  FROM hotword_phrases
+  WHERE dict_key IN (`+placeholders+`) AND instr(phrase_lc, ?) > 0
+)
+WHERE rn <= ?
+ORDER BY dict_key, rn`, append(append(keys, q), maxDictionaryMatches)...)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: search phrases: %w", err)
 	}
@@ -172,6 +180,16 @@ FROM hotword_dicts WHERE key = ?`, key).
 // CreatedAt survives a replacement: the dictionary is the same dictionary,
 // whatever its contents are now.
 func (s *DictionaryStore) Save(ctx context.Context, d core.Dictionary) (core.Dictionary, error) {
+	return s.write(ctx, d, false)
+}
+
+// Create stores a dictionary only if the key is free, in one statement, so two
+// clients racing on the same key cannot both believe they created it.
+func (s *DictionaryStore) Create(ctx context.Context, d core.Dictionary) (core.Dictionary, error) {
+	return s.write(ctx, d, true)
+}
+
+func (s *DictionaryStore) write(ctx context.Context, d core.Dictionary, mustBeNew bool) (core.Dictionary, error) {
 	// Millisecond precision, because that is what the column holds: a Save
 	// that returned more than the next Get could would differ from itself.
 	now := time.Now().UTC().Truncate(time.Millisecond)
@@ -193,14 +211,32 @@ func (s *DictionaryStore) Save(ctx context.Context, d core.Dictionary) (core.Dic
 	}
 
 	search := strings.ToLower(strings.Join([]string{d.Key, d.Name, d.Description}, " "))
-	if _, err := tx.ExecContext(ctx, `
+	// DO NOTHING rather than a read followed by a write: the conflict is
+	// resolved by the database, inside this transaction, so a second client
+	// creating the same key loses the race rather than the first client's
+	// phrases.
+	conflict := "DO UPDATE SET name = excluded.name, description = excluded.description, " +
+		"score = excluded.score, search = excluded.search, updated_at = excluded.updated_at"
+	if mustBeNew {
+		conflict = "DO NOTHING"
+	}
+	res, err := tx.ExecContext(ctx, `
 INSERT INTO hotword_dicts (key, name, description, score, search, created_at, updated_at)
 VALUES (?,?,?,?,?,?,?)
-ON CONFLICT(key) DO UPDATE SET
-  name = excluded.name, description = excluded.description,
-  score = excluded.score, search = excluded.search, updated_at = excluded.updated_at`,
-		d.Key, d.Name, d.Description, d.Score, search, created, now.UnixMilli()); err != nil {
+ON CONFLICT(key) `+conflict,
+		d.Key, d.Name, d.Description, d.Score, search, created, now.UnixMilli())
+	if err != nil {
 		return d, fmt.Errorf("sqlite: save dictionary %s: %w", d.Key, err)
+	}
+	if mustBeNew {
+		n, err := res.RowsAffected()
+		if err != nil {
+			return d, fmt.Errorf("sqlite: save dictionary %s: %w", d.Key, err)
+		}
+		if n == 0 {
+			return d, core.Errorf(core.CodeDictionaryExists,
+				"a dictionary with the key %q already exists", d.Key).WithParam("key")
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx,

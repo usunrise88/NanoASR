@@ -155,7 +155,8 @@ export interface Dictionary {
   key: string
   name: string
   description?: string
-  phrases?: string[]
+  /** null in a listing — "not included here" — and a list, possibly empty, when one dictionary is fetched. */
+  phrases: string[] | null
   phrase_count: number
   matches?: string[]
   score?: number

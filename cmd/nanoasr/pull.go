@@ -112,11 +112,23 @@ func pullOne(ctx context.Context, reg *registry.Remote, id string) error {
 		return fmt.Errorf("%s", failure)
 	}
 
+	// A model installed before its catalog entry named a file beside the
+	// archive is complete as far as the weights go and missing that file. This
+	// is where it is repaired: an explicit download is already happening, so
+	// another quarter of a megabyte is not a surprise.
+	added, err := reg.Complete(ctx, id)
+	if err != nil {
+		return err
+	}
+
 	dir, err := reg.Dir(id)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("%-24s %s\n", id, dir)
+	for _, name := range added {
+		fmt.Printf("%-24s + %s\n", "", name)
+	}
 	return nil
 }
 

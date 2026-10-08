@@ -84,9 +84,17 @@ models:
       sha256: 20e41e160efa6f2460a7ef6554cdbbb9e8fffb2b92e6bc708e9406bd8b9256ea
       size_bytes: 163282594
     license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
-    # Same as v2: the archive ships a saved GitHub HTML page in place of the
-    # licence text, so the terms cannot be established from the download.
-    commercial_use: unknown
+    # MIT, and stated here rather than left unknown because the publisher says
+    # it about the weights rather than only about the code: ai-sage/GigaAM-v3
+    # on Hugging Face carries license: mit in its model card, and this archive
+    # ships the MIT text itself — 1070 bytes of plain ASCII beside the weights,
+    # checked by downloading it.
+    #
+    # The note this replaced said the archive carried a saved GitHub HTML page
+    # instead of the licence; that was true of an earlier upload and is not
+    # true of this one. The v2 entries below are left unknown: nobody has
+    # checked their archives the same way.
+    commercial_use: "yes"
     notes: >-
       Subword vocabulary of 257 tokens carrying full stops, commas, question
       marks and capitals — hence punctuation and casing without a second pass.
@@ -113,6 +121,10 @@ models:
       decoder: decoder.onnx
       joiner: joiner.onnx
       tokens: tokens.txt
+      # GigaAM's own SentencePiece vocabulary, fetched beside the archive — see
+      # source.extra below. It is what makes this the one catalog entry hotword
+      # dictionaries can be applied to.
+      bpe_vocab: bpe.model
     features:
       sample_rate: 16000
       dim: 64
@@ -124,8 +136,24 @@ models:
       url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16.tar.bz2
       sha256: f9620a0099019c6afcee26525ef9ed3297fa50dd5691c1902af0c948fc1a470b
       size_bytes: 170197019
+      # The archive carries tokens.txt but not the tokenizer it was generated
+      # from, and sherpa-onnx needs the tokenizer to turn a hotword into the
+      # token ids the decoder emits. It is published by GigaAM rather than by
+      # the exporter, so it is fetched from there: 250 KB against the archive's
+      # 162 MB, under the same MIT licence as the weights.
+      #
+      # Checked: the 1024 pieces it holds match tokens.txt id for id, and its
+      # md5 is the one recorded in sherpa-onnx's own export script
+      # (scripts/nemo/GigaAM/export-onnx-rnnt-v3-punct.py).
+      extra:
+        - name: bpe.model
+          url: https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt_tokenizer.model
+          sha256: 828c12c991019eef952a960661f25a92d6ad279591e2ea466b4aeddf1d20a18a
+          size_bytes: 255336
     license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
-    commercial_use: unknown
+    # MIT, on the same evidence as the v3 CTC entry above: the publisher's own
+    # model card, and the MIT text inside this archive.
+    commercial_use: "yes"
     notes: >-
       Punctuates and capitalises like gigaam-v3-ctc-punct-ru but over its own
       larger vocabulary — 1024 subwords against the CTC model's 257 — and being

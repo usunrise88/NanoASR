@@ -745,3 +745,30 @@ func TestCancelWritesTheTerminalStateForAJobTheQueueDoesNotHold(t *testing.T) {
 		t.Error("cancelling left the audio behind")
 	}
 }
+
+// A queued job is rebuilt from its record when it runs. A dictionary key that
+// did not survive that round trip came back as a transcript with no bias and no
+// warning — by then nothing knew a dictionary had been asked for.
+func TestParamsKeepEveryFieldThatChangesTheTranscript(t *testing.T) {
+	req := core.Request{
+		ModelID: "m", Language: "ru",
+		Hotwords: []string{"ромашка"}, HotwordDicts: []string{"medical", "staff"},
+		HotwordsScore: 1.8, DecodingMethod: "modified_beam_search", MaxActivePaths: 4,
+		Diarize: true, NumSpeakers: 2, Punctuate: true, ITN: true, Strict: true,
+	}
+
+	back := ParamsOf(req).Request(nil, "key-1")
+
+	if strings.Join(back.HotwordDicts, ",") != "medical,staff" {
+		t.Errorf("HotwordDicts = %q, want them stored and restored", back.HotwordDicts)
+	}
+	if strings.Join(back.Hotwords, ",") != "ромашка" || back.HotwordsScore != 1.8 {
+		t.Errorf("hotwords = %q / %v", back.Hotwords, back.HotwordsScore)
+	}
+	if back.DecodingMethod != "modified_beam_search" || back.MaxActivePaths != 4 {
+		t.Errorf("decoding = %q / %d", back.DecodingMethod, back.MaxActivePaths)
+	}
+	if !back.Diarize || back.NumSpeakers != 2 || !back.Punctuate || !back.ITN || !back.Strict {
+		t.Errorf("flags lost: %+v", back)
+	}
+}
