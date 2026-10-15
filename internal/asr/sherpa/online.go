@@ -144,6 +144,7 @@ func NewOnline(ctx context.Context, m registry.Manifest, dir string, opt OnlineO
 	// Russian streaming model does, which is why a realtime transcript arrives
 	// in lower case and the dialect says so.
 	caps.PunctuationBuiltin = asr.VocabularyPunctuates(tokens)
+	caps.LanguageDetect = m.IsMultilingual()
 
 	o := &Online{
 		impl:         impl,
@@ -272,6 +273,18 @@ func (s *onlineStream) Accept(sampleRate int, samples []float32) {
 	// feature extractor's, which is what lets a browser send 48 kHz and a
 	// telephony bridge send 8 kHz to the same 8 kHz model.
 	s.impl.AcceptWaveform(sampleRate, samples)
+}
+
+// SetLanguage hands the language to sherpa-onnx as the stream option it reads
+// for every chunk. A model that is not multilingual never looks at it, so this
+// is safe to call on any streaming model.
+func (s *onlineStream) SetLanguage(language string) {
+	s.owner.mu.RLock()
+	defer s.owner.mu.RUnlock()
+	if s.impl == nil || s.owner.closed {
+		return
+	}
+	s.impl.SetOption("language", language)
 }
 
 func (s *onlineStream) Ready() bool {

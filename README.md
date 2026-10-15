@@ -53,7 +53,12 @@ Key implementation properties:
 **Recognition**
 
 - Word-level timestamps with per-word confidence.
-- Model families: `nemo_ctc`, `zipformer_ctc`, `wenet_ctc`, `transducer`, `telespeech`.
+- Model families: `nemo_ctc`, `zipformer_ctc`, `wenet_ctc`, `transducer`, `telespeech`,
+  and the streaming ones (`streaming_transducer`, `streaming_zipformer2_ctc`,
+  `streaming_nemo_ctc`, `streaming_t_one_ctc`, `streaming_paraformer`), which decode
+  uploaded files as well as serving the realtime API.
+- Multilingual recognition: a request names a locale (`language=pt-BR`) or `auto`, on a
+  model that carries 32 of them. See [`language`](#language--what-to-transcribe).
 - Segment batching bounded by count and total duration.
 - Per-request model selection; several models resident in parallel.
 - `greedy_search` and `modified_beam_search` decoding methods.
@@ -646,7 +651,16 @@ realtime:
 ```
 
 `nanoasr init -realtime`, or `install.sh --realtime`, writes that and fetches the
-model.
+model. `t-one-ctc-ru` is the default: 128 MB, Russian, telephony. For several languages
+use `nemotron-3.5-streaming-multi` — about a gigabyte resident, and a second gigabyte if
+the same model also serves uploads, because the realtime recogniser lives outside the
+model pool.
+
+A streaming model decodes uploaded files too, so it can be named in `model` on every
+other endpoint; the recording is fed through it as one utterance per speech segment. That
+is not what it is built for and it costs more than a model made for files (about
+0.4x real time on two CPU threads for Nemotron, against 0.03x to 0.075x for the small
+Russian streaming models in realtime), but it is what lets one set of weights serve both.
 
 **Client events.** `session.update` (`transcription_session.update` is accepted too),
 `input_audio_buffer.append` with base64 audio, `input_audio_buffer.commit` and
@@ -658,6 +672,14 @@ declared format, which saves the third of bandwidth base64 costs.
 `conversation.item.created`,
 `conversation.item.input_audio_transcription.delta` and `.completed`, `error`, and
 `nanoasr.warning` for a parameter that was accepted and ignored.
+
+**Language.** On a multilingual model `input_audio_transcription.language` takes a locale,
+a bare code or `auto`, resolved as described under [`language`](#language--what-to-transcribe),
+and the session object says what it resolved to. `session.update` may change it mid-session;
+it applies from the next chunk. A language the model does not offer leaves the session as
+it was and answers `language_ignored`. The locales a session may ask for are in
+`nanoasr.locales` of the session object. A model with one language ignores the field and
+says so with the same warning.
 
 **Audio.** `input_audio_format` takes `pcm16` (24 kHz by default, as in OpenAI's API),
 `g711_ulaw`, `g711_alaw`, or an object that carries the rate:
@@ -696,8 +718,8 @@ Differences from the original API:
   model produces token timings, `nanoasr.words`.
 - There are no ephemeral tokens, no conversation events and no model that replies.
 - Transcripts have no punctuation and no capitals when the model's vocabulary has
-  none, which is the case for every Russian streaming model there is. The session
-  object says so, and the offline endpoints still punctuate.
+  none, which is the case for every Russian streaming model there is. Nemotron writes
+  both. The session object says which, and the offline endpoints still punctuate.
 
 One session is one decoder state, and `realtime.max_sessions` bounds how many there
 can be; a connection beyond it is closed with `1013 Try Again Later` rather than
@@ -776,9 +798,70 @@ This contract has no field for warnings, so applied limitations are reported in 
 `/detect-language` returns the language declared by the recognition model that the
 request resolved to. `confidence` is `1` when the model supports a single language and
 `0` when it lists several and the first was taken. No language identification model is
-shipped.
+shipped. A multilingual model left to choose the language answers `422` instead: it
+decided something and the runtime does not say what, so there is nothing true to return.
 
 ## Recognition settings
+
+### `language` — what to transcribe
+
+Every dialect that takes audio accepts it: the `language` field of the native, OpenAI and
+`era` APIs, and `input_audio_transcription.language` on the realtime websocket. What it
+does depends on the model.
+
+A **multilingual** model lists the locales it can be told in `locales` (visible in
+`GET /api/v1/models`, and in the session object of the realtime API), and
+`capabilities.language_detect` is `true` for it. It is the only such model in the catalog
+today, `nemotron-3.5-streaming-multi`, with 32.
+
+| Request | Multilingual model | Model with one language |
+|---|---|---|
+| empty, or `auto` | The model chooses | Decoded as the model's language |
+| `pt-BR` | Decoded as `pt-BR` | Echoed back; the model's language is what was decoded |
+| `pt` | The first locale listed for `pt`: `pt-BR` | As above |
+| a locale it does not offer | `language_mismatch`, decoded as `auto` | `language_mismatch` |
+
+Case and `_` for `-` are forgiven (`PT_br` is `pt-BR`), and `no` means Bokmål, `nb-NO`. The
+locales are listed with the primary variant of a language first, which is what a bare code
+resolves to: `en` is `en-US`, `es` is `es-US`, `fr` is `fr-FR`, `pt` is `pt-BR`. A request
+always reaches the model as a full locale, because the model has its own idea of what a
+bare `pt` means and a caller cannot be expected to know it.
+
+An unsupported language is a **warning**, not an error, like every other option that
+depends on the model; with `strict`, it becomes a `422`. The result's `language` field
+says what the run was decoded as — the resolved locale, or `auto`, and never `multi`,
+which describes the model and not the audio.
+
+```bash
+curl -s http://localhost:8080/v1/audio/transcriptions \
+  -F file=@call.wav -F model=nemotron-3.5-streaming-multi -F language=pt \
+  | jq '{language, text}'
+```
+
+**`auto` has limits you should know about.**
+
+- The model chooses **per speech segment**, not per file. A long, clear segment is
+  reliable; a short or noisy one is not. On the reference clip, the last two seconds of
+  a Russian reading came out in Latin letters while the rest was Cyrillic. When the
+  language is known, say so.
+- The model does not say which language it chose. The runtime filters its language tag
+  out of the transcript and has no field to carry it, so a result reports `auto`, and
+  `/detect-language` of the `era` API answers `422` for a model left to choose, rather
+  than invent an answer.
+
+**Which locales.** The 32 the model card says transcribe out of the box: `en-US`,
+`en-GB`, `es-US`, `es-ES`, `fr-FR`, `fr-CA`, `it-IT`, `pt-BR`, `pt-PT`, `nl-NL`, `de-DE`,
+`tr-TR`, `ru-RU`, `ar-AR`, `hi-IN`, `ja-JP`, `ko-KR`, `vi-VN`, `uk-UA` (nineteen
+"transcription-ready") and `pl-PL`, `sv-SE`, `cs-CZ`, `nb-NO`, `da-DK`, `bg-BG`, `fi-FI`,
+`hr-HR`, `sk-SK`, `zh-CN`, `hu-HU`, `ro-RO`, `et-EE` (thirteen "broad-coverage"). The
+model's own prompt dictionary accepts about sixty more codes, among them eight the card
+calls "adaptation-ready" — Greek, Lithuanian, Latvian, Maltese, Slovenian, Hebrew, Thai
+and Nynorsk. The tokenizer knows them; the model was not trained to transcribe them, so
+they are not offered.
+
+The language is not a setting of the loaded model. It is read for each stream, which is
+why changing it costs nothing — no second resident copy, no share of `asr.variants.max` —
+and why it applies from the next chunk on the realtime API.
 
 ### `channel_mode` — channel handling
 
@@ -1080,6 +1163,7 @@ list of which installed models the dictionaries can actually be applied to.
 | `gigaam-v2-rnnt-ru` | no | transducer with a character vocabulary, which sherpa-onnx cannot tokenise hotwords for |
 | `t-one-ctc-ru` | no | streaming CTC |
 | `streaming-zipformer-small-ru` | no | streaming: a recogniser is biased when it is built, not per request |
+| `nemotron-3.5-streaming-multi` | no | streaming, and its package carries no subword vocabulary to tokenise phrases with |
 | `zipformer-small-en` | no | transducer with subwords, and no vocabulary file is published for it |
 
 `gigaam-v3-rnnt-punct-ru` is the entry to use for biasing, and it is also the Russian
@@ -1115,10 +1199,10 @@ first, so NanoASR converts at load time rather than handing it over to find out.
 assembled by hand is wired up by `nanoasr models inspect <dir>`, which drafts a manifest
 with the file in it.
 
-Streaming recognition cannot be biased at all, whatever the model: a streaming recogniser
-settles its hotwords when it is constructed, so a per-session list would mean a second
-resident copy of the model for the life of a connection. The realtime dialect reports
-this to clients that send `prompt`.
+Streaming models cannot be biased at all, whatever the model, whether they serve a
+session or an upload: a streaming recogniser settles its hotwords when it is constructed,
+so a per-session list would mean a second resident copy of the model for the life of a
+connection. The realtime dialect reports this to clients that send `prompt`.
 
 ## Diarization
 
@@ -1480,6 +1564,7 @@ separate punctuation model is required for Russian.
 | `zipformer-small-en` | Recognition, transducer | en | 112 MB | Permitted |
 | `t-one-ctc-ru` | Streaming recognition, CTC, 8 kHz | ru | 128 MB | Permitted |
 | `streaming-zipformer-small-ru` | Streaming recognition, transducer | ru | 90 MB | Unconfirmed |
+| `nemotron-3.5-streaming-multi` | Streaming recognition, transducer, 560 ms | 32 locales | 475 MB | Permitted (OpenMDW-1.1) |
 | `silero-vad-v5` | Voice activity detection | multi | 0.6 MB | Permitted |
 | `nemotron-3-diarization` | Diarization | multi | 176 MB | Permitted |
 | `nemotron-3-diarization-int8` | Diarization, int8 | multi | 89 MB | Permitted |
@@ -1495,13 +1580,26 @@ with the archive. The two GigaAM v3 entries say MIT because both carry the MIT t
 beside the weights and their publisher states `license: mit` for the weights on Hugging
 Face; the v2 entries have not been checked the same way.
 
-The two streaming entries serve `/v1/realtime` and only that: a streaming export has no
-whole-file decoder, and asking the offline endpoints for one is refused with a message
-saying so. Neither writes punctuation or capitals — no streaming Russian model does.
-`t-one-ctc-ru` is 8 kHz telephony, trained on call-centre audio, which is the workload
-the offline default was chosen for too; `streaming-zipformer-small-ru` is 16 kHz, a
-third cheaper to keep resident and measured at 0.03x real time on two CPU threads
-against T-one's 0.075x.
+The three streaming entries serve `/v1/realtime` and also decode uploaded files: a
+streaming export has no whole-file decoder of its own, so a recording is fed through it as
+one utterance per speech segment, with a little silence either side that the encoder needs
+(half a second before, 1.3 s after — measured, because with less the first and last word
+of a segment went missing). The two Russian ones write no punctuation or capitals; no
+streaming Russian model does. `t-one-ctc-ru` is 8 kHz telephony, trained on call-centre
+audio, which is the workload the offline default was chosen for too;
+`streaming-zipformer-small-ru` is 16 kHz, a third cheaper to keep resident and measured at
+0.03x real time on two CPU threads against T-one's 0.075x.
+
+`nemotron-3.5-streaming-multi` is NVIDIA's Nemotron 3.5 ASR, converted by sherpa-onnx:
+a cache-aware FastConformer with an RNN-T decoder and the language as an input, int8, with
+a 560 ms chunk. It punctuates and capitalises by itself and takes a language per request
+([`language`](#language--what-to-transcribe)). Measured here: 951 MB resident after the
+load and 1152 MB after a batch of eight segments, and 0.4x real time as an upload on two
+CPU threads. The other chunk sizes (80, 160, 320 and 1120 ms) are separate downloads of
+different weights and are not catalogued. The licence is OpenMDW-1.1, read in full: use,
+modification and distribution "without restriction", with no field of use and no limit on
+users; the one condition is keeping a copy of the agreement when the weights are
+redistributed, which NanoASR does not do. Hotword dictionaries do not work with it.
 
 The catalog is extended with custom entries through `registry.catalog_url`, and mirrors
 are configured with `registry.mirrors`.

@@ -33,8 +33,16 @@ type fakeRecognizer struct {
 
 	mu      sync.Mutex
 	decodes int
-	streams int
-	closed  bool
+	// languages is every language a stream was told, in order.
+	languages []string
+	streams   int
+	closed    bool
+}
+
+func (f *fakeRecognizer) toldLanguages() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.languages...)
 }
 
 func newFake() *fakeRecognizer {
@@ -110,6 +118,12 @@ func (s *fakeStream) Accept(sampleRate int, samples []float32) {
 	}
 	s.pending += len(samples)
 	s.acceptLog = append(s.acceptLog, sampleRate)
+}
+
+func (s *fakeStream) SetLanguage(language string) {
+	s.rec.mu.Lock()
+	defer s.rec.mu.Unlock()
+	s.rec.languages = append(s.rec.languages, language)
 }
 
 func (s *fakeStream) Ready() bool {

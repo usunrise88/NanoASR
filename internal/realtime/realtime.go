@@ -45,7 +45,9 @@ type Options struct {
 	Tick time.Duration
 	// Languages comes from the model manifest, for the session description.
 	Languages []string
-	Logger    *slog.Logger
+	// Locales is what a multilingual model offers, for the same description.
+	Locales []string
+	Logger  *slog.Logger
 }
 
 const (
@@ -142,6 +144,7 @@ func (e *Engine) Describe() core.RealtimeInfo {
 	return core.RealtimeInfo{
 		Model:          e.rec.ModelID(),
 		Languages:      e.opt.Languages,
+		Locales:        e.opt.Locales,
 		SampleRate:     e.rec.SampleRate(),
 		Punctuation:    caps.PunctuationBuiltin,
 		WordTimestamps: caps.WordTimestamps,
@@ -270,7 +273,9 @@ func (e *Engine) admit(sessions map[*Session]struct{}, p core.RealtimeParams) (*
 	if err != nil {
 		return nil, err
 	}
-	return newSession(e, stream, p), nil
+	s := newSession(e, stream, p)
+	s.applyLanguage(p.Language)
+	return s, nil
 }
 
 // teardown closes one session's stream and its event channel. It runs on the
@@ -291,8 +296,12 @@ func (e *Engine) step(sessions map[*Session]struct{}) {
 	}
 
 	for s := range sessions {
+		if lang, changed := s.takeLanguage(); changed {
+			s.applyLanguage(lang)
+		}
 		if s.takeClear() {
 			s.stream.Reset()
+			s.applyLanguage(s.language)
 			end := s.audioMS
 			s.emit(core.RealtimeEvent{Kind: core.RealtimeCleared, Item: s.item, EndMS: end}, false)
 			s.nextItem(end)
@@ -329,6 +338,14 @@ func (e *Engine) step(sessions map[*Session]struct{}) {
 	for s := range sessions {
 		if s.takeCommit() {
 			s.committing = true
+			// The audio at the top of this step was fed before the commit
+			// arrived, and a client that sends faster than real time keeps
+			// appending while the decoder is busy: whatever it queued behind
+			// the decode just run is still waiting, and finishing the item
+			// without it ends the sentence early and starts the next item with
+			// its end. Everything queued before the commit was queued before
+			// the flag became visible, so feeding now takes all of it.
+			s.feed()
 		}
 		if !s.committing {
 			continue
@@ -446,6 +463,7 @@ func (e *Engine) finishItem(s *Session, forced bool) {
 	}
 
 	s.stream.Reset()
+	s.applyLanguage(s.language)
 	s.nextItem(end)
 }
 

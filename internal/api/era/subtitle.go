@@ -164,7 +164,9 @@ func renderCue(g []cueWord, language string) cue {
 // noSpaceLanguage is whisperx's LANGUAGES_WITHOUT_SPACES: the two it writes
 // without separating the words.
 func noSpaceLanguage(language string) bool {
-	return language == "ja" || language == "zh"
+	// By language, not by tag: a multilingual model reports "ja-JP".
+	base := core.BaseTag(language)
+	return base == "ja" || base == "zh"
 }
 
 // withSpeaker prefixes the label whisperx uses when diarization ran. The

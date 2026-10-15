@@ -18,7 +18,7 @@ type fakeRec struct {
 	mu     sync.Mutex
 }
 
-func (f *fakeRec) Decode(context.Context, [][]float32, int) ([]asr.Recognition, error) {
+func (f *fakeRec) Decode(context.Context, [][]float32, int, asr.DecodeOptions) ([]asr.Recognition, error) {
 	return nil, nil
 }
 func (f *fakeRec) Capabilities() core.Capabilities { return core.Capabilities{} }

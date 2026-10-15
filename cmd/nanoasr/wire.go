@@ -755,6 +755,7 @@ func buildRealtime(
 		MaxBufferedSeconds: cfg.Realtime.MaxBufferedSeconds,
 		BatchSize:          cfg.Realtime.BatchSize,
 		Languages:          man.Languages,
+		Locales:            man.Locales,
 		Logger:             log,
 	})
 

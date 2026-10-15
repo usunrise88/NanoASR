@@ -399,6 +399,34 @@ func TestModelsList(t *testing.T) {
 	}
 }
 
+// A streaming model decodes an uploaded file — the recording is fed through it —
+// so it is something a client may pass as `model`, and belongs in the list. A
+// supporting model still does not.
+func TestModelsListIncludesStreamingModelsButNotSupportingOnes(t *testing.T) {
+	models := fakeModels{infos: []core.ModelInfo{
+		{ID: "gigaam-v3-rnnt-punct-ru", Kind: "asr", Languages: []string{"ru"}},
+		{ID: "nemotron-3.5-streaming-multi", Kind: "asr", Streaming: true, Languages: []string{"multi"}},
+		{ID: "silero-vad-v5", Kind: "vad", Languages: []string{"multi"}},
+	}}
+	srv := newServer(t, &fakeService{result: sampleResult()}, models)
+
+	resp, err := srv.Client().Get(srv.URL + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got modelList
+	decodeBody(t, resp, &got)
+
+	var ids []string
+	for _, m := range got.Data {
+		ids = append(ids, m.ID)
+	}
+	if len(ids) != 2 || ids[0] != "gigaam-v3-rnnt-punct-ru" || ids[1] != "nemotron-3.5-streaming-multi" {
+		t.Errorf("listed %v; want the two recognition models and not the VAD", ids)
+	}
+}
+
 func TestModelLookupUnknownIs404(t *testing.T) {
 	srv := newServer(t, &fakeService{result: sampleResult()}, fakeModels{})
 

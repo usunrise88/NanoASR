@@ -2,7 +2,8 @@ import { Inline, Stack } from '@/components/layout'
 import { Button, Field, Input, Select, Switch } from '@/components/ui'
 import { useDictionaryList } from '@/lib/api/hooks'
 import type { ModelInfo, TranscribeOptions } from '@/lib/api/types'
-import { useT } from '@/lib/i18n'
+import { currentLanguage, useT } from '@/lib/i18n'
+import { chosenLanguage, localeLabel } from '@/lib/locale'
 
 /**
  * The request parameters, with what this model cannot do turned off.
@@ -39,17 +40,43 @@ export function RunOptions({
   const biasReason = model?.capabilities.hotwords_reason ?? t('home.unsupported')
   const dictionaries = useDictionaryList()
 
+  // A multilingual model lists what it can be told, so the language is chosen
+  // from that list; any other model has one language and nothing to choose, and
+  // keeps the free field a bare code can be typed into.
+  const locales = model?.locales ?? []
+  const language = chosenLanguage(value.language, locales)
+  const uiLanguage = currentLanguage()
+  const languageOptions = [
+    { value: 'auto', label: t('home.languageAuto') },
+    ...locales.map((l) => ({ value: l, label: localeLabel(l, uiLanguage) })),
+  ]
+  // A value the model does not list stays selectable: it is what will be sent.
+  if (!languageOptions.some((o) => o.value === language)) {
+    languageOptions.push({ value: language, label: language })
+  }
+
   return (
     <Stack gap={4}>
-      <Field label={t('home.language')}>
-        <Input
-          value={value.language ?? ''}
-          disabled={disabled}
-          placeholder={t('home.languageAuto')}
-          spellCheck={false}
-          onChange={(e) => set('language', e.target.value)}
-        />
-      </Field>
+      {locales.length > 0 ? (
+        <Field label={t('home.language')} description={t('home.languageHint')}>
+          <Select
+            value={language}
+            disabled={disabled}
+            onChange={(v) => set('language', v)}
+            options={languageOptions}
+          />
+        </Field>
+      ) : (
+        <Field label={t('home.language')}>
+          <Input
+            value={value.language ?? ''}
+            disabled={disabled}
+            placeholder={t('home.languageAuto')}
+            spellCheck={false}
+            onChange={(e) => set('language', e.target.value)}
+          />
+        </Field>
+      )}
 
       <Field label={t('home.channelMode')}>
         <Select

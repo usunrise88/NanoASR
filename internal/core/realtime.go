@@ -28,9 +28,10 @@ type RealtimeService interface {
 // without a second copy of the model in memory.
 type RealtimeParams struct {
 	APIKeyID string
-	// Language is advisory: the streaming models are monolingual, so this is
-	// checked against the model's own languages and reported rather than
-	// switching anything.
+	// Language is what a multilingual model is told to transcribe: one of its
+	// locales, or "auto". The dialect has already resolved it against the
+	// model's list, so the engine passes it on as it is. Empty for a model with
+	// one language, which has nothing to choose.
 	Language string
 	// ModelID must name the configured streaming model, or be empty. A client
 	// asking for another one is told which one is loaded instead of being
@@ -44,8 +45,11 @@ type RealtimeParams struct {
 
 // RealtimeInfo describes the loaded streaming model and the session limits.
 type RealtimeInfo struct {
-	Model      string   `json:"model"`
-	Languages  []string `json:"languages,omitempty"`
+	Model     string   `json:"model"`
+	Languages []string `json:"languages,omitempty"`
+	// Locales is what a session may ask for when the model is multilingual,
+	// besides "auto". Empty otherwise.
+	Locales    []string `json:"locales,omitempty"`
 	SampleRate int      `json:"sample_rate"`
 	// Punctuation is whether the model writes sentence marks and capitals.
 	// False for every Russian streaming model there is, which clients would
@@ -78,6 +82,10 @@ type RealtimeSession interface {
 	// Clear discards audio that has not been recognised yet and starts a new
 	// utterance.
 	Clear()
+	// SetLanguage changes what a multilingual model is told to transcribe, from
+	// the next chunk it decodes. The argument is a locale the model offers or
+	// "auto"; the dialect has already checked it.
+	SetLanguage(language string)
 	Events() <-chan RealtimeEvent
 	ID() string
 	Close() error

@@ -478,12 +478,7 @@ func (c *conn) updateSession(ctx context.Context, ev clientEvent) bool {
 			}) == nil
 		}
 		if t.Language != "" {
-			c.params.Language = t.Language
-			if !supports(info.Languages, t.Language) {
-				c.warn(ctx, "language_ignored", "input_audio_transcription.language",
-					"the loaded model is "+strings.Join(info.Languages, ",")+
-						" only, so language has no effect")
-			}
+			c.setLanguage(ctx, info, t.Language)
 		}
 		if t.Prompt != "" {
 			c.warn(ctx, "prompt_ignored", "input_audio_transcription.prompt",
@@ -713,6 +708,7 @@ func (c *conn) sessionState(kind string) eventSessionState {
 				ModelSampleRate: info.SampleRate,
 				InputSampleRate: c.format.rate,
 				Languages:       info.Languages,
+				Locales:         info.Locales,
 				Punctuation:     info.Punctuation,
 				WordTimestamps:  info.WordTimestamps,
 				MaxSessions:     info.MaxSessions,
@@ -720,6 +716,40 @@ func (c *conn) sessionState(kind string) eventSessionState {
 				Notes:           notes,
 			},
 		},
+	}
+}
+
+// setLanguage applies a language the client asked for.
+//
+// A multilingual model takes it: it is resolved against the model's locales,
+// recorded for the session, and handed to the stream already running if there
+// is one, which applies it from the next chunk. A code the model does not offer
+// leaves the session as it was and says so — the same warning a model with one
+// language gives, for the same reason: the transcript will not be in the
+// language that was asked for.
+func (c *conn) setLanguage(ctx context.Context, info core.RealtimeInfo, asked string) {
+	const param = "input_audio_transcription.language"
+
+	if len(info.Locales) == 0 {
+		c.params.Language = asked
+		if !supports(info.Languages, asked) {
+			c.warn(ctx, "language_ignored", param,
+				"the loaded model is "+strings.Join(info.Languages, ",")+
+					" only, so language has no effect")
+		}
+		return
+	}
+
+	locale, ok := core.ResolveLocale(info.Locales, asked)
+	if !ok {
+		c.warn(ctx, "language_ignored", param,
+			asked+" is not one of the loaded model's locales ("+
+				strings.Join(info.Locales, ", ")+") or \"auto\"; the language is unchanged")
+		return
+	}
+	c.params.Language = locale
+	if c.sess != nil {
+		c.sess.SetLanguage(locale)
 	}
 }
 

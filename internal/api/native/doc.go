@@ -14,7 +14,8 @@ func (*Adapter) Doc() adapter.Doc {
 			Method:  "POST",
 			Path:    "/api/v1/transcribe",
 			Summary: "Transcribe an uploaded file and wait for the result.",
-			Detail: "multipart/form-data with file, plus model, language, channel_mode, " +
+			Detail: "multipart/form-data with file, plus model, language (a locale of a " +
+				"multilingual model, or auto), channel_mode, " +
 				"diarize, num_speakers, punctuate, itn, hotwords, hotwords_dict, " +
 				"hotwords_score, decoding_method and word_timestamps. hotwords_dict " +
 				"names stored dictionaries by key and merges their phrases into " +

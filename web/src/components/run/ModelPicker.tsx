@@ -1,5 +1,6 @@
 import { Download } from 'iconoir-react'
 
+import { LanguageBadges } from '@/components/LanguageBadges'
 import { Stack } from '@/components/layout'
 import { Badge, Button, Field, Progress, Select } from '@/components/ui'
 import type { ModelInfo } from '@/lib/api/types'
@@ -53,9 +54,7 @@ export function ModelPicker({
         {selected && (
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={modelTone(selected.state)}>{t(modelStateKey(selected.state))}</Badge>
-            {selected.languages.map((l) => (
-              <Badge key={l}>{l}</Badge>
-            ))}
+            <LanguageBadges model={selected} />
             {selected.capabilities.word_timestamps && <Badge tone="accent">words</Badge>}
             {selected.license && (
               <span

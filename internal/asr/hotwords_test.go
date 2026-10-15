@@ -3,6 +3,8 @@ package asr
 import (
 	"strings"
 	"testing"
+
+	"github.com/usunrise88/nanoasr/internal/core"
 )
 
 func TestHotwordsBuffer(t *testing.T) {
@@ -161,5 +163,19 @@ func TestDecodingSupport(t *testing.T) {
 				t.Error("DecodingSupport accepted a combination that terminates the process")
 			}
 		})
+	}
+}
+
+// A streaming transducer is a transducer; telling its user that biasing
+// "works on transducer models" would be true and no help. The reason names what
+// is actually different about it.
+func TestAStreamingTransducerSaysWhyItCannotBeBiased(t *testing.T) {
+	err := HotwordsSupport("streaming_transducer", UnitBPE, ModifiedBeamSearch, true)
+	if err == nil {
+		t.Fatal("a streaming transducer must not be offered biasing")
+	}
+	msg := core.AsError(err).Message
+	if !strings.Contains(msg, "streaming") || strings.Contains(msg, "works on transducer models") {
+		t.Errorf("reason = %q", msg)
 	}
 }

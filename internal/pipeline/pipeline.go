@@ -21,6 +21,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pool"
 	"github.com/usunrise88/nanoasr/internal/postproc"
+	"github.com/usunrise88/nanoasr/internal/registry"
 	"github.com/usunrise88/nanoasr/internal/vad"
 	"github.com/usunrise88/nanoasr/internal/words"
 )
@@ -312,7 +313,7 @@ func (p *Pipeline) channelMode(req core.Request) core.ChannelMode {
 // under two seconds, and decoding them one at a time leaves cores idle between
 // utterances. The governor is claimed per batch rather than per file so a long
 // recording cannot hold the whole CPU budget for minutes.
-func (p *Pipeline) recognise(ctx context.Context, rec asr.Recognizer, segments []vad.Segment, sampleRate int) ([]asr.Recognition, error) {
+func (p *Pipeline) recognise(ctx context.Context, rec asr.Recognizer, segments []vad.Segment, sampleRate int, opt asr.DecodeOptions) ([]asr.Recognition, error) {
 	out := make([]asr.Recognition, 0, len(segments))
 	maxSamples := p.opt.BatchMaxSeconds * sampleRate
 
@@ -344,7 +345,7 @@ func (p *Pipeline) recognise(ctx context.Context, rec asr.Recognizer, segments [
 		// governor would quietly fill up across panics).
 		got, err := func() ([]asr.Recognition, error) {
 			defer p.governor.Release(p.opt.NumThreads)
-			return rec.Decode(ctx, batch, sampleRate)
+			return rec.Decode(ctx, batch, sampleRate, opt)
 		}()
 		if err != nil {
 			return nil, err
@@ -517,8 +518,33 @@ func firstCapabilityWarning(ws []core.Warning) (core.Warning, bool) {
 	return core.Warning{}, false
 }
 
+// decodeLanguage is what the recogniser is told to transcribe. It is empty for
+// a model that has one language, since there is nothing to tell it; for a
+// multilingual one it is the locale the request resolves to, or "auto" when the
+// request named none — or named one the model does not offer, which
+// unsupportedOptions has already warned about. Falling back to auto rather
+// than refusing is the same choice every other model-dependent option makes.
+func decodeLanguage(req core.Request, lease *pool.Lease) string {
+	if !lease.Manifest.IsMultilingual() {
+		return ""
+	}
+	loc, ok := lease.Manifest.ResolveLanguage(req.Language)
+	if !ok {
+		return registry.AutoLanguage
+	}
+	return loc
+}
+
+// resultLanguage is the language the result reports. For a multilingual model
+// it is the locale that was decoded for, or "auto" — never "multi", which says
+// what the model is for and not what this transcript is in. The runtime does
+// not report which language an auto decode settled on, so "auto" is the honest
+// answer there rather than a guess.
 func resultLanguage(req core.Request, lease *pool.Lease) string {
-	if req.Language != "" {
+	if lease.Manifest.IsMultilingual() {
+		return decodeLanguage(req, lease)
+	}
+	if req.Language != "" && !strings.EqualFold(req.Language, core.AutoLanguage) {
 		return req.Language
 	}
 	if len(lease.Manifest.Languages) > 0 {

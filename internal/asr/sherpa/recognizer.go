@@ -53,7 +53,10 @@ func New(cfg *sonnx.OfflineRecognizerConfig, caps core.Capabilities, modelingUni
 
 // Decode runs one batch through DecodeStreams. Batching is what keeps CPU busy:
 // per-stream decoding leaves cores idle between short VAD segments.
-func (r *Recognizer) Decode(ctx context.Context, batch [][]float32, sampleRate int) ([]asr.Recognition, error) {
+//
+// opt is ignored: the offline families are monolingual, and the one that
+// reports a language (SenseVoice-style) is not selectable per call here.
+func (r *Recognizer) Decode(ctx context.Context, batch [][]float32, sampleRate int, _ asr.DecodeOptions) ([]asr.Recognition, error) {
 	if len(batch) == 0 {
 		return nil, nil
 	}

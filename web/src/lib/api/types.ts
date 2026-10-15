@@ -125,7 +125,11 @@ export interface ModelInfo {
   display_name: string
   kind: string
   family: string
+  /** Also serves the realtime API. It decodes uploaded files all the same. */
+  streaming?: boolean
   languages: string[]
+  /** What a multilingual model can be told to transcribe, besides "auto". */
+  locales?: string[]
   license: string
   state: ModelState
   pinned: boolean

@@ -161,6 +161,17 @@ func (*Adapter) detectLanguage(svc core.Service, deps adapter.Deps) http.Handler
 			return
 		}
 
+		// A multilingual model left to choose decided something, and the
+		// runtime does not say what. Answering with "auto" would be a code that
+		// is not a language; answering with the model's declared language would
+		// be invented.
+		if result.Language == core.AutoLanguage {
+			writeError(w, core.Errorf(core.CodeCapabilityUnavailable,
+				"the model chose the language itself and its runtime does not report which; "+
+					"this endpoint can only name a language the model was told or declares"))
+			return
+		}
+
 		confidence := languageConfidence(r.Context(), deps, result.Model)
 		if confidence == 0 {
 			setWarnings(w, []core.Warning{{

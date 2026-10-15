@@ -1,5 +1,7 @@
 package era
 
+import "github.com/usunrise88/nanoasr/internal/core"
+
 // languageName renders a code the way upstream does: the lowercase English
 // name whisper's tokenizer table carries.
 //
@@ -11,6 +13,11 @@ package era
 // build does not have.
 func languageName(code string) string {
 	if name, ok := languageNames[code]; ok {
+		return name
+	}
+	// A multilingual model reports a locale ("pt-BR"); the table is by
+	// language.
+	if name, ok := languageNames[core.BaseTag(code)]; ok {
 		return name
 	}
 	return code

@@ -811,3 +811,32 @@ func TestSplitTaskID(t *testing.T) {
 		}
 	}
 }
+
+// A multilingual model left to choose decided something the runtime will not
+// report. The endpoint says so instead of returning "auto" as if it were a
+// language, or the model's first declared language as if it had been measured.
+func TestDetectLanguageRefusesToInventAnAnswerForAutoDetection(t *testing.T) {
+	res := sampleResult()
+	res.Language = core.AutoLanguage
+	svc := &fakeService{result: res}
+	models := fakeModels{infos: []core.ModelInfo{{
+		ID: "nemotron-3.5-streaming-multi", Revision: "2026-06-11", Languages: []string{"multi"},
+	}}}
+	resp := post(t, newServer(t, svc, models), "/detect-language", "call.wav", nil)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want 422", resp.StatusCode)
+	}
+}
+
+func TestLanguageNamesFoldLocalesAndSubtitlesKnowCJKLocales(t *testing.T) {
+	for code, want := range map[string]string{"pt-BR": "portuguese", "ru-RU": "russian", "ja-JP": "japanese", "ru": "russian"} {
+		if got := languageName(code); got != want {
+			t.Errorf("languageName(%q) = %q, want %q", code, got, want)
+		}
+	}
+	for code, want := range map[string]bool{"ja": true, "ja-JP": true, "zh-CN": true, "ru-RU": false, "": false} {
+		if got := noSpaceLanguage(code); got != want {
+			t.Errorf("noSpaceLanguage(%q) = %v, want %v", code, got, want)
+		}
+	}
+}

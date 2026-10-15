@@ -52,11 +52,12 @@ type fakeRecognizer struct {
 
 	mu         sync.Mutex
 	batchSizes []int
+	opts       []asr.DecodeOptions
 	next       int
 	block      chan struct{}
 }
 
-func (f *fakeRecognizer) Decode(ctx context.Context, batch [][]float32, _ int) ([]asr.Recognition, error) {
+func (f *fakeRecognizer) Decode(ctx context.Context, batch [][]float32, _ int, opt asr.DecodeOptions) ([]asr.Recognition, error) {
 	if f.block != nil {
 		select {
 		case <-f.block:
@@ -68,6 +69,7 @@ func (f *fakeRecognizer) Decode(ctx context.Context, batch [][]float32, _ int) (
 	defer f.mu.Unlock()
 
 	f.batchSizes = append(f.batchSizes, len(batch))
+	f.opts = append(f.opts, opt)
 	out := make([]asr.Recognition, 0, len(batch))
 	for range batch {
 		if f.next < len(f.results) {
@@ -84,12 +86,15 @@ func (f *fakeRecognizer) Capabilities() core.Capabilities { return f.caps }
 func (f *fakeRecognizer) ModelingUnit() string            { return f.unit }
 func (f *fakeRecognizer) Close() error                    { return nil }
 
-type fakeRegistry struct{ languages []string }
+type fakeRegistry struct {
+	languages []string
+	locales   []string
+}
 
 func (r fakeRegistry) Resolve(_ context.Context, id string) (registry.Manifest, error) {
 	return registry.Manifest{
 		ID: id, Revision: "1", Family: "nemo_ctc", SampleRate: testRate,
-		ModelingUnit: "bpe", Languages: r.languages,
+		ModelingUnit: "bpe", Languages: r.languages, Locales: r.locales,
 		Features: registry.Features{SampleRate: testRate, Dim: 64},
 		Files:    map[string]string{"model": "m.onnx", "tokens": "t.txt"},
 	}, nil
@@ -111,8 +116,13 @@ type harness struct {
 
 func newHarness(t *testing.T, pcm audio.PCM, segs []vad.Segment, rec *fakeRecognizer, opt Options) *harness {
 	t.Helper()
+	return newHarnessFor(t, fakeRegistry{languages: []string{"ru"}}, pcm, segs, rec, opt)
+}
 
-	models := pool.New(fakeRegistry{languages: []string{"ru"}},
+func newHarnessFor(t *testing.T, reg fakeRegistry, pcm audio.PCM, segs []vad.Segment, rec *fakeRecognizer, opt Options) *harness {
+	t.Helper()
+
+	models := pool.New(reg,
 		func(context.Context, registry.Manifest, string, asr.Variant) (asr.Recognizer, error) { return rec, nil },
 		pool.Options{MaxResidentModels: 2, MaxModelRSSMB: 4096})
 	t.Cleanup(func() { _ = models.Close() })

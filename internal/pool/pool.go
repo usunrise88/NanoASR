@@ -485,6 +485,7 @@ func (p *Pool) List() []core.ModelInfo {
 		// question differently from the same model listed on disk — which
 		// includes the kind guard, or a resident VAD would explain at length
 		// why it is not a transducer.
+		caps.LanguageDetect = e.manifest.IsMultilingual()
 		if e.manifest.EffectiveKind() == registry.KindASR {
 			caps.Hotwords, caps.HotwordsReason = asr.HotwordsCapability(
 				e.manifest.Family, e.manifest.ModelingUnit, e.manifest.Files["bpe_vocab"] != "")
@@ -497,6 +498,8 @@ func (p *Pool) List() []core.ModelInfo {
 			DisplayName:  e.manifest.DisplayName,
 			Family:       e.manifest.Family,
 			Languages:    e.manifest.Languages,
+			Locales:      e.manifest.Locales,
+			Streaming:    e.manifest.Streaming,
 			License:      e.manifest.License,
 			State:        e.state,
 			Pinned:       e.pinned,

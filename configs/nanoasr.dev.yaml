@@ -93,6 +93,9 @@ realtime:
   # A streaming model from the catalog. t-one-ctc-ru is Russian telephony at
   # 8 kHz; streaming-zipformer-small-ru is 16 kHz and cheaper to keep resident.
   # Neither writes punctuation or capitals — no streaming Russian model does.
+  # nemotron-3.5-streaming-multi is multilingual (32 locales, the session picks
+  # one or asks for auto), punctuates, and takes about a gigabyte of memory —
+  # twice that if the same model also serves uploads.
   model: t-one-ctc-ru
   max_sessions: 0               # 0 -> auto, from the CPU count
   max_session_duration: 2h      # ceiling on one connection
