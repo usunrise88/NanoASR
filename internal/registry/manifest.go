@@ -45,7 +45,13 @@ type Manifest struct {
 	Family      string   `yaml:"family" json:"family"`
 	DisplayName string   `yaml:"display_name,omitempty" json:"display_name"`
 	Languages   []string `yaml:"languages,omitempty" json:"languages"`
-	SampleRate  int      `yaml:"sample_rate" json:"sample_rate"`
+	// Locales is what a multilingual model can be told to transcribe, as the
+	// model itself spells them ("ru-RU"). It sits beside Languages: that list
+	// answers "what is this model for" ("multi"), this one answers "what may a
+	// request ask for". The first locale of a language is the one a bare code
+	// ("pt") resolves to, so a list is ordered with the primary variant first.
+	Locales    []string `yaml:"locales,omitempty" json:"locales,omitempty"`
+	SampleRate int      `yaml:"sample_rate" json:"sample_rate"`
 	// ModelingUnit drives word assembly: bpe | cjkchar | char | cjkchar+bpe.
 	ModelingUnit string `yaml:"modeling_unit,omitempty" json:"modeling_unit"`
 	// Streaming marks a model that recognises audio as it arrives, for the
@@ -273,13 +279,45 @@ func (m Manifest) OptionalFilePath(dir, role string) string {
 	return path
 }
 
+// AutoLanguage is the request value that asks a multilingual model to choose
+// the language itself.
+const AutoLanguage = core.AutoLanguage
+
+// IsMultilingual reports whether the model can be told which language to
+// transcribe. It is what language_detect in the capabilities means: the model
+// takes a language and can also be left to pick one.
+func (m Manifest) IsMultilingual() bool { return len(m.Locales) > 0 }
+
+// ResolveLanguage turns what a request asked for into what the model should be
+// told: one of its locales, or "auto". See core.ResolveLocale for the rules. It
+// reports false for a language the model does not offer.
+//
+// For a model that is not multilingual there is nothing to resolve: it returns
+// the request unchanged, and whether the model suits it is Supports' question.
+func (m Manifest) ResolveLanguage(req string) (string, bool) {
+	if !m.IsMultilingual() {
+		return req, true
+	}
+	return core.ResolveLocale(m.Locales, req)
+}
+
 // Supports reports whether the model claims this language.
+//
+// A bare code and a locale are the same language here: "ru" is supported by a
+// model that lists "ru-RU", and the other way round.
 func (m Manifest) Supports(lang string) bool {
-	if lang == "" {
+	// "Choose for yourself" is something any model can honour: one with a single
+	// language has only that to choose.
+	if lang == "" || strings.EqualFold(strings.TrimSpace(lang), AutoLanguage) {
 		return true
 	}
+	if m.IsMultilingual() {
+		_, ok := m.ResolveLanguage(lang)
+		return ok
+	}
+	want := core.BaseTag(lang)
 	for _, l := range m.Languages {
-		if l == lang || l == "multi" {
+		if l == "multi" || core.BaseTag(l) == want {
 			return true
 		}
 	}

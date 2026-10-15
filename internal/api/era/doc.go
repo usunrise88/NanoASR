@@ -22,7 +22,9 @@ func (*Adapter) Doc() adapter.Doc {
 			Summary: "Report the language of the audio.",
 			Detail: "Answered from the model's declared languages, not from an acoustic " +
 				"language identifier: these are monolingual models, so the honest " +
-				"answer is what the model was trained on.",
+				"answer is what the model was trained on. A multilingual model left " +
+				"to choose the language is refused with 422: it decided something " +
+				"and the runtime does not say what.",
 		}, {
 			Method:  "POST",
 			Path:    "/asr_task",

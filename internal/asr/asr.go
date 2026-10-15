@@ -27,13 +27,24 @@ func (r Recognition) HasTimestamps() bool {
 	return len(r.Timestamps) > 0 && len(r.Timestamps) == len(r.Tokens)
 }
 
+// DecodeOptions are the per-call settings of a Decode. They are not part of
+// Variant on purpose: a Variant is a second resident copy of the weights,
+// because sherpa-onnx fixes hotwords and the decoding method when the model is
+// built, while everything here is applied to one stream and costs nothing.
+type DecodeOptions struct {
+	// Language is a locale the model knows ("ru-RU"), "auto" to let a
+	// multilingual model choose, or "" for the model's own default. Models that
+	// are not multilingual ignore it.
+	Language string
+}
+
 // Recognizer decodes prepared audio segments. Implementations are safe for
 // concurrent use: onnxruntime sessions are, and a single loaded model is shared
 // by every worker holding a lease on it.
 type Recognizer interface {
 	// Decode takes a batch of segments and returns one Recognition each, in
 	// order. Batching is what keeps CPU utilisation high on long files.
-	Decode(ctx context.Context, batch [][]float32, sampleRate int) ([]Recognition, error)
+	Decode(ctx context.Context, batch [][]float32, sampleRate int, opt DecodeOptions) ([]Recognition, error)
 	Capabilities() core.Capabilities
 	// ModelingUnit tells the word assembler how to group tokens.
 	ModelingUnit() string

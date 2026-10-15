@@ -276,6 +276,14 @@ function Stats({ result, t }: { result: Result; t: ReturnType<typeof useT> }) {
   return (
     <Stack gap={1}>
       <Detail label={t('jobs.duration')}>{clock(result.duration)}</Detail>
+      {/* "auto" is what a multilingual model was asked for, not a language: the
+          runtime does not say which one it settled on, and a bare "auto" in a
+          column of facts reads like a result. */}
+      {result.language && (
+        <Detail label={t('result.language')}>
+          {result.language === 'auto' ? t('result.languageAuto') : result.language}
+        </Detail>
+      )}
       <Detail label={t('result.processing')}>{clock(result.stats.processing_ms / 1000)}</Detail>
       <Detail label={t('result.rtf')}>{result.stats.rtf.toFixed(3)}</Detail>
       <Detail label={t('result.segments')}>{result.stats.segments_total}</Detail>

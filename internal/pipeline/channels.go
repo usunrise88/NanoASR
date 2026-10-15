@@ -42,7 +42,7 @@ func (p *Pipeline) channel(
 	}
 
 	recognitions, err := runStage(stages, "asr", func() ([]asr.Recognition, error) {
-		return p.recognise(ctx, lease.Recognizer, segments, pcm.SampleRate)
+		return p.recognise(ctx, lease.Recognizer, segments, pcm.SampleRate, asr.DecodeOptions{Language: decodeLanguage(req, lease)})
 	})
 	if err != nil {
 		return track{}, err

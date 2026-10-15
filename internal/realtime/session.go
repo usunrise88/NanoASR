@@ -41,7 +41,11 @@ type Session struct {
 	events chan core.RealtimeEvent
 
 	// --- loop goroutine only ---
-	stream      asr.Stream
+	stream asr.Stream
+	// language is what the stream was last told, kept so it can be told again
+	// after a Reset: the model reads it for every chunk, and nothing promises
+	// it outlives the utterance.
+	language    string
 	autoTurns   bool
 	started     time.Time
 	item        string
@@ -66,6 +70,8 @@ type Session struct {
 	pendingSamples int
 	commit         bool
 	clear          bool
+	newLanguage    string
+	languageSet    bool
 	lastAudio      atomic.Int64 // unix nanoseconds
 	closed         atomic.Bool
 	closeOnce      sync.Once
@@ -236,6 +242,35 @@ func (s *Session) takeCommit() bool {
 	was := s.commit
 	s.commit = false
 	return was
+}
+
+// SetLanguage asks for a different language from the next chunk. Like Commit
+// and Clear it only records the request: the stream belongs to the loop.
+func (s *Session) SetLanguage(language string) {
+	if s.closed.Load() {
+		return
+	}
+	s.mu.Lock()
+	s.newLanguage = language
+	s.languageSet = true
+	s.mu.Unlock()
+	s.engine.poke()
+}
+
+func (s *Session) takeLanguage() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lang, set := s.newLanguage, s.languageSet
+	s.languageSet = false
+	return lang, set
+}
+
+// applyLanguage tells the stream. Loop goroutine only.
+func (s *Session) applyLanguage(language string) {
+	s.language = language
+	if language != "" {
+		s.stream.SetLanguage(language)
+	}
 }
 
 func (s *Session) takeClear() bool {

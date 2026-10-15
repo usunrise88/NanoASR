@@ -45,6 +45,11 @@ type Stream interface {
 	// Accept adds audio. sampleRate is the rate of these samples, resampled
 	// internally when it differs from the model's.
 	Accept(sampleRate int, samples []float32)
+	// SetLanguage selects the language of this stream: a locale the model
+	// knows, "auto" or "". It only means something to a multilingual model and
+	// is a no-op for the rest. It may be called at any time; the model reads it
+	// again for every chunk it encodes, so a change applies from the next one.
+	SetLanguage(language string)
 	// Ready reports whether enough frames have accumulated to decode.
 	Ready() bool
 	// Hypothesis is the transcript of the current utterance so far. It is

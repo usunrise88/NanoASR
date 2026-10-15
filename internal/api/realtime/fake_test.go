@@ -72,6 +72,7 @@ type fakeSession struct {
 	mu        sync.Mutex
 	audio     []appended
 	commits   int
+	languages []string
 	clears    int
 	closes    int
 	appendErr error
@@ -101,6 +102,12 @@ func (s *fakeSession) Commit() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.commits++
+}
+
+func (s *fakeSession) SetLanguage(language string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.languages = append(s.languages, language)
 }
 
 func (s *fakeSession) Clear() {

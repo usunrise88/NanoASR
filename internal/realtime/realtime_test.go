@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -590,5 +591,52 @@ func TestTheSessionCountIsVisibleWhileTheDecoderIsBusy(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Describe() blocked on the decoder loop")
+	}
+}
+
+// A commit means "everything I sent before this was one utterance". Audio that
+// arrives while the decoder is busy is still queued when the loop reaches the
+// commit, and finishing the item without it ends the sentence early and starts
+// the next item with what should have been its end. A client that uploads
+// faster than real time and commits straight away hits this every time.
+func TestACommitIncludesAudioThatArrivedWhileTheDecoderWasBusy(t *testing.T) {
+	rec := newFake()
+	rec.blockDecode = make(chan struct{})
+	// More words than the commit's own tail can use up, so that audio decoded
+	// after the final has something to say.
+	for i := range 30 {
+		rec.words = append(rec.words, fmt.Sprintf("слово%d", i))
+	}
+	e := start(t, rec, Options{MaxSessions: 1, MaxBufferedSeconds: 30})
+
+	s := open(t, e, core.RealtimeParams{AutoTurns: true})
+	defer s.Close()
+
+	// Enough for the loop to feed it and enter a decode that does not return.
+	if err := s.Append(16000, make([]float32, 3200)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// Queued behind the stuck decode, with the commit that follows it.
+	for range 4 {
+		if err := s.Append(16000, make([]float32, 1600)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Commit()
+	close(rec.blockDecode)
+
+	evs := collect(t, s, core.RealtimeFinal)
+	if _, ok := find(evs, core.RealtimeFinal); !ok {
+		t.Fatalf("no final: %s", kinds(evs))
+	}
+
+	// Nothing may follow: the audio queued behind the commit's stuck decode
+	// belongs to the utterance that was just finished.
+	select {
+	case ev := <-s.Events():
+		t.Errorf("a %s event followed the final: the late audio started an item of its own", ev.Kind)
+	case <-time.After(300 * time.Millisecond):
 	}
 }

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { Download, Pin, PinSolid, Refresh } from 'iconoir-react'
 
+import { LanguageBadges } from '@/components/LanguageBadges'
 import { Card, Inline, Page, Section, Stack } from '@/components/layout'
 import {
   Badge,
@@ -144,9 +145,7 @@ function InstalledModel({
           <span className="text-[13px] font-medium">{model.display_name || model.id}</span>
           <Badge tone={modelTone(model.state)}>{t(modelStateKey(model.state))}</Badge>
           {model.pinned && <Badge tone="accent">{t('models.pin')}</Badge>}
-          {model.languages.map((l) => (
-            <Badge key={l}>{l}</Badge>
-          ))}
+          <LanguageBadges model={model} />
         </Inline>
 
         <Stack gap={1}>
@@ -244,9 +243,7 @@ function CatalogModel({ model, canAdminister }: { model: ModelInfo; canAdministe
         <Inline gap={2}>
           <span className="text-[13px] font-medium">{model.display_name || model.id}</span>
           <Badge>{t('status.absent')}</Badge>
-          {model.languages.map((l) => (
-            <Badge key={l}>{l}</Badge>
-          ))}
+          <LanguageBadges model={model} />
           {model.license && (
             <span className="text-[11px] text-[var(--text-muted)]">{model.license}</span>
           )}

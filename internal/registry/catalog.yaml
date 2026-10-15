@@ -278,6 +278,82 @@ models:
       cheaper of the two to keep resident.
 
   # ---------------------------------------------------------------------------
+  # Multilingual, streaming transducer, 16 kHz: NVIDIA's Nemotron 3.5 ASR, a
+  # cache-aware FastConformer with an RNN-T decoder and the language as an
+  # input. One set of weights serves the realtime API and decodes uploaded
+  # files, and the language is chosen per request: a locale from `locales`, or
+  # `auto` to let the model pick.
+  #
+  # `locales` is the thirty-two the model card says transcribe out of the box
+  # (nineteen "transcription-ready", thirteen "broad-coverage"), in the card's
+  # order — the first locale of each language is what a bare code such as `pt`
+  # resolves to. The model's own prompt dictionary accepts about sixty more
+  # codes, among them the eight the card calls "adaptation-ready" (Greek,
+  # Lithuanian, Latvian, Maltese, Slovenian, Hebrew, Thai, Nynorsk): the
+  # tokenizer knows them but the model was not trained to transcribe them, so
+  # they are not offered here.
+  - id: nemotron-3.5-streaming-multi
+    revision: "2026-06-11"
+    kind: asr
+    streaming: true
+    family: streaming_transducer
+    display_name: Nemotron 3.5 ASR streaming (multilingual, 560 ms)
+    languages: [multi]
+    locales: [
+      en-US, en-GB, es-US, es-ES, fr-FR, fr-CA, it-IT, pt-BR,
+      pt-PT, nl-NL, de-DE, tr-TR, ru-RU, ar-AR, hi-IN, ja-JP,
+      ko-KR, vi-VN, uk-UA, pl-PL, sv-SE, cs-CZ, nb-NO, da-DK,
+      bg-BG, fi-FI, hr-HR, sk-SK, zh-CN, hu-HU, ro-RO, et-EE
+    ]
+    sample_rate: 16000
+    modeling_unit: bpe
+    files:
+      encoder: encoder.int8.onnx
+      decoder: decoder.int8.onnx
+      joiner: joiner.int8.onnx
+      tokens: tokens.txt
+    features:
+      sample_rate: 16000
+      # Read from the encoder's own metadata (feat_dim), not assumed: this is
+      # a 128-bin model, and a fixed-shape input given the wrong width aborts
+      # the process.
+      dim: 128
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      # Measured: 951 MB resident after the load and its warm-up, 1152 MB after
+      # decoding a batch of eight segments. A model that also serves the
+      # realtime API is resident a second time, because that recogniser lives
+      # outside the pool.
+      approx_rss_mb: 1200
+    source:
+      url: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2
+      sha256: c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a
+      size_bytes: 475271763
+    license: https://openmdw.ai/license/1-1/
+    # OpenMDW-1.1, read in full: "permission is hereby granted, free of charge,
+    # to deal in the Model Materials without restriction", with no field of use
+    # and no limit on users, and no restriction on what is done with the
+    # output. The one condition is keeping a copy of the agreement when the
+    # weights are redistributed; NanoASR downloads them to the operator's own
+    # disk and does not redistribute them. The model card also says the model
+    # is ready for commercial use.
+    commercial_use: "yes"
+    notes: >-
+      Converted by sherpa-onnx from nvidia/nemotron-3.5-asr-streaming-0.6b,
+      int8, with a 560 ms chunk. Writes its own punctuation and capitals. The
+      language is a per-request setting that costs nothing: it is read for each
+      stream, so one resident copy serves every language. `auto` works, but the
+      runtime does not report which language it chose, so a result then says
+      `auto`, and it chooses per speech segment: the last two seconds of the
+      reference clip came back as Latin letters while the rest was Russian, so
+      pin the language whenever it is known. Measured on the reference clip as
+      an upload: 0.4x real time on two CPU threads. Hotword dictionaries do not work with it: the package carries no
+      subword vocabulary to tokenise phrases with, and the streaming path is
+      never biased. Other chunk sizes (80, 160, 320, 1120 ms) are separate
+      downloads of different weights and are not catalogued.
+
+  # ---------------------------------------------------------------------------
   # Diarization in one model: an end-to-end Sortformer that labels up to eight
   # speakers, in order of arrival, straight from the audio. There is no
   # clustering, so there is no threshold to tune and no speaker count to give.

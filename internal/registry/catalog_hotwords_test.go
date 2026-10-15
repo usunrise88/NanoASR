@@ -24,6 +24,7 @@ func TestWhichCatalogModelsCanBeBiased(t *testing.T) {
 		"t-one-ctc-ru":                 false, // streaming CTC
 		"streaming-zipformer-small-ru": false, // streaming: biased at load, not per request
 		"zipformer-small-en":           false, // transducer, subwords, no vocabulary file
+		"nemotron-3.5-streaming-multi": false, // streaming, and its package carries no subword vocabulary
 	}
 
 	entries, err := (&Local{}).Catalog(context.Background())

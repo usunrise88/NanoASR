@@ -141,15 +141,8 @@ func listModels(ctx context.Context, deps adapter.Deps) ([]core.ModelInfo, error
 
 // isTranscriptionModel keeps supporting models — VAD, punctuation,
 // diarization — out of a list whose entries are meant to be passed as `model`.
-//
-// Streaming models are excluded for the same reason: this list is what a client
-// chooses a `model` for /v1/audio/transcriptions from, and a streaming export
-// would be refused there. They are reported by the realtime dialect, in the
-// session it creates, and by the native /api/v1/models with the flag set.
+// Streaming models stay in: they decode an uploaded file like any other.
 func isTranscriptionModel(info core.ModelInfo) bool {
-	if info.Streaming {
-		return false
-	}
 	return info.Kind == "" || info.Kind == "asr"
 }
 

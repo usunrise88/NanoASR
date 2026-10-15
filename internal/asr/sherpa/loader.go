@@ -43,14 +43,13 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 			return nil, core.Errorf(core.CodeInvalidRequest,
 				"model %s is a %s model and cannot be used for transcription", m.ID, kind)
 		}
-		// A streaming export has no whole-file decoder: its encoder was
-		// trained with a few hundred milliseconds of right context and
-		// sherpa-onnx will not load it as an offline recogniser. Said here
-		// because the alternative error is "unknown model family".
+		// A streaming export has no whole-file decoder of its own — its encoder
+		// was trained with a few hundred milliseconds of right context and
+		// sherpa-onnx will not load it as an offline recogniser. It is loaded
+		// as the streaming recogniser it is and fed the segment as one
+		// utterance, which is what wholeFile does.
 		if m.Streaming {
-			return nil, core.Errorf(core.CodeInvalidRequest,
-				"model %s is a streaming model: it serves the realtime API (/v1/realtime) "+
-					"and cannot decode an uploaded file", m.ID)
+			return loadWholeFile(ctx, m, dir, v, opt)
 		}
 
 		fam, err := LookupFamily(m.Family)
@@ -173,6 +172,7 @@ func NewLoader(opt LoaderOptions) func(context.Context, registry.Manifest, strin
 		// family, and it is measured rather than declared.
 		caps := fam.Capabilities()
 		caps.PunctuationBuiltin = asr.VocabularyPunctuates(tokens)
+		caps.LanguageDetect = m.IsMultilingual()
 
 		rec, err := New(&cfg, caps, m.ModelingUnit)
 		if err != nil {
@@ -195,7 +195,7 @@ func warmUp(ctx context.Context, rec *Recognizer, sampleRate int) error {
 	if sampleRate <= 0 {
 		sampleRate = 16000
 	}
-	if _, err := rec.Decode(ctx, [][]float32{make([]float32, sampleRate)}, sampleRate); err != nil {
+	if _, err := rec.Decode(ctx, [][]float32{make([]float32, sampleRate)}, sampleRate, asr.DecodeOptions{}); err != nil {
 		return core.Errorf(core.CodeInternal, "model failed its warm-up decode").WithCause(err)
 	}
 	return nil
@@ -299,4 +299,25 @@ func writeTemp(pattern, contents string) (path string, cleanup func(), err error
 			"cannot close %s", name).WithCause(err)
 	}
 	return name, cleanup, nil
+}
+
+// loadWholeFile loads a streaming model to decode uploaded recordings.
+//
+// Endpointing is off: a segment is one utterance and nothing here would act on
+// an endpoint. The decoding method follows the request's variant, as it does
+// for an offline model. Hotwords never arrive — no streaming family can be
+// biased, and the pipeline has already said so.
+func loadWholeFile(ctx context.Context, m registry.Manifest, dir string, v asr.Variant, opt LoaderOptions) (asr.Recognizer, error) {
+	online, err := NewOnline(ctx, m, dir, OnlineOptions{
+		Provider:       opt.Provider,
+		NumThreads:     opt.NumThreads,
+		Debug:          opt.Debug,
+		DecodingMethod: decodingMethod(m, v),
+		MaxActivePaths: maxActivePaths(m, v),
+		SkipWarmup:     opt.SkipWarmup,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newWholeFile(online), nil
 }

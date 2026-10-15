@@ -131,6 +131,7 @@ func (m *Models) describe(man registry.Manifest, state core.ModelState) core.Mod
 	// Biasing is answered for every state, the catalog included: somebody
 	// choosing what to download needs to know which entries can carry a
 	// dictionary before they spend the gigabyte.
+	caps.LanguageDetect = man.IsMultilingual()
 	if man.EffectiveKind() == registry.KindASR {
 		caps.Hotwords, caps.HotwordsReason = asr.HotwordsCapability(
 			man.Family, man.ModelingUnit, man.Files["bpe_vocab"] != "")
@@ -143,6 +144,7 @@ func (m *Models) describe(man registry.Manifest, state core.ModelState) core.Mod
 		DisplayName:  man.DisplayName,
 		Family:       man.Family,
 		Languages:    man.Languages,
+		Locales:      man.Locales,
 		License:      man.License,
 		State:        state,
 		RSSMB:        man.Resources.ApproxRSSMB,

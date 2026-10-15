@@ -120,11 +120,14 @@ type sessionExtra struct {
 	ModelSampleRate int      `json:"model_sample_rate"`
 	InputSampleRate int      `json:"input_sample_rate"`
 	Languages       []string `json:"languages,omitempty"`
-	Punctuation     bool     `json:"punctuation"`
-	WordTimestamps  bool     `json:"word_timestamps"`
-	MaxSessions     int      `json:"max_sessions"`
-	ActiveSessions  int      `json:"active_sessions"`
-	Notes           []string `json:"notes,omitempty"`
+	// Locales is what input_audio_transcription.language may be, besides
+	// "auto", when the model is multilingual.
+	Locales        []string `json:"locales,omitempty"`
+	Punctuation    bool     `json:"punctuation"`
+	WordTimestamps bool     `json:"word_timestamps"`
+	MaxSessions    int      `json:"max_sessions"`
+	ActiveSessions int      `json:"active_sessions"`
+	Notes          []string `json:"notes,omitempty"`
 }
 
 type eventSessionState struct {

@@ -76,6 +76,15 @@ func spaceOutRunes(s string) string {
 // the whole server down with the request. Nothing that fails this check may
 // reach the loader.
 func HotwordsSupport(family, modelingUnit, decodingMethod string, hasBPEVocab bool) error {
+	if family == "streaming_transducer" {
+		// A transducer, and sherpa-onnx could bias it — but the list is fixed
+		// when the recogniser is built, and a streaming one is shared: by every
+		// realtime session, and by every upload it now decodes. Saying "works on
+		// transducer models" here would be true and unhelpful.
+		return core.Errorf(core.CodeCapabilityUnavailable,
+			"hotword biasing is not offered on streaming models: the list is fixed when the "+
+				"recogniser is built, and a streaming one is shared by every session and request")
+	}
 	if family != "transducer" {
 		return core.Errorf(core.CodeCapabilityUnavailable,
 			"hotword biasing works on transducer models; this one is %s", family)

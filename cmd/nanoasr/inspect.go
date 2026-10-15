@@ -255,7 +255,7 @@ func transcribeWith(
 	}
 	defer rec.Close()
 
-	got, err := rec.Decode(ctx, [][]float32{pcm.Samples}, pcm.SampleRate)
+	got, err := rec.Decode(ctx, [][]float32{pcm.Samples}, pcm.SampleRate, asr.DecodeOptions{})
 	if err != nil {
 		return "", err
 	}

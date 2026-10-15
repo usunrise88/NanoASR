@@ -42,6 +42,14 @@ const (
 // liveServer is the real stack behind a real socket.
 func liveServer(t *testing.T) string {
 	t.Helper()
+	url, _ := liveServerFor(t, streamingModel)
+	return url
+}
+
+// liveServerFor is the same stack around any streaming model, and says where
+// that model's files are.
+func liveServerFor(t *testing.T, modelID string) (url, modelDir string) {
+	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -51,11 +59,11 @@ func liveServer(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	man, err := reg.Resolve(t.Context(), streamingModel)
+	man, err := reg.Resolve(t.Context(), modelID)
 	if err != nil {
-		t.Skipf("model %s is absent; run ./scripts/fetch-dev-models.sh (%v)", streamingModel, err)
+		t.Skipf("model %s is absent; run ./scripts/fetch-dev-models.sh or `nanoasr models pull %s` (%v)", modelID, modelID, err)
 	}
-	dir, err := reg.Dir(streamingModel)
+	dir, err := reg.Dir(modelID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +83,7 @@ func liveServer(t *testing.T) string {
 		MaxSessions:        2,
 		MaxBufferedSeconds: 30,
 		Languages:          man.Languages,
+		Locales:            man.Locales,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -90,7 +99,7 @@ func liveServer(t *testing.T) string {
 	(&Adapter{}).Mount(mux, nil, adapter.Deps{Realtime: eng})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return "ws" + strings.TrimPrefix(srv.URL, "http")
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), dir
 }
 
 // TestAWebsocketClientGetsALiveTranscript streams the reference clip at the

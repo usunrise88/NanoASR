@@ -72,15 +72,19 @@ type ModelInfo struct {
 	// Kind separates transcription models from the supporting ones — VAD,
 	// punctuation, diarization — that share the same registry.
 	Kind string `json:"kind"`
-	// Streaming marks a model that recognises audio as it arrives. It serves
-	// the realtime API and cannot decode an uploaded file, so a client
-	// choosing a model for /v1/audio/transcriptions has to be able to tell.
-	Streaming bool       `json:"streaming,omitempty"`
-	Family    string     `json:"family"`
-	Languages []string   `json:"languages"`
-	License   string     `json:"license"`
-	State     ModelState `json:"state"`
-	Pinned    bool       `json:"pinned"`
+	// Streaming marks a model that recognises audio as it arrives, which is
+	// what the realtime API needs. It can also decode an uploaded file — the
+	// whole recording is fed through as one utterance — so this says what the
+	// model can additionally do, not what it cannot.
+	Streaming bool     `json:"streaming,omitempty"`
+	Family    string   `json:"family"`
+	Languages []string `json:"languages"`
+	// Locales is what a multilingual model can be told to transcribe, with
+	// "auto" always allowed besides. Empty for a model with one language.
+	Locales []string   `json:"locales,omitempty"`
+	License string     `json:"license"`
+	State   ModelState `json:"state"`
+	Pinned  bool       `json:"pinned"`
 	// Variant describes a second resident instance of the same model, loaded
 	// because a request asked for hotwords or a decoding method the base
 	// instance was not built with. Empty for the base instance, which is what

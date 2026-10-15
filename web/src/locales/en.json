@@ -39,7 +39,8 @@
     "numSpeakers": "Number of speakers",
     "numSpeakersHint": "0 lets the server work it out from the audio",
     "dictionaries": "Hotword dictionaries",
-    "dictionariesHint": "Stored phrase lists. Managed on the Dictionaries screen."
+    "dictionariesHint": "Stored phrase lists. Managed on the Dictionaries screen.",
+    "languageHint": "A locale from the list, or automatic. Automatic is decided for each stretch of speech on its own, so a short phrase can come out in the wrong script — pin the language when you know it."
   },
   "models": {
     "title": "Models",
@@ -66,7 +67,9 @@
     "memoryEstimate": "Memory, estimated",
     "hotwords": "Hotword dictionaries",
     "hotwordsYes": "supported",
-    "hotwordsNo": "not supported"
+    "hotwordsNo": "not supported",
+    "multilingual": "Multilingual: {{count}} locales",
+    "streaming": "Streaming (realtime)"
   },
   "hotwords": {
     "title": "Hotword dictionaries",
@@ -155,7 +158,9 @@
     "speed": "Speed",
     "peaks": "Building the waveform",
     "peaksLong": "Long file — the waveform covers the first {{minutes}} minutes",
-    "allSpeakers": "All speakers"
+    "allSpeakers": "All speakers",
+    "language": "Language",
+    "languageAuto": "chosen by the model"
   },
   "settings": {
     "title": "Settings",
