@@ -1,10 +1,13 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { Download } from 'iconoir-react'
 
 import { Card, Inline, Page, Section, Stack } from '@/components/layout'
+import { Conversation } from '@/components/isolate/Conversation'
+import { SpeakerShares } from '@/components/isolate/SpeakerShares'
 import { Dropzone } from '@/components/run/Dropzone'
 import { Player, type PlayerHandle } from '@/components/player/Player'
+import { SpeakerTimeline, speakerLanes } from '@/components/player/SpeakerTimeline'
 import { Transcript } from '@/components/player/Transcript'
 import {
   Badge,
@@ -13,7 +16,6 @@ import {
   ErrorState,
   Input,
   Progress,
-  Select,
   Skeleton,
   Spinner,
 } from '@/components/ui'
@@ -27,6 +29,7 @@ import {
   type Result,
 } from '@/lib/api/types'
 import { recall, remember } from '@/lib/audio-store'
+import { conversation, shares } from '@/lib/conversation'
 import { clock, statusKey, statusTone } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import type { PageMeta } from '@/lib/page'
@@ -55,8 +58,19 @@ function ResultPage() {
   const [file, setFile] = useState<File | undefined>(() => recall(jobId))
   const [currentTime, setCurrentTime] = useState(0)
   const [search, setSearch] = useState('')
-  const [speaker, setSpeaker] = useState('')
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set())
   const player = useRef<PlayerHandle>(null)
+
+  // A diarized result reads as a conversation, as a transcript by speaker
+  // does: turns in each speaker's colour, a lane per speaker under the
+  // waveform, and who spoke how much. Without speakers it stays a transcript.
+  const jobResult = job?.result
+  const talk = useMemo(
+    () => (jobResult && (jobResult.speakers ?? []).length > 0 ? conversation(jobResult) : undefined),
+    [jobResult],
+  )
+  const talkShares = useMemo(() => (jobResult && talk ? shares(jobResult, talk.turns) : []), [jobResult, talk])
+  const lanes = useMemo(() => (jobResult && talk ? speakerLanes(jobResult) : []), [jobResult, talk])
 
   const onReady = useCallback((handle: PlayerHandle) => {
     player.current = handle
@@ -124,10 +138,21 @@ function ResultPage() {
                   <Player
                     file={file}
                     result={result}
-                    words={words}
+                    words={talk ? talk.words : words}
                     currentTime={currentTime}
                     onTime={setCurrentTime}
                     onReady={onReady}
+                    lanes={
+                      talk && (
+                        <SpeakerTimeline
+                          lanes={lanes}
+                          duration={result.duration}
+                          currentTime={currentTime}
+                          onSeek={seek}
+                          dimmed={(s) => hidden.has(s)}
+                        />
+                      )
+                    }
                   />
                 ) : (
                   <Stack gap={2}>
@@ -146,10 +171,28 @@ function ResultPage() {
         </Card>
       </Section>
 
+      {result && talk && (
+        <Section title={t('isolate.speakers')} description={t('result.speakersHint')}>
+          <SpeakerShares
+            shares={talkShares}
+            voices={undefined}
+            hidden={hidden}
+            onToggle={(s) =>
+              setHidden((prev) => {
+                const next = new Set(prev)
+                if (next.has(s)) next.delete(s)
+                else next.add(s)
+                return next
+              })
+            }
+          />
+        </Section>
+      )}
+
       {result && (
         <>
           <Section
-            title={t('result.transcript')}
+            title={talk ? t('isolate.conversation') : t('result.transcript')}
             actions={<Exports jobId={jobId} result={result} />}
           >
             <Card>
@@ -160,29 +203,27 @@ function ResultPage() {
                     placeholder={t('result.search')}
                     onChange={(e) => setSearch(e.target.value)}
                   />
-                  {(result.speakers ?? []).length > 0 && (
-                    <Select
-                      value={speaker}
-                      onChange={setSpeaker}
-                      options={[
-                        { value: '', label: t('result.allSpeakers') },
-                        ...(result.speakers ?? []).map((s) => ({
-                          value: s.id,
-                          label: s.id,
-                        })),
-                      ]}
-                    />
-                  )}
                 </Inline>
-                <Transcript
-                  result={result}
-                  words={words}
-                  currentTime={currentTime}
-                  onSeek={seek}
-                  confidenceThreshold={prefs.confidenceThreshold}
-                  query={search}
-                  speaker={speaker || undefined}
-                />
+                {talk ? (
+                  <Conversation
+                    talk={talk}
+                    voices={undefined}
+                    time={currentTime}
+                    onSeek={seek}
+                    query={search}
+                    hidden={hidden}
+                    confidenceThreshold={prefs.confidenceThreshold}
+                  />
+                ) : (
+                  <Transcript
+                    result={result}
+                    words={words}
+                    currentTime={currentTime}
+                    onSeek={seek}
+                    confidenceThreshold={prefs.confidenceThreshold}
+                    query={search}
+                  />
+                )}
               </Stack>
             </Card>
           </Section>

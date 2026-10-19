@@ -1,6 +1,9 @@
 import { memo } from 'react'
 
+import type { IsolationVoice, Result } from '@/lib/api/types'
 import { cn } from '@/lib/cn'
+import { voiceName } from '@/lib/conversation'
+import { speakerIndex, speakerTone } from '@/lib/speakers'
 
 export interface Lane {
   speaker: string
@@ -8,6 +11,20 @@ export interface Lane {
   /** A CSS colour: the voice's token. */
   color: string
   spans: { start: number; end: number }[]
+}
+
+/**
+ * A lane per speaker of a result, each segment of theirs a bar. voices names
+ * and orders them where an isolation found them; a diarized job has none,
+ * and its speakers go by their ids.
+ */
+export function speakerLanes(result: Result, voices?: IsolationVoice[]): Lane[] {
+  return (result.speakers ?? []).map((s) => ({
+    speaker: s.id,
+    label: voiceName(voices, s.id),
+    color: speakerTone(speakerIndex(voices, s.id)).color,
+    spans: result.segments.filter((seg) => seg.speaker === s.id).map((seg) => ({ start: seg.start, end: seg.end })),
+  }))
 }
 
 /**

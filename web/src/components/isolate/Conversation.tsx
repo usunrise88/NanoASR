@@ -25,6 +25,7 @@ export function Conversation({
   onSeek,
   query,
   hidden,
+  confidenceThreshold = 0,
 }: {
   talk: Talk
   voices: IsolationVoice[] | undefined
@@ -32,6 +33,9 @@ export function Conversation({
   onSeek: (seconds: number) => void
   query: string
   hidden: ReadonlySet<string>
+  // Words the model was less sure of than this are underlined, as on the
+  // transcript; 0 marks none.
+  confidenceThreshold?: number
 }) {
   const box = useRef<HTMLDivElement>(null)
   const marked = useRef<number[]>([])
@@ -55,7 +59,14 @@ export function Conversation({
 
   return (
     <div ref={box}>
-      <Turns talk={talk} voices={voices} onSeek={onSeek} query={query.trim().toLowerCase()} hidden={hidden} />
+      <Turns
+        talk={talk}
+        voices={voices}
+        onSeek={onSeek}
+        query={query.trim().toLowerCase()}
+        hidden={hidden}
+        threshold={confidenceThreshold}
+      />
     </div>
   )
 }
@@ -66,18 +77,20 @@ const Turns = memo(function Turns({
   onSeek,
   query,
   hidden,
+  threshold,
 }: {
   talk: Talk
   voices: IsolationVoice[] | undefined
   onSeek: (seconds: number) => void
   query: string
   hidden: ReadonlySet<string>
+  threshold: number
 }) {
   const shown = talk.turns.filter((turn) => !hidden.has(turn.speaker))
   return (
     <div className="flex flex-col gap-3" data-conversation>
       {shown.map((turn) => (
-        <TurnView key={turn.key} turn={turn} voices={voices} onSeek={onSeek} query={query} />
+        <TurnView key={turn.key} turn={turn} voices={voices} onSeek={onSeek} query={query} threshold={threshold} />
       ))}
     </div>
   )
@@ -88,11 +101,13 @@ function TurnView({
   voices,
   onSeek,
   query,
+  threshold,
 }: {
   turn: Turn
   voices: IsolationVoice[] | undefined
   onSeek: (seconds: number) => void
   query: string
+  threshold: number
 }) {
   const t = useT()
   const index = speakerIndex(voices, turn.speaker)
@@ -138,6 +153,11 @@ function TurnView({
                   className={cn(
                     'cursor-pointer rounded-[3px] px-px hover:bg-[var(--bg-hover)]',
                     'data-[current]:bg-[var(--accent-solid)] data-[current]:text-white',
+                    threshold > 0 &&
+                      word.confidence !== undefined &&
+                      word.confidence > 0 &&
+                      word.confidence < threshold &&
+                      'underline decoration-dotted underline-offset-4',
                     query !== '' && word.word.toLowerCase().includes(query) && 'bg-[var(--warning-bg)]',
                   )}
                 >

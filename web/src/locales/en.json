@@ -159,9 +159,9 @@
     "speed": "Speed",
     "peaks": "Building the waveform",
     "peaksLong": "Long file — the waveform covers the first {{minutes}} minutes",
-    "allSpeakers": "All speakers",
     "language": "Language",
-    "languageAuto": "chosen by the model"
+    "languageAuto": "chosen by the model",
+    "speakersHint": "Who spoke how much; a card hides and shows that speaker’s turns."
   },
   "isolate": {
     "title": "Voice isolation",

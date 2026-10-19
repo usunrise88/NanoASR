@@ -7,7 +7,7 @@ import { Conversation } from '@/components/isolate/Conversation'
 import { SpeakerShares } from '@/components/isolate/SpeakerShares'
 import { VoiceBadge } from '@/components/isolate/VoiceName'
 import { Player, type PlayerHandle } from '@/components/player/Player'
-import { SpeakerTimeline, type Lane } from '@/components/player/SpeakerTimeline'
+import { SpeakerTimeline, speakerLanes } from '@/components/player/SpeakerTimeline'
 import { Badge, Button, EmptyState, ErrorState, Input, Skeleton } from '@/components/ui'
 import { ApiError, speakerTranscriptText } from '@/lib/api/client'
 import {
@@ -24,7 +24,7 @@ import { saveBlob } from '@/lib/download'
 import { clock } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import type { PageMeta } from '@/lib/page'
-import { speakerIndex, speakerTone } from '@/lib/speakers'
+import { speakerIndex } from '@/lib/speakers'
 import { toast } from '@/lib/toast'
 
 export const pageMeta: PageMeta = {
@@ -146,16 +146,7 @@ function Reading({ iso, result }: { iso: Isolation; result: Result }) {
     setTime(seconds)
   }, [])
 
-  const lanes = useMemo<Lane[]>(
-    () =>
-      (result.speakers ?? []).map((s) => ({
-        speaker: s.id,
-        label: voiceName(iso.voices, s.id),
-        color: speakerTone(speakerIndex(iso.voices, s.id)).color,
-        spans: result.segments.filter((seg) => seg.speaker === s.id).map((seg) => ({ start: seg.start, end: seg.end })),
-      })),
-    [result, iso.voices],
-  )
+  const lanes = useMemo(() => speakerLanes(result, iso.voices), [result, iso.voices])
 
   function switchTo(speaker: string) {
     if (speaker === listen) return

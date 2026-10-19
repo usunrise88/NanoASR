@@ -38,7 +38,9 @@ export function VoiceName({
   speaker: string
   name: string | undefined
   index: number
-  onRename: (name: string) => Promise<void>
+  // Without onRename the name is shown and cannot be changed: a diarized
+  // job's speakers have nowhere to keep one.
+  onRename?: ((name: string) => Promise<void>) | undefined
   disabled?: boolean
 }) {
   const t = useT()
@@ -51,7 +53,7 @@ export function VoiceName({
     setEditing(false)
     if (draft.trim() === (name ?? '')) return
     try {
-      await onRename(draft.trim())
+      await onRename?.(draft.trim())
     } catch {
       setDraft(name ?? '')
     }
@@ -88,16 +90,18 @@ export function VoiceName({
         {shown}
       </span>
       {name && <span className="text-[11px] text-[var(--text-muted)]">{speaker}</span>}
-      <IconButton
-        label={t('isolate.rename')}
-        disabled={disabled}
-        onClick={() => {
-          setDraft(name ?? '')
-          setEditing(true)
-        }}
-      >
-        <EditPencil width={13} height={13} />
-      </IconButton>
+      {onRename && (
+        <IconButton
+          label={t('isolate.rename')}
+          disabled={disabled}
+          onClick={() => {
+            setDraft(name ?? '')
+            setEditing(true)
+          }}
+        >
+          <EditPencil width={13} height={13} />
+        </IconButton>
+      )}
     </span>
   )
 }

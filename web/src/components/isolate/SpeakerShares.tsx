@@ -23,7 +23,7 @@ export function SpeakerShares({
   voices: IsolationVoice[] | undefined
   hidden: ReadonlySet<string>
   onToggle: (speaker: string) => void
-  onRename: (speaker: string, name: string) => Promise<void>
+  onRename?: ((speaker: string, name: string) => Promise<void>) | undefined
 }) {
   const t = useT()
   return (
@@ -47,7 +47,7 @@ export function SpeakerShares({
                 speaker={s.speaker}
                 name={voices?.find((v) => v.speaker === s.speaker)?.name}
                 index={index}
-                onRename={(name) => onRename(s.speaker, name)}
+                onRename={onRename && ((name) => onRename(s.speaker, name))}
               />
               <button
                 type="button"

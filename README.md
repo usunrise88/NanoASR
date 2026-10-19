@@ -558,7 +558,7 @@ setting. It asks for an API key on the first `401` response.
 | Screen | Purpose |
 |---|---|
 | Transcribe | File upload, model and option selection, progress tracking |
-| Result | Player with word highlighting, speaker filter, search and export |
+| Result | Player with word highlighting, search and export; a diarized result reads as a conversation — a lane per speaker under the waveform, turns in each speaker's colour, who spoke how much, a filter by speaker |
 | Jobs | History, statuses, filters, cancellation, result review |
 | Models | Catalog, weight downloads, residency, pinning, hot swap |
 | Dictionaries | Hotword lists: search across phrases, create and edit, upload and download, and which installed models they apply to |
