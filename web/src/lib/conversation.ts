@@ -1,3 +1,4 @@
+import { TOLERANCE } from '@/components/player/wordIndex'
 import type { IsolationVoice, Result, Segment, Word } from '@/lib/api/types'
 
 /**
@@ -102,7 +103,9 @@ export function currentWords(bySpeaker: Map<string, TimedWord[]>, t: number): nu
       const mid = (lo + hi) >> 1
       const w = words[mid]
       if (!w) break
-      if (w.start <= t) {
+      // Within the same tolerance as the result page's player: seeking to a
+      // word's start lands a hair before it, and the word clicked must light.
+      if (w.start <= t + TOLERANCE) {
         found = mid
         lo = mid + 1
       } else {

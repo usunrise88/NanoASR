@@ -64,6 +64,18 @@ describe('conversation', () => {
     expect(c.words.map((w) => w.word)).toEqual(['привет', 'как', 'дела', 'хорошо', 'отлично'])
   })
 
+  it('lights the word clicked although the seek lands a hair before it', () => {
+    // As measured in CI: asked for 0.18199999821, the audio element said
+    // 0.1819992, and the word was not highlighted.
+    const r2 = result([
+      {
+        ...seg(0, 'spk_0', 0.1, 1, 'нчьих'),
+        words: [{ word: 'нчьих', start: 0.18199999821186064, end: 0.5819999892711639 }],
+      },
+    ])
+    expect(currentWords(conversation(r2).bySpeaker, 0.1819992)).toEqual([0])
+  })
+
   it('counts each voice’s share', () => {
     const s = shares(r, c.turns)
     expect(s.map((x) => [x.speaker, x.words, x.turns, x.share])).toEqual([
