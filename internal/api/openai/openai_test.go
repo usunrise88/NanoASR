@@ -44,6 +44,9 @@ func (f *fakeService) ListJobs(context.Context, core.JobFilter) (*core.JobPage, 
 	return nil, core.ErrNotImplemented
 }
 func (f *fakeService) Cancel(context.Context, string) error { return core.ErrNotImplemented }
+func (f *fakeService) RenameSpeakers(context.Context, string, map[string]string) (*core.Job, error) {
+	return nil, core.ErrNotImplemented
+}
 func (f *fakeService) Watch(context.Context, string, int64) (<-chan core.JobEvent, error) {
 	return nil, core.ErrNotImplemented
 }

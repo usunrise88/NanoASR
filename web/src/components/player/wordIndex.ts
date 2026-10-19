@@ -12,7 +12,7 @@ import type { Word } from '@/lib/api/types'
  * Ten milliseconds is far larger than that noise and far smaller than any real
  * gap between words, which run to tens of milliseconds even in fast speech.
  */
-const TOLERANCE = 0.01
+export const TOLERANCE = 0.01
 
 /**
  * Which word is being spoken at a given moment.

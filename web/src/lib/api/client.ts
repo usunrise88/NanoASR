@@ -8,11 +8,13 @@ import type {
   Isolation,
   IsolationInfo,
   IsolationSelection,
+  IsolationUpdate,
   Job,
   JobFilter,
   JobPage,
   ModelInfo,
   ResponseFormat,
+  Result,
   TranscribeOptions,
 } from './types'
 
@@ -132,6 +134,15 @@ export function submitJob(
 
 export function getJob(id: string): Promise<Job> {
   return request<Job>(`/jobs/${encodeURIComponent(id)}`)
+}
+
+/** Names a finished diarized job's speakers; an empty name gives the id back. */
+export function renameJobSpeakers(id: string, names: Record<string, string>): Promise<Job> {
+  return request<Job>(`/jobs/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ speaker_names: names }),
+  })
 }
 
 export function listJobs(filter: JobFilter = {}): Promise<JobPage> {
@@ -292,11 +303,29 @@ export async function isolationInfo(): Promise<IsolationInfo> {
   return (await response.json()) as IsolationInfo
 }
 
-export function createIsolation(file: File, numSpeakers?: number): Promise<Isolation> {
+export function createIsolation(file: File, numSpeakers?: number, keep?: boolean): Promise<Isolation> {
   const form = new FormData()
   form.set('file', file)
   if (numSpeakers) form.set('num_speakers', String(numSpeakers))
+  if (keep) form.set('keep', 'true')
   return request<Isolation>('/isolations', { method: 'POST', body: form })
+}
+
+export async function listIsolations(): Promise<Isolation[]> {
+  const page = await request<{ data: Isolation[] }>('/isolations')
+  return page.data
+}
+
+export function updateIsolation(id: string, update: IsolationUpdate): Promise<Isolation> {
+  return request<Isolation>(`/isolations/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  })
+}
+
+export function extractAll(id: string): Promise<Isolation> {
+  return request<Isolation>(`/isolations/${encodeURIComponent(id)}/extract-all`, { method: 'POST' })
 }
 
 export function getIsolation(id: string): Promise<Isolation> {
@@ -311,8 +340,8 @@ export function extractVoice(id: string, selection: IsolationSelection): Promise
   })
 }
 
-/** Submits the isolated voice as a job, with the run screen's options. */
-export function transcribeIsolation(id: string, options: TranscribeOptions): Promise<Job> {
+/** The run screen's options as the form a job takes. */
+function optionsForm(options: TranscribeOptions): URLSearchParams {
   const form = new URLSearchParams()
   for (const [name, value] of Object.entries(options)) {
     if (value === undefined || value === '' || value === false) continue
@@ -322,7 +351,41 @@ export function transcribeIsolation(id: string, options: TranscribeOptions): Pro
     }
     form.set(name, String(value))
   }
+  return form
+}
+
+/** Submits one voice's track as a job, with the run screen's options. */
+export function transcribeIsolation(id: string, options: TranscribeOptions, speaker?: string): Promise<Job> {
+  const form = optionsForm(options)
+  if (speaker) form.set('speaker', speaker)
   return request<Job>(`/isolations/${encodeURIComponent(id)}/transcribe`, { method: 'POST', body: form })
+}
+
+/** Starts the transcript by speaker: every voice isolated and transcribed alone. */
+export function transcribeSpeakers(id: string, options: TranscribeOptions): Promise<Isolation> {
+  // A track is one voice: the server ignores these, and sending them would
+  // only say something that is not so.
+  const rest = { ...options }
+  delete rest.diarize
+  delete rest.num_speakers
+  delete rest.channel_mode
+  const form = optionsForm(rest)
+  return request<Isolation>(`/isolations/${encodeURIComponent(id)}/transcript`, { method: 'POST', body: form })
+}
+
+export function speakerTranscript(id: string): Promise<Result> {
+  return request<Result>(`/isolations/${encodeURIComponent(id)}/transcript`)
+}
+
+/** The transcript by speaker in a text format, labelled by the voices' names. */
+export async function speakerTranscriptText(id: string, format: ResponseFormat): Promise<string> {
+  const response = await fetch(
+    `${BASE}/isolations/${encodeURIComponent(id)}/transcript?response_format=${format}`,
+    { headers: authHeaders() },
+  )
+  if (response.status === 401) reportAuthRequired()
+  if (!response.ok) throw await toError(response)
+  return response.text()
 }
 
 export function deleteIsolation(id: string): Promise<void> {
@@ -347,8 +410,16 @@ export function fetchVoiceSample(id: string, speaker: string): Promise<Blob> {
   return fetchAudio(`/isolations/${encodeURIComponent(id)}/voices/${encodeURIComponent(speaker)}/sample`)
 }
 
-export function fetchIsolated(id: string, format: AudioFormat): Promise<Blob> {
-  return fetchAudio(`/isolations/${encodeURIComponent(id)}/result?format=${format}`)
+/** One voice's track. */
+export function fetchTrack(id: string, speaker: string, format: AudioFormat): Promise<Blob> {
+  return fetchAudio(
+    `/isolations/${encodeURIComponent(id)}/tracks/${encodeURIComponent(speaker)}?format=${format}`,
+  )
+}
+
+/** The recording as the server holds it: on the same timeline as the tracks. */
+export function fetchIsolationAudio(id: string, format: AudioFormat): Promise<Blob> {
+  return fetchAudio(`/isolations/${encodeURIComponent(id)}/audio?format=${format}`)
 }
 
 export function isolationEventsPath(id: string): string {

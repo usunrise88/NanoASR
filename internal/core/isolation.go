@@ -12,12 +12,14 @@ import (
 // the voices, a person listens to them and picks one, and only then is that
 // voice extracted. So unlike a transcription job, an isolation holds its audio
 // between requests — the upload while the voices are found and picked, the
-// extracted voice until it is fetched — for a bounded time, and for no longer
-// than the server process lives. A nil IsolationService means the feature is
-// not configured here.
+// extracted voices until they are fetched — for a bounded time, and for no
+// longer than the server process lives, unless the person asks for it to be
+// kept. A nil IsolationService means the feature is not configured here.
 type IsolationService interface {
 	// Create accepts a recording and starts finding its voices.
 	Create(ctx context.Context, req IsolationRequest) (*Isolation, error)
+	// List is every isolation the caller may see, the newest first.
+	List(ctx context.Context) ([]Isolation, error)
 	Isolation(ctx context.Context, id string) (*Isolation, error)
 	// Watch streams state changes as Service.Watch does for jobs: after is
 	// the sequence number the client last saw, and the channel closes when
@@ -26,18 +28,38 @@ type IsolationService interface {
 	// Sample is the voice sample of one speaker as WAV: exactly the audio the
 	// extractor will be told to keep.
 	Sample(ctx context.Context, id, speaker string) (io.ReadCloser, error)
+	// Update names the voices, and keeps the isolation or lets it expire.
+	Update(ctx context.Context, id string, upd IsolationUpdate) (*Isolation, error)
 	// Extract starts isolating the chosen voice. It may be called again once
-	// that is done, for another voice or another sample of the same one.
+	// that is done, for another voice or another sample of the same one; a
+	// voice isolated again replaces its own track and no other.
 	Extract(ctx context.Context, id string, sel IsolationSelection) (*Isolation, error)
-	// Result is the isolated voice in the given format.
-	Result(ctx context.Context, id string, format AudioFormat) (io.ReadCloser, error)
-	// Transcribe submits the isolated voice as a transcription job.
-	// req.Audio is ignored: the isolation supplies it.
-	Transcribe(ctx context.Context, id string, req Request) (*Job, error)
-	// Delete forgets the isolation and its audio at once.
+	// ExtractAll isolates every voice that has a sample and no track yet,
+	// one track per voice.
+	ExtractAll(ctx context.Context, id string) (*Isolation, error)
+	// Audio is the recording itself, as the isolation holds it: mono, at
+	// the extractor's rate, on the same timeline as every track.
+	Audio(ctx context.Context, id string, format AudioFormat) (io.ReadCloser, error)
+	// Result is one voice's track in the given format. An empty speaker is
+	// the voice chosen last, or the only track there is.
+	Result(ctx context.Context, id, speaker string, format AudioFormat) (io.ReadCloser, error)
+	// Transcribe submits one track as a transcription job, speaker as for
+	// Result. req.Audio is ignored: the isolation supplies it.
+	Transcribe(ctx context.Context, id, speaker string, req Request) (*Job, error)
+	// TranscribeSpeakers isolates every voice that has no track yet,
+	// transcribes every track as a job of its own and merges the jobs into
+	// one transcript, each word labelled with the voice it came from.
+	// req.Audio and req.Diarize are ignored: a track is one voice.
+	TranscribeSpeakers(ctx context.Context, id string, req Request) (*Isolation, error)
+	// Transcript is the merged transcript TranscribeSpeakers made, with
+	// the voices' names as they are now.
+	Transcript(ctx context.Context, id string) (*Result, error)
+	// Delete forgets the isolation and its audio at once, kept or not.
 	Delete(ctx context.Context, id string) error
 	// Formats lists what Result can produce on this server.
 	Formats() []AudioFormat
+	// CanKeep reports whether an isolation may be kept here past its TTL.
+	CanKeep() bool
 }
 
 // AudioFormat is a container the isolated voice can be fetched in.
@@ -67,13 +89,16 @@ const (
 	// and nothing happens until one is chosen.
 	IsolationAwaitingSelection IsolationStatus = "awaiting_selection"
 	IsolationExtracting        IsolationStatus = "extracting"
-	IsolationDone              IsolationStatus = "done"
-	IsolationFailed            IsolationStatus = "failed"
+	// IsolationTranscribing is TranscribeSpeakers waiting on its jobs.
+	IsolationTranscribing IsolationStatus = "transcribing"
+	IsolationDone         IsolationStatus = "done"
+	IsolationFailed       IsolationStatus = "failed"
 )
 
 // Busy reports whether work is queued or running.
 func (s IsolationStatus) Busy() bool {
-	return s == IsolationQueued || s == IsolationAnalysing || s == IsolationExtracting
+	return s == IsolationQueued || s == IsolationAnalysing || s == IsolationExtracting ||
+		s == IsolationTranscribing
 }
 
 // IsolationRequest is a recording to isolate a voice from.
@@ -81,7 +106,21 @@ type IsolationRequest struct {
 	Audio AudioSource
 	// NumSpeakers is passed to the diarizer: 0 lets it decide.
 	NumSpeakers int
-	Source      Source
+	// Keep stores the isolation until it is deleted, across restarts,
+	// instead of letting it expire.
+	Keep   bool
+	Source Source
+}
+
+// IsolationUpdate changes what a person decides about an isolation; a field
+// left out is left as it is.
+type IsolationUpdate struct {
+	// Keep stores the isolation until it is deleted, or, false, lets it
+	// expire again.
+	Keep *bool `json:"keep,omitempty"`
+	// Names maps a speaker to what to call it; an empty name restores the
+	// speaker's own id.
+	Names map[string]string `json:"names,omitempty"`
 }
 
 // IsolationSelection is the voice to keep.
@@ -99,28 +138,39 @@ type Isolation struct {
 	Stage    string          `json:"stage,omitempty"`
 	Percent  int             `json:"percent,omitempty"`
 	Position int             `json:"position,omitempty"`
-	Filename string          `json:"filename,omitempty"`
-	Source   Source          `json:"source"`
+	// Voice is the speaker the running stage works on, when it works on one.
+	Voice    string `json:"voice,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Source   Source `json:"source"`
 	// Duration is the length of the recording, in seconds, once decoded.
 	Duration float64 `json:"duration,omitempty"`
+	// Keep says the isolation is stored until it is deleted.
+	Keep bool `json:"keep"`
 
 	Voices   []IsolationVoice    `json:"voices,omitempty"`
 	Selected *IsolationSelection `json:"selected,omitempty"`
-	Result   *IsolationResult    `json:"result,omitempty"`
-	// Formats is what the result can be fetched as here.
+	// Result is the track of the voice chosen last.
+	Result *IsolationResult `json:"result,omitempty"`
+	// Tracks are every voice isolated so far, in the order of Voices.
+	Tracks     []IsolationResult    `json:"tracks,omitempty"`
+	Transcript *IsolationTranscript `json:"transcript,omitempty"`
+	// Formats is what the tracks can be fetched as here.
 	Formats  []AudioFormat `json:"formats,omitempty"`
 	Warnings []Warning     `json:"warnings,omitempty"`
 	Error    *Error        `json:"error,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	// ExpiresAt is when the isolation and its audio are deleted, unless
-	// something happens to it first; every change moves it on.
-	ExpiresAt time.Time `json:"expires_at"`
+	// something happens to it first; every change moves it on. A kept
+	// isolation has none.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // IsolationVoice is one voice the diarizer found.
 type IsolationVoice struct {
 	Speaker string `json:"speaker"`
+	// Name is what a person called the voice; empty until somebody does.
+	Name string `json:"name,omitempty"`
 	// TotalSpeech is how long it speaks, in seconds, and Turns in how many
 	// turns.
 	TotalSpeech float64 `json:"total_speech"`
@@ -142,17 +192,48 @@ type VoiceSample struct {
 	Similarity float64 `json:"similarity"`
 }
 
-// IsolationResult describes the isolated voice. The audio is behind
+// IsolationResult describes one isolated voice, a track. The audio is behind
 // IsolationService.Result.
 type IsolationResult struct {
 	Speaker string `json:"speaker"`
 	// Name is what the voice is called when downloaded or transcribed,
-	// without an extension: the upload's name with the speaker in it.
+	// without an extension: the upload's name with the voice's in it.
 	Name       string  `json:"name"`
 	Duration   float64 `json:"duration"`
 	SampleRate int     `json:"sample_rate"`
+	// SampleStart is where the sample was taken from when a person placed
+	// it; absent when the server chose it.
+	SampleStart *float64 `json:"sample_start,omitempty"`
 	// JobID is the last transcription submitted from it, if any.
 	JobID string `json:"job_id,omitempty"`
+}
+
+// IsolationTranscript is where TranscribeSpeakers is. The transcript itself
+// is behind IsolationService.Transcript.
+type IsolationTranscript struct {
+	// Status is queued while the voices are isolated, running while the
+	// jobs are, then succeeded or failed.
+	Status   JobStatus `json:"status"`
+	Model    string    `json:"model,omitempty"`
+	Language string    `json:"language,omitempty"`
+	// Jobs are the transcriptions merged, one per track.
+	Jobs []TranscriptJob `json:"jobs,omitempty"`
+	// Stale says a track was isolated again after the transcript was made,
+	// so it no longer matches the tracks.
+	Stale    bool      `json:"stale,omitempty"`
+	Warnings []Warning `json:"warnings,omitempty"`
+	Error    *Error    `json:"error,omitempty"`
+
+	CreatedAt  time.Time  `json:"created_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+// TranscriptJob is the transcription of one track.
+type TranscriptJob struct {
+	Speaker string    `json:"speaker"`
+	JobID   string    `json:"job_id"`
+	Status  JobStatus `json:"status"`
+	Percent int       `json:"percent,omitempty"`
 }
 
 // IsolationEvent is one state transition.

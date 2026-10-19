@@ -4,6 +4,7 @@ package native
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -37,6 +38,7 @@ func (a *Adapter) Mount(mux *http.ServeMux, svc core.Service, deps adapter.Deps)
 	mux.HandleFunc("GET /api/v1/jobs", a.listJobs(svc))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", a.job(svc))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/events", a.jobEvents(svc)) // SSE
+	mux.HandleFunc("PATCH /api/v1/jobs/{id}", a.renameSpeakers(svc))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", a.cancel(svc))
 
 	// Models: reading is open to any key, changing state is not.
@@ -451,6 +453,29 @@ func parseFilter(r *http.Request) (core.JobFilter, error) {
 	return f, nil
 }
 
+// renameSpeakers names a diarized job's speakers, from a JSON body:
+// {"speaker_names": {"spk_0": "Anna"}}. The names stay with the result.
+func (*Adapter) renameSpeakers(svc core.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			SpeakerNames map[string]string `json:"speaker_names"`
+		}
+		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<16))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			WriteProblem(w, r, core.Errorf(core.CodeInvalidRequest,
+				"the body is not a job update: %s", err.Error()))
+			return
+		}
+		job, err := svc.RenameSpeakers(r.Context(), r.PathValue("id"), body.SpeakerNames)
+		if err != nil {
+			WriteProblem(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, job)
+	}
+}
+
 // render writes a result in the requested format. Unlike the OpenAI dialect,
 // json here is the whole result: this dialect exists because that shape is what
 // a NanoASR client actually wants.
@@ -458,10 +483,11 @@ func render(w http.ResponseWriter, res *core.Result, format string) {
 	switch format {
 	case formatText:
 		writeText(w, "text/plain; charset=utf-8", res.Text+"\n")
+	// Subtitles label a cue by its speaker's name where a person gave one.
 	case formatSRT:
-		writeText(w, subtitle.SRTContentType, subtitle.SRT(res))
+		writeText(w, subtitle.SRTContentType, subtitle.SRT(named(res)))
 	case formatVTT:
-		writeText(w, subtitle.VTTContentType, subtitle.VTT(res))
+		writeText(w, subtitle.VTTContentType, subtitle.VTT(named(res)))
 	default:
 		writeJSON(w, http.StatusOK, res)
 	}

@@ -3,6 +3,7 @@ package isolation
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -97,13 +98,114 @@ func (u upload) Filename() string             { return "call.mp3" }
 func (u upload) Size() int64                  { return int64(len(u.b)) }
 func (u upload) Close() error                 { return nil }
 
+// jobs is a job queue that finishes every job at once, transcribing a track
+// as one segment per turn of the voice in its file name.
+type jobs struct {
+	mu       sync.Mutex
+	submits  []core.Request
+	callers  []core.Caller
+	byID     map[string]*core.Job
+	canceled []string
+	// hold, when set, keeps every job running until it is closed.
+	hold chan struct{}
+	// fail names a file whose job fails.
+	fail string
+	// segments says what a track's transcript is, by file name.
+	segments map[string][]core.Segment
+}
+
+func (j *jobs) Submit(ctx context.Context, req core.Request) (*core.Job, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	// What a job reads is a copy: the queue spools the upload.
+	r, err := req.Audio.Open()
+	if err != nil {
+		return nil, err
+	}
+	b, _ := io.ReadAll(r)
+	_ = r.Close()
+	if int64(len(b)) != req.Audio.Size() || string(b[:4]) != "RIFF" {
+		return nil, fmt.Errorf("the job's audio is %d bytes (%q), Size says %d", len(b), b[:4], req.Audio.Size())
+	}
+	j.submits = append(j.submits, req)
+	j.callers = append(j.callers, core.CallerOf(ctx))
+	if j.byID == nil {
+		j.byID = map[string]*core.Job{}
+	}
+	job := &core.Job{ID: fmt.Sprintf("job_%d", len(j.submits)), Status: core.JobQueued, Filename: req.Audio.Filename()}
+	j.byID[job.ID] = job
+	return job, nil
+}
+
+func (j *jobs) finish(id string) core.Job {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	job := j.byID[id]
+	if job.Status == core.JobCanceled {
+		return *job
+	}
+	if job.Filename == j.fail {
+		job.Status, job.Error = core.JobFailed, core.Errorf(core.CodeInternal, "the model fell over")
+		return *job
+	}
+	job.Status = core.JobSucceeded
+	job.Result = &core.Result{Model: "gigaam", Language: "ru", Segments: j.segments[job.Filename],
+		Stats:    core.Stats{ProcessingMS: 100, StagesMS: map[string]int64{"asr": 80}},
+		Warnings: []core.Warning{{Code: "w", Message: job.Filename}}}
+	return *job
+}
+
+func (j *jobs) Job(_ context.Context, id string) (*core.Job, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	job := *j.byID[id]
+	return &job, nil
+}
+
+func (j *jobs) Watch(ctx context.Context, id string, _ int64) (<-chan core.JobEvent, error) {
+	out := make(chan core.JobEvent)
+	go func() {
+		defer close(out)
+		j.mu.Lock()
+		running := *j.byID[id]
+		hold := j.hold
+		j.mu.Unlock()
+		running.Status, running.Percent = core.JobRunning, 50
+		select {
+		case out <- core.JobEvent{Seq: 1, Job: running}:
+		case <-ctx.Done():
+			return
+		}
+		if hold != nil {
+			select {
+			case <-hold:
+			case <-ctx.Done():
+				return
+			}
+		}
+		select {
+		case out <- core.JobEvent{Seq: 2, Job: j.finish(id)}:
+		case <-ctx.Done():
+		}
+	}()
+	return out, nil
+}
+
+func (j *jobs) Cancel(_ context.Context, id string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.canceled = append(j.canceled, id)
+	j.byID[id].Status = core.JobCanceled
+	return nil
+}
+
 type fixture struct {
-	svc     *Service
-	dir     string
-	eng     *halves
-	diar    *turns
-	clock   *time.Time
-	submits []core.Request
+	svc   *Service
+	dir   string
+	eng   *halves
+	diar  *turns
+	clock *time.Time
+	jobs  *jobs
 }
 
 func newFixture(t *testing.T, opt func(*Options)) *fixture {
@@ -112,14 +214,17 @@ func newFixture(t *testing.T, opt func(*Options)) *fixture {
 	f := &fixture{
 		dir:   filepath.Join(t.TempDir(), "isolations"),
 		eng:   &halves{},
+		jobs:  &jobs{},
 		diar:  &turns{out: []diarize.Turn{{Start: 0, End: 4, Speaker: 3}, {Start: 4, End: 9, Speaker: 1}, {Start: 9, End: 9.5, Speaker: 7}}},
 		clock: &now,
 	}
 	o := Options{
-		Dir:      f.dir,
-		TTL:      time.Hour,
-		Diarizer: f.diar,
-		Engine:   func(context.Context) (Engine, error) { return f.eng, nil },
+		Dir:           f.dir,
+		TTL:           time.Hour,
+		MaxIsolations: 8,
+		MaxKept:       8,
+		Diarizer:      f.diar,
+		Engine:        func(context.Context) (Engine, error) { return f.eng, nil },
 		Decode: func(ctx context.Context, r io.Reader) ([]float32, error) {
 			pcm, err := audio.NewWAVDecoder().Decode(ctx, r, audio.Options{TargetSampleRate: SampleRate})
 			if err != nil {
@@ -127,11 +232,9 @@ func newFixture(t *testing.T, opt func(*Options)) *fixture {
 			}
 			return pcm[0].Samples, nil
 		},
-		Submit: func(_ context.Context, req core.Request) (*core.Job, error) {
-			f.submits = append(f.submits, req)
-			return &core.Job{ID: "job_1", Status: core.JobQueued}, nil
-		},
-		Now: func() time.Time { return *f.clock },
+		Jobs:      f.jobs,
+		AllowKeep: true,
+		Now:       func() time.Time { return *f.clock },
 	}
 	if opt != nil {
 		opt(&o)
@@ -214,7 +317,7 @@ func TestTheWholeConversation(t *testing.T) {
 	}
 
 	// No result before an extraction.
-	if _, err := f.svc.Result(ctx, iso.ID, core.AudioWAV); core.AsError(err).Code != core.CodeIsolationBusy {
+	if _, err := f.svc.Result(ctx, iso.ID, "", core.AudioWAV); core.AsError(err).Code != core.CodeIsolationBusy {
 		t.Errorf("result before extraction: %v", err)
 	}
 
@@ -237,7 +340,7 @@ func TestTheWholeConversation(t *testing.T) {
 		t.Errorf("others %v", others)
 	}
 
-	rc, err = f.svc.Result(ctx, iso.ID, core.AudioWAV)
+	rc, err = f.svc.Result(ctx, iso.ID, "", core.AudioWAV)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,26 +352,20 @@ func TestTheWholeConversation(t *testing.T) {
 	if y := pcm[0].Samples; len(y) != 10*SampleRate || y[100] < 0.12 || y[100] > 0.13 {
 		t.Errorf("result: %d samples, %g", len(y), y[100])
 	}
-	if _, err := f.svc.Result(ctx, iso.ID, core.AudioMP3); core.AsError(err).Code != core.CodeCapabilityUnavailable {
+	if _, err := f.svc.Result(ctx, iso.ID, "", core.AudioMP3); core.AsError(err).Code != core.CodeCapabilityUnavailable {
 		t.Errorf("mp3 without an encoder: %v", err)
 	}
 
-	job, err := f.svc.Transcribe(ctx, iso.ID, core.Request{ModelID: "gigaam", Language: "ru"})
+	job, err := f.svc.Transcribe(ctx, iso.ID, "", core.Request{ModelID: "gigaam", Language: "ru"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.ID != "job_1" || len(f.submits) != 1 {
-		t.Fatalf("job %+v, %d submits", job, len(f.submits))
+	if job.ID != "job_1" || len(f.jobs.submits) != 1 {
+		t.Fatalf("job %+v, %d submits", job, len(f.jobs.submits))
 	}
-	sub := f.submits[0]
+	sub := f.jobs.submits[0]
 	if sub.ModelID != "gigaam" || sub.Audio.Filename() != "call-spk_1.wav" {
 		t.Errorf("submitted %+v as %s", sub, sub.Audio.Filename())
-	}
-	r, _ := sub.Audio.Open()
-	b, _ := io.ReadAll(r)
-	_ = r.Close()
-	if int64(len(b)) != sub.Audio.Size() || string(b[:4]) != "RIFF" {
-		t.Errorf("the job's audio is %d bytes (%q), Size says %d", len(b), b[:4], sub.Audio.Size())
 	}
 	if now, _ := f.svc.Isolation(ctx, iso.ID); now.Result.JobID != "job_1" {
 		t.Errorf("job id not recorded: %+v", now.Result)
@@ -279,9 +376,18 @@ func TestTheWholeConversation(t *testing.T) {
 	if _, err := f.svc.Extract(ctx, iso.ID, core.IsolationSelection{Speaker: "spk_0", SampleStart: &start}); err != nil {
 		t.Fatal(err)
 	}
-	f.wait(t, ctx, iso.ID)
+	got = f.wait(t, ctx, iso.ID)
 	if s := f.eng.extracted[1]; s.Start != 1.5 || s.Embedding[0] != 9 {
 		t.Errorf("placed sample: %+v", s)
+	}
+	// The second voice is a track beside the first, not instead of it, and
+	// the result is now the voice chosen last.
+	if len(got.Tracks) != 2 || got.Result == nil || got.Result.Speaker != "spk_0" ||
+		got.Result.SampleStart == nil || *got.Result.SampleStart != 1.5 {
+		t.Errorf("tracks %+v, result %+v", got.Tracks, got.Result)
+	}
+	if got.ExpiresAt == nil || got.Keep {
+		t.Errorf("an isolation not kept expires: %v %v", got.ExpiresAt, got.Keep)
 	}
 
 	if err := f.svc.Delete(ctx, iso.ID); err != nil {
@@ -313,7 +419,7 @@ func TestSomeoneElsesIsolationIsNotFound(t *testing.T) {
 			_, err := f.svc.Extract(bob, iso.ID, core.IsolationSelection{Speaker: "spk_0"})
 			return err
 		},
-		"result": func() error { _, err := f.svc.Result(bob, iso.ID, core.AudioWAV); return err },
+		"result": func() error { _, err := f.svc.Result(bob, iso.ID, "", core.AudioWAV); return err },
 		"delete": func() error { return f.svc.Delete(bob, iso.ID) },
 	} {
 		if err := call(); core.AsError(err).Code != core.CodeIsolationNotFound {
@@ -413,13 +519,26 @@ func TestIdleIsolationsExpire(t *testing.T) {
 }
 
 func TestTheNumberOfIsolationsIsBounded(t *testing.T) {
-	f := newFixture(t, func(o *Options) { o.MaxIsolations = 1 })
+	f := newFixture(t, func(o *Options) { o.MaxIsolations, o.MaxKept = 1, 1 })
 	ctx := context.Background()
 	if _, err := f.svc.Create(ctx, core.IsolationRequest{Audio: upload{wavBytes(10)}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.svc.Create(ctx, core.IsolationRequest{Audio: upload{wavBytes(10)}}); core.AsError(err).Code != core.CodeQueueFull {
 		t.Errorf("a second isolation over the limit: %v", err)
+	}
+	// Kept ones are counted apart: a shelf of them does not stop today's.
+	kept, err := f.svc.Create(ctx, core.IsolationRequest{Audio: upload{wavBytes(10)}, Keep: true})
+	if err != nil {
+		t.Fatalf("a kept isolation beside one that is not: %v", err)
+	}
+	if _, err := f.svc.Create(ctx, core.IsolationRequest{Audio: upload{wavBytes(10)}, Keep: true}); core.AsError(err).Code != core.CodeQueueFull {
+		t.Errorf("a second kept isolation over the limit: %v", err)
+	}
+	f.wait(t, ctx, kept.ID)
+	keep := false
+	if _, err := f.svc.Update(ctx, kept.ID, core.IsolationUpdate{Keep: &keep}); core.AsError(err).Code != core.CodeQueueFull {
+		t.Errorf("releasing a kept one into a full set: %v", err)
 	}
 }
 

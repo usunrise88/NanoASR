@@ -45,6 +45,14 @@ func (*Adapter) Doc() adapter.Doc {
 				"rather than replays. A job that has already finished yields one " +
 				"catch-up event and closes.",
 		}, {
+			Method:  "PATCH",
+			Path:    "/api/v1/jobs/{id}",
+			Summary: "Name the speakers of a finished diarized job.",
+			Detail: `JSON: {"speaker_names": {"spk_0": "Anna"}}; an empty name gives a ` +
+				"speaker its id back. The names are kept with the result as " +
+				"speakers[].name, beside the ids the segments carry, and label the " +
+				"srt and vtt cues.",
+		}, {
 			Method:  "DELETE",
 			Path:    "/api/v1/jobs/{id}",
 			Summary: "Cancel a queued or running job.",
@@ -52,30 +60,50 @@ func (*Adapter) Doc() adapter.Doc {
 		}, {
 			Method:  "GET",
 			Path:    "/api/v1/isolation",
-			Summary: "Say whether voice isolation is on, and its download formats.",
-			Detail: "{enabled, formats}. Every /api/v1/isolations route answers " +
-				"capability_unavailable on a server where it is off.",
+			Summary: "Say whether voice isolation is on, its download formats, and whether isolations may be kept.",
+			Detail: "{enabled, formats, keep}. Every /api/v1/isolations route answers " +
+				"capability_unavailable on a server where it is off. The steps: upload " +
+				"(POST /isolations), wait for awaiting_selection, listen to the voices' " +
+				"samples, then keep one (extract), every one (extract-all) or transcribe " +
+				"them all by speaker (POST transcript); fetch tracks and the transcript " +
+				"once the isolation is done.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations",
+			Summary: "List this key's isolations, the newest first.",
+			Detail:  "{data: [isolation]}. An administrative key sees every one.",
 		}, {
 			Method:  "POST",
 			Path:    "/api/v1/isolations",
-			Summary: "Upload a recording to keep one voice of.",
-			Detail: "multipart/form-data with file, and num_speakers if known. Answers 202 " +
-				"with an isolation that finds the voices (status analysing) and then " +
-				"waits for one to be chosen (awaiting_selection). Unlike a job, its " +
-				"audio is kept until isolation.ttl passes with nothing happening, it " +
-				"is deleted, or the server stops.",
+			Summary: "Upload a recording to isolate voices from.",
+			Detail: "multipart/form-data with file, num_speakers if known, and keep=true " +
+				"to store it until it is deleted. Answers 202 with an isolation that " +
+				"finds the voices (status analysing) and then waits for a choice " +
+				"(awaiting_selection). Unlike a job, its audio is kept until " +
+				"isolation.ttl passes with nothing happening, it is deleted, or the " +
+				"server stops; a kept one survives all but the delete.",
 		}, {
 			Method:  "GET",
 			Path:    "/api/v1/isolations/{id}",
-			Summary: "Fetch an isolation: its voices, the chosen one, the result.",
-			Detail: "voices lists each speaker with its speaking time and the 3-second " +
-				"sample it would be kept by, or the reason it has none.",
+			Summary: "Fetch an isolation: its voices, tracks and transcript progress.",
+			Detail: "status is queued, analysing, awaiting_selection, extracting, " +
+				"transcribing, done or failed. voices lists each speaker with its name, " +
+				"speaking time and the 3-second sample it would be isolated by, or the " +
+				"reason it has none; tracks the voices isolated so far; transcript the " +
+				"state of the transcript by speakers and its jobs.",
+		}, {
+			Method:  "PATCH",
+			Path:    "/api/v1/isolations/{id}",
+			Summary: "Name the voices, and keep the isolation or let it expire.",
+			Detail: `JSON: {"names": {"spk_0": "Anna"}, "keep": true}; either may be ` +
+				"left out, and an empty name gives a voice its id back. Names label " +
+				"the tracks' files and the transcript, including one already made.",
 		}, {
 			Method:  "GET",
 			Path:    "/api/v1/isolations/{id}/events",
 			Summary: "Follow an isolation as server-sent events.",
 			Detail: "Numbered states until the isolation waits on a person or is done, " +
-				"then a done event. Watch again after choosing a voice.",
+				"then a done event. Watch again after starting the next step.",
 		}, {
 			Method:  "GET",
 			Path:    "/api/v1/isolations/{id}/voices/{speaker}/sample",
@@ -84,25 +112,54 @@ func (*Adapter) Doc() adapter.Doc {
 		}, {
 			Method:  "POST",
 			Path:    "/api/v1/isolations/{id}/extract",
-			Summary: "Choose the voice to keep.",
+			Summary: "Isolate one voice onto its track.",
 			Detail: "JSON or form: speaker, and sample_start in seconds to take the " +
-				"sample from somewhere else. May be repeated for another voice once " +
-				"the last extraction is done; each replaces the previous result.",
+				"sample from somewhere else. May be repeated once nothing is running; " +
+				"isolating a voice again replaces its own track and no other.",
+		}, {
+			Method:  "POST",
+			Path:    "/api/v1/isolations/{id}/extract-all",
+			Summary: "Isolate every voice, a track each.",
+			Detail: "Every voice with a sample and no track yet. A voice without a " +
+				"sample is skipped with a warning: isolate it with extract and sample_start.",
 		}, {
 			Method:  "GET",
-			Path:    "/api/v1/isolations/{id}/result",
-			Summary: "Download the isolated voice.",
-			Detail:  "format=wav (default) or mp3, 16 kHz mono. MP3 needs ffmpeg on the server.",
+			Path:    "/api/v1/isolations/{id}/tracks/{speaker}",
+			Summary: "Download one voice's track.",
+			Detail: "format=wav (default) or mp3, 16 kHz mono, as long as the recording. " +
+				"MP3 needs ffmpeg on the server. /result?speaker= is the same; " +
+				"/result alone is the voice chosen last.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations/{id}/audio",
+			Summary: "Download the recording as the isolation holds it.",
+			Detail:  "format=wav or mp3, 16 kHz mono, on the same timeline as the tracks.",
 		}, {
 			Method:  "POST",
 			Path:    "/api/v1/isolations/{id}/transcribe",
-			Summary: "Queue the isolated voice for transcription.",
-			Detail: "Takes the fields of /api/v1/jobs except file, and answers 202 with " +
-				"the job. The job holds its own copy of the audio.",
+			Summary: "Queue one track for transcription.",
+			Detail: "Takes the fields of /api/v1/jobs except file, plus speaker, and " +
+				"answers 202 with the job. The job holds its own copy of the audio.",
+		}, {
+			Method:  "POST",
+			Path:    "/api/v1/isolations/{id}/transcript",
+			Summary: "Transcribe by speaker: every voice isolated and transcribed alone.",
+			Detail: "Takes the fields of /api/v1/jobs except file; diarize is ignored. " +
+				"Isolates every voice still without a track, queues a job per track and " +
+				"merges them, each word labelled with its voice. Two voices speaking at " +
+				"once are both transcribed. Answers 202 with the isolation; follow its " +
+				"events through extracting and transcribing to done.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations/{id}/transcript",
+			Summary: "Fetch the transcript by speaker.",
+			Detail: "response_format=json (default: a result whose speakers carry their " +
+				"names), text (a dialogue, name: words), srt or vtt (labelled by name).",
 		}, {
 			Method:  "DELETE",
 			Path:    "/api/v1/isolations/{id}",
-			Summary: "Delete an isolation and its audio now.",
+			Summary: "Delete an isolation and its audio now, kept or not.",
+			Detail:  "Stops its work, and cancels the jobs of a transcript in progress.",
 		}, {
 			Method:  "GET",
 			Path:    "/api/v1/models",

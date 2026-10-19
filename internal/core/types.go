@@ -127,7 +127,10 @@ type Silence struct {
 
 // Speaker summarises one diarization cluster.
 type Speaker struct {
-	ID          string  `json:"id"`
+	ID string `json:"id"`
+	// Name is what a person called the voice, where somebody did: voice
+	// isolation lets them. Labels in the segments stay the id.
+	Name        string  `json:"name,omitempty"`
 	TotalSpeech float64 `json:"total_speech"`
 	Segments    int     `json:"segments"`
 }

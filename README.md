@@ -89,8 +89,10 @@ Key implementation properties:
 - Inverse text normalisation for Russian: numbers, dates, times, currency, phone
   numbers and percentages.
 - Diarization: speaker attribution per word and segment splitting at turn boundaries.
-- Voice isolation: find the voices of a recording, listen to each, and keep one of them
-  alone as WAV or MP3 — or transcribe it. See [Voice isolation](#voice-isolation).
+- Voice isolation: find the voices of a recording, listen to each, name them, and keep one
+  or every one of them alone as WAV or MP3 — or transcribe them into one transcript by
+  speaker, where two people talking at once are both heard. See
+  [Voice isolation](#voice-isolation).
 
 **Operations**
 
@@ -556,11 +558,11 @@ setting. It asks for an API key on the first `401` response.
 | Screen | Purpose |
 |---|---|
 | Transcribe | File upload, model and option selection, progress tracking |
-| Result | Player with word highlighting, speaker filter, search and export |
+| Result | Player with word highlighting, search and export; a diarized result reads as a conversation — a lane per speaker under the waveform, turns in each speaker's colour, who spoke how much, a filter by speaker, and speakers named in place (kept with the job, used by SRT/VTT) |
 | Jobs | History, statuses, filters, cancellation, result review |
 | Models | Catalog, weight downloads, residency, pinning, hot swap |
 | Dictionaries | Hotword lists: search across phrases, create and edit, upload and download, and which installed models they apply to |
-| Voice isolation | Upload, listen to the voices found, keep one; the original and the isolated voice side by side, download, transcription. Shown where the server has it on |
+| Voice isolation | Upload (optionally kept until deleted), listen to the voices found and name them, isolate one or all, download the tracks; transcribe by speaker into a conversation view with the recording, a timeline of who speaks when, per-voice listening and exports; earlier isolations listed. Shown where the server has it on |
 | Settings | Effective server configuration, read-only |
 
 The interface runs entirely on top of the public API and has no endpoints of its own.
@@ -589,6 +591,7 @@ there, and `GET /docs/openapi.json` is the same endpoint list for a client gener
 | `GET` | `/api/v1/jobs` | History with cursor pagination |
 | `GET` | `/api/v1/jobs/{id}` | Job state and result |
 | `GET` | `/api/v1/jobs/{id}/events` | SSE event stream |
+| `PATCH` | `/api/v1/jobs/{id}` | Name a diarized job's speakers: `{"speaker_names": {"spk_0": "Anna"}}` |
 | `DELETE` | `/api/v1/jobs/{id}` | Cancel a job |
 | `GET` | `/api/v1/models` | Resident and installed models |
 | `GET` | `/api/v1/catalog` | Built-in model catalog |
@@ -598,12 +601,18 @@ there, and `GET /docs/openapi.json` is the same endpoint list for a client gener
 | `POST` | `/api/v1/models/{id}/pin` | Protect from LRU eviction |
 | `POST` | `/api/v1/models/{id}/reload` | Hot-swap a revision |
 | `GET` | `/api/v1/config` | Effective configuration |
-| `POST` | `/api/v1/isolations` | Voice isolation: upload, voices found in the background |
-| `GET` | `/api/v1/isolations/{id}` | Its voices, the chosen one, the result; `/events` over SSE |
+| `POST` | `/api/v1/isolations` | Voice isolation: upload (`keep=true` to store it), voices found in the background |
+| `GET` | `/api/v1/isolations` | This key's isolations, newest first |
+| `GET` | `/api/v1/isolations/{id}` | Its voices, tracks and transcript progress; `/events` over SSE |
+| `PATCH` | `/api/v1/isolations/{id}` | Name the voices; keep it or let it expire |
 | `GET` | `/api/v1/isolations/{id}/voices/{speaker}/sample` | A voice's 3-second sample, WAV |
-| `POST` | `/api/v1/isolations/{id}/extract` | Keep a voice |
-| `GET` | `/api/v1/isolations/{id}/result` | The isolated voice, `format=wav` or `mp3` |
-| `POST` | `/api/v1/isolations/{id}/transcribe` | Queue it for transcription |
+| `POST` | `/api/v1/isolations/{id}/extract` | Isolate one voice |
+| `POST` | `/api/v1/isolations/{id}/extract-all` | Isolate every voice, a track each |
+| `GET` | `/api/v1/isolations/{id}/tracks/{speaker}` | A voice's track, `format=wav` or `mp3` (`/result` is the voice chosen last) |
+| `GET` | `/api/v1/isolations/{id}/audio` | The recording, on the tracks' timeline |
+| `POST` | `/api/v1/isolations/{id}/transcribe` | Queue one track for transcription |
+| `POST` | `/api/v1/isolations/{id}/transcript` | Transcribe by speaker: every voice isolated and transcribed alone, then merged |
+| `GET` | `/api/v1/isolations/{id}/transcript` | The transcript by speaker: `json`, `text`, `srt`, `vtt` |
 | `DELETE` | `/api/v1/isolations/{id}` | Delete it and its audio |
 
 Model and configuration management requires an administrative key. Errors are returned
@@ -1339,7 +1348,7 @@ meeting. It works in three steps, because the voice is chosen by ear:
    is the wrong voice, name another place in the recording to take it from.
 3. **Take the voice.** The extractor removes everything that is not that voice. The result
    is the length of the recording, 16 kHz mono, as WAV or MP3, and can be sent straight to
-   transcription.
+   transcription. Or take every voice at once: a track each.
 
 The extractor is [Voxlock](https://huggingface.co/arbazsiddiqui/voxlock) (Apache-2.0), a
 27M-parameter causal band-split RNN fine-tuned for target-speaker extraction, run through
@@ -1365,9 +1374,12 @@ isolation:
   enabled: true                       # needs diarization.enabled too
   model: voxlock-int8
   embedding_model: campplus-sv-zh-en
+  dir: ""                             # empty: an isolations directory beside storage.db_path
   ttl: 1h                             # how long an idle isolation keeps its audio
   concurrency: 1                      # isolations running at once; the rest queue
   max_isolations: 8                   # open at once, which bounds their disk
+  allow_keep: true                    # let a person keep one until they delete it
+  max_kept: 100                       # kept at once
   num_threads: 2                      # claimed from asr.inference_slots while running
 ```
 
@@ -1376,9 +1388,12 @@ isolation:
 | `enabled` | `false` | Turns the feature on; refused at startup without `diarization.enabled` |
 | `model` | `voxlock-int8` | The extractor, a catalog entry of kind `tse` |
 | `embedding_model` | `campplus-sv-zh-en` | Chooses each voice's sample and drives the gate; any `embedding` entry, but the measurements below are with this one |
+| `dir` | beside `storage.db_path` | Where isolations keep their audio. Not under `temp_dir`, because a kept isolation must survive a restart; everything here that is not kept is deleted at startup |
 | `ttl` | `1h` | How long an isolation that is not working keeps its audio after the last thing that happened to it |
 | `concurrency` | `1` | Isolations analysed or extracted at once; the rest wait their turn |
-| `max_isolations` | `8` | Isolations open at once; the next upload gets `queue_full`. Each holds up to two 16-bit copies of its recording on disk (115 MB per hour of audio each) |
+| `max_isolations` | `8` | Isolations open at once, not counting kept ones; the next upload gets `queue_full`. Each holds a 16-bit copy of its recording and one per voice isolated (115 MB per hour of audio each) |
+| `allow_keep` | `true` | Lets a person keep an isolation — its recording, tracks, names and transcript — until they delete it. `false` refuses `keep` with `capability_unavailable` and hides the checkbox |
+| `max_kept` | `100` | Kept isolations at once; the next one gets `queue_full` |
 | `num_threads` | `2` | The extractor's threads, claimed from `asr.inference_slots` while it runs, so isolation and recognition share the CPU rather than oversubscribe it |
 
 The voices are found by the diarizer configured under `diarization`, so its backend and
@@ -1412,7 +1427,7 @@ version keeps no audio anywhere it did not before.
 
 3. Restart: `sudo systemctl restart nanoasr`, or `nanoasr service restart`.
 
-4. Check: `GET /api/v1/isolation` answers `{"enabled":true,"formats":["wav","mp3"]}`, the
+4. Check: `GET /api/v1/isolation` answers `{"enabled":true,"formats":["wav","mp3"],"keep":true}`, the
    startup log has a `voice isolation configured` line, and the web interface shows a
    **Voice isolation** item in its header.
 
@@ -1430,11 +1445,55 @@ services:
 ```
 
 **Where the audio lives.** This is the one feature that keeps audio between requests,
-because a person chooses in the middle. The upload, the samples and the isolated voice are
-kept under `storage.temp_dir` until `ttl` passes with nothing happening to the isolation,
-until it is deleted, or until the server stops — the directory is emptied at startup.
-Transcription jobs are unchanged: a job made from an isolated voice holds its own copy and
+because a person chooses in the middle. The recording, the samples and the isolated voices
+are kept under `isolation.dir` until `ttl` passes with nothing happening to the isolation,
+until it is deleted, or until the server stops — what is not kept is deleted at startup.
+**Keeping** is the exception, and only on request: an isolation uploaded with `keep=true`
+(the *Keep the recording after processing* checkbox), or kept later with `PATCH`, writes a
+`state.json` beside its audio, never expires, and is loaded again when the server starts;
+work that a restart interrupted is not resumed but reported. `allow_keep: false` forbids
+it. Transcription jobs are unchanged: a job made from a track holds its own copy and
 deletes it when it finishes, like any other.
+
+### Every voice, and a transcript by speaker
+
+**Isolate all** (`POST …/extract-all`) puts every voice that has a sample on a track of its
+own — N tracks for N voices, each the length of the recording. **Transcribe by speaker**
+(`POST …/transcript`) goes one step further: it isolates whatever voice has no track yet,
+queues a transcription job per track, and merges the jobs into one transcript in which
+every word belongs to the track it came from.
+
+It is diarization done the other way round. The diarizer cuts one recording into turns and
+labels each, so where two people talk at once one of them is lost and the other's words
+straddle the cut. Here each voice is transcribed alone. On a Russian dialogue with three
+seconds of overlap, ordinary diarization dropped one speaker's line and gave the start of
+the other's to the wrong person; by speaker, both lines came out whole and each under its
+own name. The price is a transcription per voice, and the isolation first: 30 seconds for
+a 35-second two-voice dialogue on two threads.
+
+Voices can be **named** (`PATCH` with `{"names": {"spk_0": "Anna"}}`) at any time: the
+tracks are downloaded under the names, and the transcript — including one already made —
+labels its lines by them. In `json` the segments keep the ids and `speakers` carries the
+names; `text` is a dialogue (`Anna: …`), and `srt` and `vtt` label each cue.
+
+```sh
+# name the voices, then transcribe by speaker with the parameters a job takes
+curl -H "Authorization: Bearer $KEY" -X PATCH -H 'Content-Type: application/json' \
+  -d '{"names":{"spk_0":"Anna","spk_1":"Boris"}}' http://127.0.0.1:8080/api/v1/isolations/iso_…
+curl -H "Authorization: Bearer $KEY" -d model=gigaam-v3-ctc-punct-ru \
+  http://127.0.0.1:8080/api/v1/isolations/iso_…/transcript
+# follow /events through extracting and transcribing to done, then
+curl -H "Authorization: Bearer $KEY" \
+  "http://127.0.0.1:8080/api/v1/isolations/iso_…/transcript?response_format=text"
+# Anna: …
+#
+# Boris: …
+```
+
+The web interface shows the transcript as a conversation: the recording with a timeline
+of who speaks when, each turn under its speaker's name and colour, a filter by voice,
+search, how much each one spoke, and every word a seek target. The recording can be played
+as it is or as one voice alone, from its track.
 
 ```sh
 # 1. upload; the voices are found in the background
@@ -1463,7 +1522,8 @@ curl -H "Authorization: Bearer $KEY" -d model=gigaam-v3-ctc-punct-ru \
 # {"id":"job_…","status":"queued",…}
 ```
 
-`extract` may be repeated for another voice; each replaces the previous result.
+`extract` may be repeated for another voice; each voice keeps its own track, and isolating
+a voice again replaces that track only.
 `GET /api/v1/isolation` says whether the feature is on and which formats are offered; on a
 server without it every isolation route answers `capability_unavailable`.
 
