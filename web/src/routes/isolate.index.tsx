@@ -4,9 +4,10 @@ import { Search } from 'iconoir-react'
 
 import { Card, Page, Section, Stack } from '@/components/layout'
 import { Dropzone } from '@/components/run/Dropzone'
-import { Button, EmptyState, ErrorState, Field, Input, Skeleton } from '@/components/ui'
+import { IsolationList } from '@/components/isolate/IsolationList'
+import { Button, EmptyState, ErrorState, Field, Input, Skeleton, Switch } from '@/components/ui'
 import { ApiError } from '@/lib/api/client'
-import { useCreateIsolation, useIsolationInfo } from '@/lib/api/hooks'
+import { useCreateIsolation, useIsolationInfo, useIsolations } from '@/lib/api/hooks'
 import { remember } from '@/lib/audio-store'
 import { useT } from '@/lib/i18n'
 import type { PageMeta } from '@/lib/page'
@@ -36,15 +37,22 @@ function IsolatePage() {
   const navigate = useNavigate()
   const info = useIsolationInfo()
   const create = useCreateIsolation()
+  const list = useIsolations(info.data?.enabled ?? false)
 
   const [file, setFile] = useState<File>()
   const [speakers, setSpeakers] = useState('')
+  const [keep, setKeep] = useState(false)
+  const canKeep = info.data?.keep ?? false
 
   async function run() {
     if (!file) return
     try {
       const n = Number.parseInt(speakers, 10)
-      const iso = await create.mutateAsync({ file, ...(n > 0 ? { numSpeakers: n } : {}) })
+      const iso = await create.mutateAsync({
+        file,
+        ...(n > 0 ? { numSpeakers: n } : {}),
+        ...(keep && canKeep ? { keep: true } : {}),
+      })
       // The original, for listening to it beside the isolated voice; it is
       // the browser's copy, not the server's.
       remember(iso.id, file)
@@ -101,6 +109,15 @@ function IsolatePage() {
                 disabled={create.isPending}
               />
             </Field>
+            {canKeep && (
+              <Switch
+                label={t('isolate.keepRecording')}
+                description={t('isolate.keepRecordingHint')}
+                checked={keep}
+                disabled={create.isPending}
+                onChange={setKeep}
+              />
+            )}
           </Stack>
         </Card>
       </Section>
@@ -118,9 +135,19 @@ function IsolatePage() {
               {t('isolate.find')}
             </Button>
           </div>
-          <p className="text-[12px] text-[var(--text-muted)]">{t('isolate.privacy')}</p>
+          <p className="text-[12px] text-[var(--text-muted)]">
+            {keep && canKeep ? t('isolate.privacyKept') : t('isolate.privacy')}
+          </p>
         </Stack>
       </Section>
+
+      {(list.data?.length ?? 0) > 0 && (
+        <Section title={t('isolate.yours')} description={t('isolate.yoursHint')}>
+          <Card>
+            <IsolationList isolations={list.data ?? []} />
+          </Card>
+        </Section>
+      )}
     </Page>
   )
 }

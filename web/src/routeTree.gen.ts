@@ -17,6 +17,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as IsolateIndexRouteImport } from './routes/isolate.index'
 import { Route as IsolateIsolationIdRouteImport } from './routes/isolate.$isolationId'
 import { Route as ResultJobIdRouteImport } from './routes/result.$jobId'
+import { Route as IsolateIsolationIdTranscriptRouteImport } from './routes/isolate.$isolationId_.transcript'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -58,6 +59,12 @@ const ResultJobIdRoute = ResultJobIdRouteImport.update({
   path: '/result/$jobId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const IsolateIsolationIdTranscriptRoute =
+  IsolateIsolationIdTranscriptRouteImport.update({
+    id: '/isolate/$isolationId_/transcript',
+    path: '/isolate/$isolationId/transcript',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -68,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/isolate/$isolationId': typeof IsolateIsolationIdRoute
   '/result/$jobId': typeof ResultJobIdRoute
   '/isolate/': typeof IsolateIndexRoute
+  '/isolate/$isolationId/transcript': typeof IsolateIsolationIdTranscriptRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -78,6 +86,7 @@ export interface FileRoutesByTo {
   '/isolate/$isolationId': typeof IsolateIsolationIdRoute
   '/result/$jobId': typeof ResultJobIdRoute
   '/isolate': typeof IsolateIndexRoute
+  '/isolate/$isolationId/transcript': typeof IsolateIsolationIdTranscriptRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -89,6 +98,7 @@ export interface FileRoutesById {
   '/isolate/$isolationId': typeof IsolateIsolationIdRoute
   '/result/$jobId': typeof ResultJobIdRoute
   '/isolate/': typeof IsolateIndexRoute
+  '/isolate/$isolationId_/transcript': typeof IsolateIsolationIdTranscriptRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -101,6 +111,7 @@ export interface FileRouteTypes {
     | '/isolate/$isolationId'
     | '/result/$jobId'
     | '/isolate/'
+    | '/isolate/$isolationId/transcript'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -111,6 +122,7 @@ export interface FileRouteTypes {
     | '/isolate/$isolationId'
     | '/result/$jobId'
     | '/isolate'
+    | '/isolate/$isolationId/transcript'
   id:
     | '__root__'
     | '/'
@@ -121,6 +133,7 @@ export interface FileRouteTypes {
     | '/isolate/$isolationId'
     | '/result/$jobId'
     | '/isolate/'
+    | '/isolate/$isolationId_/transcript'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -132,6 +145,7 @@ export interface RootRouteChildren {
   IsolateIsolationIdRoute: typeof IsolateIsolationIdRoute
   ResultJobIdRoute: typeof ResultJobIdRoute
   IsolateIndexRoute: typeof IsolateIndexRoute
+  IsolateIsolationIdTranscriptRoute: typeof IsolateIsolationIdTranscriptRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -192,6 +206,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResultJobIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/isolate/$isolationId_/transcript': {
+      id: '/isolate/$isolationId_/transcript'
+      path: '/isolate/$isolationId/transcript'
+      fullPath: '/isolate/$isolationId/transcript'
+      preLoaderRoute: typeof IsolateIsolationIdTranscriptRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -204,6 +225,7 @@ const rootRouteChildren: RootRouteChildren = {
   IsolateIsolationIdRoute: IsolateIsolationIdRoute,
   ResultJobIdRoute: ResultJobIdRoute,
   IsolateIndexRoute: IsolateIndexRoute,
+  IsolateIsolationIdTranscriptRoute: IsolateIsolationIdTranscriptRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

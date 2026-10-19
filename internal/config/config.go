@@ -367,12 +367,15 @@ type Clustering struct {
 }
 
 // Isolation is voice isolation: find the voices of a recording with the
-// diarizer, let a person pick one, keep it and remove the rest.
+// diarizer, let a person pick one, keep it and remove the rest — or put every
+// voice on a track of its own and transcribe them into one transcript.
 //
 // It is the one feature that keeps audio between requests, because a person
-// picks the voice in the middle: the upload, the voice samples and the
-// isolated voice live under storage.temp_dir until TTL passes with nothing
-// happening, until the isolation is deleted, or until the server stops.
+// picks the voice in the middle: the recording, the voice samples and the
+// isolated voices live under Dir until TTL passes with nothing happening,
+// until the isolation is deleted, or until the server stops. A person may ask
+// for one to be kept instead (AllowKeep): it then stays, across restarts,
+// until somebody deletes it.
 type Isolation struct {
 	Enabled bool `yaml:"enabled"`
 	// Model is the extractor's catalog id (kind: tse).
@@ -380,14 +383,23 @@ type Isolation struct {
 	// EmbeddingModel chooses each voice's sample and tells the voices apart
 	// in the extractor's output (kind: embedding).
 	EmbeddingModel string `yaml:"embedding_model"`
+	// Dir holds the isolations' audio. Empty is an isolations directory
+	// beside storage.db_path: kept isolations must survive a restart, so it
+	// is not under temp_dir. What is not kept is deleted at startup.
+	Dir string `yaml:"dir"`
 	// TTL is how long an isolation that is not working lives after the last
 	// thing that happened to it.
 	TTL Duration `yaml:"ttl"`
 	// Concurrency is how many isolations run at once; the rest wait.
 	Concurrency int `yaml:"concurrency"`
-	// MaxIsolations bounds how many exist at once, and so the disk they
-	// hold: up to two 16-bit copies of a recording each.
+	// MaxIsolations bounds how many that are not kept exist at once, and so
+	// the disk they hold: a 16-bit copy of the recording and one per voice
+	// isolated.
 	MaxIsolations int `yaml:"max_isolations"`
+	// AllowKeep lets a person keep an isolation until they delete it;
+	// MaxKept bounds how many are.
+	AllowKeep bool `yaml:"allow_keep"`
+	MaxKept   int  `yaml:"max_kept"`
 	// NumThreads is the extractor's thread budget, claimed from
 	// asr.inference_slots while an isolation runs.
 	NumThreads int `yaml:"num_threads"`
@@ -399,8 +411,8 @@ type Isolation struct {
 // when the job reaches a terminal state, and startup cleanup deletes whatever a
 // crash left behind. Zero was the only supported value of that setting, so
 // removing it turns decision §15 from a default into a property (SPEC §2.1).
-// The exception is isolation, above, whose audio has a TTL of its own and
-// still never outlives the process.
+// The exception is isolation, above, whose audio has a TTL of its own, and
+// outlives the process only where a person asked for it to be kept.
 type Storage struct {
 	DBPath  string `yaml:"db_path"`
 	TempDir string `yaml:"temp_dir"`

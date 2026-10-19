@@ -193,7 +193,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 	// reports into the queue's hub, so there is no second hub to get wrong.
 	svc.Attach(queue, store)
 
-	iso, isoModels, isoMB, err := buildIsolation(ctx, cfg, reg, decoder, diarizer, governor, svc.Submit, log)
+	iso, isoModels, isoMB, err := buildIsolation(ctx, cfg, reg, decoder, diarizer, governor, svc, log)
 	if err != nil {
 		models.Close()
 		_ = segmenter.Close()
@@ -497,6 +497,14 @@ func (s *server) Close() {
 	}
 	closeStreaming(s.streaming)
 
+	// Isolation stops first: its workers use the diarizer and its own
+	// models, and a transcript in progress cancels its jobs through the
+	// queue and its store.
+	if s.isolation != nil {
+		s.isolation.Close()
+	}
+	s.isolationModels.Close()
+
 	if s.store != nil {
 		_ = s.store.Close()
 	}
@@ -506,12 +514,6 @@ func (s *server) Close() {
 	if s.vad != nil {
 		_ = s.vad.Close()
 	}
-	// Isolation stops before the diarizer and its own models are freed:
-	// its workers use both.
-	if s.isolation != nil {
-		s.isolation.Close()
-	}
-	s.isolationModels.Close()
 	closeDiarizer(s.diarizer)
 	if s.closePost != nil {
 		s.closePost()

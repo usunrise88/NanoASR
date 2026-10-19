@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Pause, Play } from 'iconoir-react'
 
 import { Inline, Stack } from '@/components/layout'
@@ -34,6 +34,10 @@ export function Player({
   currentTime,
   onTime,
   onReady,
+  startAt,
+  autoPlay,
+  lanes,
+  onPlaying,
 }: {
   file: File
   result: Result
@@ -41,6 +45,14 @@ export function Player({
   currentTime: number
   onTime: (seconds: number) => void
   onReady: (handle: PlayerHandle) => void
+  // startAt and autoPlay carry the position over when the same recording is
+  // swapped for another take of it — the whole conversation for one voice's
+  // track — so listening goes on where it was.
+  startAt?: number | undefined
+  autoPlay?: boolean | undefined
+  // lanes go under the waveform: who speaks when.
+  lanes?: ReactNode
+  onPlaying?: ((playing: boolean) => void) | undefined
 }) {
   const t = useT()
   const audio = useRef<HTMLAudioElement>(null)
@@ -146,6 +158,7 @@ export function Player({
         currentTime={currentTime}
         onSeek={seek}
       />
+      {lanes}
 
       {error && <p className="text-[12px] text-[var(--danger-text)]">{error}</p>}
 
@@ -177,12 +190,24 @@ export function Player({
         ref={audio}
         src={url}
         preload="metadata"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
+        onPlay={() => {
+          setPlaying(true)
+          onPlaying?.(true)
+        }}
+        onPause={() => {
+          setPlaying(false)
+          onPlaying?.(false)
+        }}
+        onEnded={() => {
+          setPlaying(false)
+          onPlaying?.(false)
+        }}
         onSeeked={(e) => onTime(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => {
-          e.currentTarget.playbackRate = Number(speed)
+          const el = e.currentTarget
+          el.playbackRate = Number(speed)
+          if (startAt) el.currentTime = startAt
+          if (autoPlay) void el.play()
         }}
       />
     </Stack>

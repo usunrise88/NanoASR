@@ -18,11 +18,16 @@ export function RunOptions({
   onChange,
   model,
   disabled,
+  oneVoice,
 }: {
   value: TranscribeOptions
   onChange: (next: TranscribeOptions) => void
   model: ModelInfo | undefined
   disabled?: boolean | undefined
+  // oneVoice is audio that holds one voice on one channel, an isolated
+  // track: there is nobody to tell apart and no channel to choose, so the
+  // options for both are not offered.
+  oneVoice?: boolean | undefined
 }) {
   const t = useT()
   const set = <K extends keyof TranscribeOptions>(key: K, v: TranscribeOptions[K]) =>
@@ -78,18 +83,20 @@ export function RunOptions({
         </Field>
       )}
 
-      <Field label={t('home.channelMode')}>
-        <Select
-          value={value.channel_mode ?? 'downmix'}
-          disabled={disabled}
-          onChange={(v) => set('channel_mode', v as TranscribeOptions['channel_mode'])}
-          options={[
-            { value: 'downmix', label: 'downmix' },
-            { value: 'first', label: 'first' },
-            { value: 'split', label: 'split' },
-          ]}
-        />
-      </Field>
+      {!oneVoice && (
+        <Field label={t('home.channelMode')}>
+          <Select
+            value={value.channel_mode ?? 'downmix'}
+            disabled={disabled}
+            onChange={(v) => set('channel_mode', v as TranscribeOptions['channel_mode'])}
+            options={[
+              { value: 'downmix', label: 'downmix' },
+              { value: 'first', label: 'first' },
+              { value: 'split', label: 'split' },
+            ]}
+          />
+        </Field>
+      )}
 
       <Field label={t('home.decoding')}>
         <Select
@@ -177,14 +184,16 @@ export function RunOptions({
           description={t('home.itnHint')}
           onChange={(v) => set('itn', v)}
         />
-        <Switch
-          label={t('home.diarize')}
-          checked={value.diarize ?? false}
-          disabled={disabled ?? false}
-          description={t('home.diarizeHint')}
-          onChange={(v) => set('diarize', v)}
-        />
-        {(value.diarize ?? false) && (
+        {!oneVoice && (
+          <Switch
+            label={t('home.diarize')}
+            checked={value.diarize ?? false}
+            disabled={disabled ?? false}
+            description={t('home.diarizeHint')}
+            onChange={(v) => set('diarize', v)}
+          />
+        )}
+        {!oneVoice && (value.diarize ?? false) && (
           <Field label={t('home.numSpeakers')} description={t('home.numSpeakersHint')}>
             <Input
               type="number"

@@ -139,6 +139,8 @@ func Default() Config {
 			TTL:            Dur(time.Hour),
 			Concurrency:    1,
 			MaxIsolations:  8,
+			AllowKeep:      true,
+			MaxKept:        100,
 			// 0.35x real time at two threads on the measured hardware.
 			NumThreads: 2,
 		},

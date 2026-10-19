@@ -44,6 +44,8 @@ export interface Silence {
 
 export interface Speaker {
   id: string
+  /** What a person called the voice; only voice isolation names them. */
+  name?: string
   total_speech: number
   segments: number
 }
@@ -238,6 +240,7 @@ export type IsolationStatus =
   | 'analysing'
   | 'awaiting_selection'
   | 'extracting'
+  | 'transcribing'
   | 'done'
   | 'failed'
 
@@ -252,6 +255,8 @@ export interface VoiceSample {
 
 export interface IsolationVoice {
   speaker: string
+  /** What a person called it; empty until somebody does. */
+  name?: string
   total_speech: number
   turns: number
   sample?: VoiceSample
@@ -264,12 +269,37 @@ export interface IsolationSelection {
   sample_start?: number
 }
 
+/** One isolated voice: a track the length of the recording. */
 export interface IsolationResult {
   speaker: string
+  /** The file name it downloads under, without an extension. */
   name: string
   duration: number
   sample_rate: number
+  /** Where the sample was taken from, when a person placed it. */
+  sample_start?: number
   job_id?: string
+}
+
+export interface TranscriptJob {
+  speaker: string
+  job_id: string
+  status: JobStatus
+  percent?: number
+}
+
+/** Where the transcript by speaker is; the transcript itself is fetched apart. */
+export interface IsolationTranscript {
+  status: JobStatus
+  model?: string
+  language?: string
+  jobs?: TranscriptJob[]
+  /** A track was isolated again after the transcript was made. */
+  stale?: boolean
+  warnings?: Warning[]
+  error?: JobError
+  created_at: string
+  finished_at?: string
 }
 
 export interface Isolation {
@@ -278,25 +308,42 @@ export interface Isolation {
   stage?: string
   percent?: number
   position?: number
+  /** The voice the running stage works on. */
+  voice?: string
   filename?: string
   source: 'api' | 'ui'
   duration?: number
+  /** Stored until deleted, across restarts. */
+  keep: boolean
   voices?: IsolationVoice[]
   selected?: IsolationSelection
+  /** The track of the voice chosen last. */
   result?: IsolationResult
+  tracks?: IsolationResult[]
+  transcript?: IsolationTranscript
   formats?: AudioFormat[]
   warnings?: Warning[]
   error?: JobError
   created_at: string
-  expires_at: string
+  /** Absent for a kept isolation. */
+  expires_at?: string
 }
 
 export interface IsolationInfo {
   enabled: boolean
   formats?: AudioFormat[]
+  /** Whether an isolation may be kept until it is deleted. */
+  keep?: boolean
+}
+
+export interface IsolationUpdate {
+  keep?: boolean
+  names?: Record<string, string>
 }
 
 /** Work is queued or running: the isolation is worth watching. */
 export function isolationBusy(status: IsolationStatus): boolean {
-  return status === 'queued' || status === 'analysing' || status === 'extracting'
+  return (
+    status === 'queued' || status === 'analysing' || status === 'extracting' || status === 'transcribing'
+  )
 }

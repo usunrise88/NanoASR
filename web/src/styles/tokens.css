@@ -20,6 +20,19 @@
 @import '@radix-ui/colors/amber-dark.css';
 @import '@radix-ui/colors/green.css';
 @import '@radix-ui/colors/green-dark.css';
+/* Speakers: one hue each, apart from the accent and the status colours. */
+@import '@radix-ui/colors/blue.css';
+@import '@radix-ui/colors/blue-dark.css';
+@import '@radix-ui/colors/orange.css';
+@import '@radix-ui/colors/orange-dark.css';
+@import '@radix-ui/colors/teal.css';
+@import '@radix-ui/colors/teal-dark.css';
+@import '@radix-ui/colors/plum.css';
+@import '@radix-ui/colors/plum-dark.css';
+@import '@radix-ui/colors/crimson.css';
+@import '@radix-ui/colors/crimson-dark.css';
+@import '@radix-ui/colors/brown.css';
+@import '@radix-ui/colors/brown-dark.css';
 
 :root {
   /* Surfaces, from page background upward. */
@@ -36,6 +49,36 @@
   --text-primary: var(--slate-12);
   --text-secondary: var(--slate-11);
   --text-muted: var(--slate-10);
+
+  /*
+   * Speakers. A voice keeps its colour everywhere it appears — the timeline,
+   * its turns, its name — so a reader follows a person by colour before
+   * reading a single name. Radix switches each scale for the dark theme.
+   */
+  --speaker-1-solid: var(--blue-9);
+  --speaker-1-bg: var(--blue-3);
+  --speaker-1-border: var(--blue-6);
+  --speaker-1-text: var(--blue-11);
+  --speaker-2-solid: var(--orange-9);
+  --speaker-2-bg: var(--orange-3);
+  --speaker-2-border: var(--orange-6);
+  --speaker-2-text: var(--orange-11);
+  --speaker-3-solid: var(--teal-9);
+  --speaker-3-bg: var(--teal-3);
+  --speaker-3-border: var(--teal-6);
+  --speaker-3-text: var(--teal-11);
+  --speaker-4-solid: var(--plum-9);
+  --speaker-4-bg: var(--plum-3);
+  --speaker-4-border: var(--plum-6);
+  --speaker-4-text: var(--plum-11);
+  --speaker-5-solid: var(--crimson-9);
+  --speaker-5-bg: var(--crimson-3);
+  --speaker-5-border: var(--crimson-6);
+  --speaker-5-text: var(--crimson-11);
+  --speaker-6-solid: var(--brown-9);
+  --speaker-6-bg: var(--brown-3);
+  --speaker-6-border: var(--brown-6);
+  --speaker-6-text: var(--brown-11);
 
   --accent-bg: var(--indigo-3);
   --accent-border: var(--indigo-7);

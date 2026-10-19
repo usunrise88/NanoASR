@@ -257,6 +257,9 @@ func (c *Config) validateIsolation() error {
 		return fmt.Errorf("isolation.max_isolations (%d) must be at least isolation.concurrency (%d)",
 			i.MaxIsolations, i.Concurrency)
 	}
+	if i.AllowKeep && i.MaxKept < 1 {
+		return fmt.Errorf("isolation.max_kept must be at least 1 when isolation.allow_keep is true")
+	}
 	return nil
 }
 

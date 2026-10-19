@@ -222,16 +222,20 @@ diarization:
 
 isolation:
   # Voice isolation: find the voices of a recording, let a person pick one,
-  # keep it and remove the rest (Voxlock). Needs diarization.enabled. The one
-  # feature that keeps audio between requests: the upload and the isolated
-  # voice live under storage.temp_dir until ttl passes with nothing happening,
-  # the isolation is deleted, or the server stops.
+  # keep it and remove the rest, or isolate every voice and transcribe them
+  # into one transcript by speaker (Voxlock). Needs diarization.enabled. The
+  # one feature that keeps audio between requests: the recording and the
+  # isolated voices live under dir until ttl passes with nothing happening, the
+  # isolation is deleted, or the server stops — unless a person keeps it.
   enabled: false
   model: voxlock-int8
   embedding_model: campplus-sv-zh-en
+  dir: ""                       # empty: an isolations directory beside storage.db_path
   ttl: 1h
   concurrency: 1                # isolations running at once; the rest queue
   max_isolations: 8             # open at once, which bounds their disk
+  allow_keep: true              # let a person keep one until they delete it
+  max_kept: 100                 # kept at once
   num_threads: 2                # claimed from asr.inference_slots while running
 
 storage:

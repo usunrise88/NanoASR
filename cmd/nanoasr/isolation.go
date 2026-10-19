@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,7 +38,7 @@ func buildIsolation(
 	decoder *audio.Router,
 	diarizer diarize.Diarizer,
 	governor *pool.Governor,
-	submit func(context.Context, core.Request) (*core.Job, error),
+	jobs isolation.Jobs,
 	log *slog.Logger,
 ) (*isolation.Service, *isolationModels, int, error) {
 	if !cfg.Isolation.Enabled {
@@ -76,11 +77,16 @@ func buildIsolation(
 	if ff != nil {
 		mp3 = ff.EncodeMP3
 	}
+	// Before 1.5 the audio lived under temp_dir and never survived a restart;
+	// whatever a previous version left there is nobody's now.
+	_ = os.RemoveAll(legacyIsolationDir(cfg))
 	svc, err := isolation.New(isolation.Options{
 		Dir:           isolationDir(cfg),
 		TTL:           cfg.Isolation.TTL.Duration,
 		Concurrency:   cfg.Isolation.Concurrency,
 		MaxIsolations: cfg.Isolation.MaxIsolations,
+		AllowKeep:     cfg.Isolation.AllowKeep,
+		MaxKept:       cfg.Isolation.MaxKept,
 		Threads:       cfg.Isolation.NumThreads,
 		Governor:      governor,
 		Decode: func(ctx context.Context, r io.Reader) ([]float32, error) {
@@ -97,7 +103,7 @@ func buildIsolation(
 		},
 		Diarizer: diarizer,
 		Engine:   models.engine,
-		Submit:   submit,
+		Jobs:     jobs,
 		MP3:      mp3,
 		Log:      log,
 	})
@@ -110,6 +116,8 @@ func buildIsolation(
 		"embedding", cfg.Isolation.EmbeddingModel,
 		"installed", installed == nil,
 		"ttl", cfg.Isolation.TTL.Duration,
+		"dir", isolationDir(cfg),
+		"allow_keep", cfg.Isolation.AllowKeep,
 		"mp3", mp3 != nil,
 		"note", "loaded by the first isolation")
 	// The extractor's sessions are shared; each running isolation adds its
@@ -117,11 +125,21 @@ func buildIsolation(
 	return svc, models, mb, nil
 }
 
-// isolationDir is where isolations keep their audio. It is emptied at
-// startup, so it must belong to this installation alone: two servers sharing
-// storage.temp_dir would otherwise each delete the other's isolations. The
-// database path is what tells installations apart.
+// isolationDir is where isolations keep their audio. Kept isolations must
+// survive a restart and what is not kept is deleted at startup, so the
+// directory must belong to this installation alone and outlive the process:
+// beside the database, unless isolation.dir names another.
 func isolationDir(cfg config.Config) string {
+	if cfg.Isolation.Dir != "" {
+		return cfg.Isolation.Dir
+	}
+	return filepath.Join(filepath.Dir(cfg.Storage.DBPath), "isolations")
+}
+
+// legacyIsolationDir is where versions before 1.5 kept isolations: under
+// temp_dir, named by the database path so two installations sharing temp_dir
+// did not delete each other's.
+func legacyIsolationDir(cfg config.Config) string {
 	db, err := filepath.Abs(cfg.Storage.DBPath)
 	if err != nil {
 		db = cfg.Storage.DBPath

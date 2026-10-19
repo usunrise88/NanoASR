@@ -26,8 +26,74 @@ type fakeIsolation struct {
 	gotFormat     core.AudioFormat
 	gotSpeaker    string
 	gotTranscribe core.Request
+	gotUpdate     core.IsolationUpdate
+	gotAll        bool
+	gotSpeakers   core.Request
+	transcript    *core.Result
 	deleted       []string
 }
+
+func (f *fakeIsolation) List(context.Context) ([]core.Isolation, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return []core.Isolation{f.iso}, nil
+}
+
+func (f *fakeIsolation) Update(_ context.Context, _ string, upd core.IsolationUpdate) (*core.Isolation, error) {
+	f.mu.Lock()
+	f.gotUpdate = upd
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	v := f.iso
+	return &v, nil
+}
+
+func (f *fakeIsolation) ExtractAll(context.Context, string) (*core.Isolation, error) {
+	f.mu.Lock()
+	f.gotAll = true
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	v := f.iso
+	v.Status = core.IsolationQueued
+	return &v, nil
+}
+
+func (f *fakeIsolation) Audio(_ context.Context, _ string, format core.AudioFormat) (io.ReadCloser, error) {
+	f.mu.Lock()
+	f.gotFormat = format
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return sized{strings.NewReader("RIFF-audio"), 10}, nil
+}
+
+func (f *fakeIsolation) TranscribeSpeakers(_ context.Context, _ string, req core.Request) (*core.Isolation, error) {
+	f.mu.Lock()
+	f.gotSpeakers = req
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	v := f.iso
+	v.Status = core.IsolationQueued
+	v.Transcript = &core.IsolationTranscript{Status: core.JobQueued, Model: req.ModelID}
+	return &v, nil
+}
+
+func (f *fakeIsolation) Transcript(context.Context, string) (*core.Result, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.transcript, nil
+}
+
+func (f *fakeIsolation) CanKeep() bool { return true }
 
 func (f *fakeIsolation) Create(_ context.Context, req core.IsolationRequest) (*core.Isolation, error) {
 	f.mu.Lock()
@@ -99,9 +165,9 @@ type sized struct {
 func (s sized) Close() error { return nil }
 func (s sized) Size() int64  { return s.n }
 
-func (f *fakeIsolation) Result(_ context.Context, _ string, format core.AudioFormat) (io.ReadCloser, error) {
+func (f *fakeIsolation) Result(_ context.Context, _, speaker string, format core.AudioFormat) (io.ReadCloser, error) {
 	f.mu.Lock()
-	f.gotFormat = format
+	f.gotFormat, f.gotSpeaker = format, speaker
 	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
@@ -112,9 +178,9 @@ func (f *fakeIsolation) Result(_ context.Context, _ string, format core.AudioFor
 	return sized{strings.NewReader("RIFF-result"), 11}, nil
 }
 
-func (f *fakeIsolation) Transcribe(_ context.Context, _ string, req core.Request) (*core.Job, error) {
+func (f *fakeIsolation) Transcribe(_ context.Context, _, speaker string, req core.Request) (*core.Job, error) {
 	f.mu.Lock()
-	f.gotTranscribe = req
+	f.gotTranscribe, f.gotSpeaker = req, speaker
 	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
@@ -179,9 +245,10 @@ func TestIsolationInfoSaysWhetherItIsOn(t *testing.T) {
 	var on struct {
 		Enabled bool     `json:"enabled"`
 		Formats []string `json:"formats"`
+		Keep    bool     `json:"keep"`
 	}
 	decode(t, do(t, srv, http.MethodGet, "/api/v1/isolation"), &on)
-	if !on.Enabled || len(on.Formats) != 2 {
+	if !on.Enabled || len(on.Formats) != 2 || !on.Keep {
 		t.Errorf("with isolation: %+v", on)
 	}
 }
@@ -189,11 +256,11 @@ func TestIsolationInfoSaysWhetherItIsOn(t *testing.T) {
 func TestCreateIsolation(t *testing.T) {
 	iso := newFakeIsolation()
 	srv := newServer(t, &fakeService{}, adapter.Deps{Isolation: iso})
-	resp := upload(t, srv, "/api/v1/isolations", field{"num_speakers", "2"})
+	resp := upload(t, srv, "/api/v1/isolations", field{"num_speakers", "2"}, field{"keep", "true"})
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
-	if iso.gotCreate.NumSpeakers != 2 || !bytes.HasPrefix(iso.gotUpload, []byte("RIFF")) {
+	if iso.gotCreate.NumSpeakers != 2 || !iso.gotCreate.Keep || !bytes.HasPrefix(iso.gotUpload, []byte("RIFF")) {
 		t.Errorf("service got %+v and %q", iso.gotCreate, iso.gotUpload)
 	}
 	resp = upload(t, srv, "/api/v1/isolations", field{"num_speakers", "two"})
@@ -328,5 +395,112 @@ func TestIsolationErrorsAreProblems(t *testing.T) {
 	resp := sendTo(t, c, http.MethodPost, url+"/api/v1/isolations/iso_1/extract", "application/json", `{"speaker":"spk_0"}`)
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("busy: %d", resp.StatusCode)
+	}
+}
+
+func TestTracksByVoice(t *testing.T) {
+	iso := newFakeIsolation()
+	iso.iso.Tracks = []core.IsolationResult{{Speaker: "spk_1", Name: "call-spk_1"}, {Speaker: "spk_0", Name: "call-Анна"}}
+	_, url, c := isoServer(t, iso)
+
+	resp := sendTo(t, c, http.MethodGet, url+"/api/v1/isolations/iso_1/tracks/spk_0?format=mp3", "", "")
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "ID3-mp3" || iso.gotSpeaker != "spk_0" {
+		t.Fatalf("track: %d %q for %q", resp.StatusCode, body, iso.gotSpeaker)
+	}
+	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, "call-%D0%90%D0%BD%D0%BD%D0%B0.mp3") {
+		t.Errorf("Content-Disposition %q", cd)
+	}
+	sendTo(t, c, http.MethodGet, url+"/api/v1/isolations/iso_1/result?speaker=spk_1", "", "")
+	if iso.gotSpeaker != "spk_1" {
+		t.Errorf("result?speaker: %q", iso.gotSpeaker)
+	}
+
+	resp = sendTo(t, c, http.MethodGet, url+"/api/v1/isolations/iso_1/audio", "", "")
+	body, _ = io.ReadAll(resp.Body)
+	if string(body) != "RIFF-audio" || resp.Header.Get("Content-Disposition") != "attachment; filename=call.wav" {
+		t.Errorf("audio: %q %q", body, resp.Header.Get("Content-Disposition"))
+	}
+
+	resp = sendTo(t, c, http.MethodPost, url+"/api/v1/isolations/iso_1/extract-all", "", "")
+	if resp.StatusCode != http.StatusAccepted || !iso.gotAll {
+		t.Errorf("extract-all: %d", resp.StatusCode)
+	}
+	resp = sendTo(t, c, http.MethodPost, url+"/api/v1/isolations/iso_1/transcribe",
+		"application/x-www-form-urlencoded", "speaker=spk_0")
+	if resp.StatusCode != http.StatusAccepted || iso.gotSpeaker != "spk_0" {
+		t.Errorf("transcribe one track: %d %q", resp.StatusCode, iso.gotSpeaker)
+	}
+}
+
+func TestUpdateNamesAndKeeps(t *testing.T) {
+	iso := newFakeIsolation()
+	_, url, c := isoServer(t, iso)
+	resp := sendTo(t, c, http.MethodPatch, url+"/api/v1/isolations/iso_1", "application/json",
+		`{"names":{"spk_0":"Анна"},"keep":true}`)
+	if resp.StatusCode != http.StatusOK || iso.gotUpdate.Names["spk_0"] != "Анна" ||
+		iso.gotUpdate.Keep == nil || !*iso.gotUpdate.Keep {
+		t.Errorf("update: %d %+v", resp.StatusCode, iso.gotUpdate)
+	}
+	resp = sendTo(t, c, http.MethodPatch, url+"/api/v1/isolations/iso_1", "application/json", `{"name":"x"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("an unknown field: %d", resp.StatusCode)
+	}
+
+	var list struct {
+		Data []core.Isolation `json:"data"`
+	}
+	resp = sendTo(t, c, http.MethodGet, url+"/api/v1/isolations", "", "")
+	decode(t, resp, &list)
+	if len(list.Data) != 1 || list.Data[0].ID != "iso_1" {
+		t.Errorf("list %+v", list)
+	}
+}
+
+func TestTranscriptBySpeakers(t *testing.T) {
+	iso := newFakeIsolation()
+	a, b := "spk_0", "spk_1"
+	iso.transcript = &core.Result{
+		Text: "привет здравствуйте как дела",
+		Segments: []core.Segment{
+			{ID: 0, Start: 0, End: 1, Text: "привет", Speaker: &a},
+			{ID: 1, Start: 1, End: 2, Text: "здравствуйте", Speaker: &b},
+			{ID: 2, Start: 2, End: 3, Text: "как дела", Speaker: &b},
+		},
+		Speakers: []core.Speaker{{ID: "spk_0", Name: "Анна"}, {ID: "spk_1"}},
+	}
+	_, url, c := isoServer(t, iso)
+
+	resp := sendTo(t, c, http.MethodPost, url+"/api/v1/isolations/iso_1/transcript",
+		"application/x-www-form-urlencoded", "model=gigaam&language=ru&punctuate=true")
+	var started core.Isolation
+	decode(t, resp, &started)
+	if resp.StatusCode != http.StatusAccepted || started.Transcript == nil || iso.gotSpeakers.ModelID != "gigaam" ||
+		!iso.gotSpeakers.Punctuate {
+		t.Fatalf("start: %d %+v", resp.StatusCode, iso.gotSpeakers)
+	}
+
+	var res core.Result
+	decode(t, sendTo(t, c, http.MethodGet, url+"/api/v1/isolations/iso_1/transcript", "", ""), &res)
+	// JSON keeps the ids in the segments and the names beside them.
+	if *res.Segments[0].Speaker != "spk_0" || res.Speakers[0].Name != "Анна" {
+		t.Errorf("json %+v", res)
+	}
+	resp = sendTo(t, c, http.MethodGet, url+"/api/v1/isolations/iso_1/transcript?response_format=text", "", "")
+	body, _ := io.ReadAll(resp.Body)
+	if want := "Анна: привет\n\nspk_1: здравствуйте как дела\n"; string(body) != want {
+		t.Errorf("text %q, want %q", body, want)
+	}
+	resp = sendTo(t, c, http.MethodGet, url+"/api/v1/isolations/iso_1/transcript?response_format=vtt", "", "")
+	body, _ = io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "<v Анна>привет</v>") || !strings.Contains(string(body), "<v spk_1>") {
+		t.Errorf("vtt:\n%s", body)
+	}
+	if *iso.transcript.Segments[0].Speaker != "spk_0" {
+		t.Error("rendering by name changed the transcript itself")
+	}
+	resp = sendTo(t, c, http.MethodGet, url+"/api/v1/isolations/iso_1/transcript?response_format=doc", "", "")
+	if p := problemOf(t, resp); p.Param != "response_format" {
+		t.Errorf("a bad format: %+v", p)
 	}
 }
