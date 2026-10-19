@@ -1,4 +1,4 @@
-package sortformer
+package ortenv
 
 import (
 	"os"
@@ -13,12 +13,12 @@ func TestEnvironmentComesUp(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skipf("not supported on %s", runtime.GOOS)
 	}
-	if err := ensureEnvironment(); err != nil {
-		t.Fatalf("ensureEnvironment: %v", err)
+	if err := Ensure(); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 	// Twice is the same as once: the second caller must not re-initialise.
-	if err := ensureEnvironment(); err != nil {
-		t.Fatalf("second ensureEnvironment: %v", err)
+	if err := Ensure(); err != nil {
+		t.Fatalf("second Ensure: %v", err)
 	}
 	if !ort.IsInitialized() {
 		t.Fatal("onnxruntime reports itself uninitialised")
@@ -40,7 +40,7 @@ func TestOneOnnxruntimeInTheProcess(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("onnxruntime reported at %s: %v", path, err)
 	}
-	if !sameVersion(version, sonnx.GetOnnxruntimeVersion()) {
+	if !SameVersion(version, sonnx.GetOnnxruntimeVersion()) {
 		t.Errorf("onnxruntime %s, sherpa-onnx runs %s", version, sonnx.GetOnnxruntimeVersion())
 	}
 	t.Logf("onnxruntime %s from %s", version, path)
@@ -57,8 +57,8 @@ func TestSameVersion(t *testing.T) {
 		{"1.27.1", "1.27.0", false},
 		{"", "", false},
 	} {
-		if got := sameVersion(tc.a, tc.b); got != tc.want {
-			t.Errorf("sameVersion(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		if got := SameVersion(tc.a, tc.b); got != tc.want {
+			t.Errorf("SameVersion(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
 	}
 }

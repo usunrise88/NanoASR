@@ -51,6 +51,60 @@ func (*Adapter) Doc() adapter.Doc {
 			Detail:  "A diarization pass already under way cannot be interrupted and runs to its end.",
 		}, {
 			Method:  "GET",
+			Path:    "/api/v1/isolation",
+			Summary: "Say whether voice isolation is on, and its download formats.",
+			Detail: "{enabled, formats}. Every /api/v1/isolations route answers " +
+				"capability_unavailable on a server where it is off.",
+		}, {
+			Method:  "POST",
+			Path:    "/api/v1/isolations",
+			Summary: "Upload a recording to keep one voice of.",
+			Detail: "multipart/form-data with file, and num_speakers if known. Answers 202 " +
+				"with an isolation that finds the voices (status analysing) and then " +
+				"waits for one to be chosen (awaiting_selection). Unlike a job, its " +
+				"audio is kept until isolation.ttl passes with nothing happening, it " +
+				"is deleted, or the server stops.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations/{id}",
+			Summary: "Fetch an isolation: its voices, the chosen one, the result.",
+			Detail: "voices lists each speaker with its speaking time and the 3-second " +
+				"sample it would be kept by, or the reason it has none.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations/{id}/events",
+			Summary: "Follow an isolation as server-sent events.",
+			Detail: "Numbered states until the isolation waits on a person or is done, " +
+				"then a done event. Watch again after choosing a voice.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations/{id}/voices/{speaker}/sample",
+			Summary: "Listen to a voice: its sample as WAV.",
+			Detail:  "Exactly the 3 seconds the extractor is told to keep.",
+		}, {
+			Method:  "POST",
+			Path:    "/api/v1/isolations/{id}/extract",
+			Summary: "Choose the voice to keep.",
+			Detail: "JSON or form: speaker, and sample_start in seconds to take the " +
+				"sample from somewhere else. May be repeated for another voice once " +
+				"the last extraction is done; each replaces the previous result.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations/{id}/result",
+			Summary: "Download the isolated voice.",
+			Detail:  "format=wav (default) or mp3, 16 kHz mono. MP3 needs ffmpeg on the server.",
+		}, {
+			Method:  "POST",
+			Path:    "/api/v1/isolations/{id}/transcribe",
+			Summary: "Queue the isolated voice for transcription.",
+			Detail: "Takes the fields of /api/v1/jobs except file, and answers 202 with " +
+				"the job. The job holds its own copy of the audio.",
+		}, {
+			Method:  "DELETE",
+			Path:    "/api/v1/isolations/{id}",
+			Summary: "Delete an isolation and its audio now.",
+		}, {
+			Method:  "GET",
 			Path:    "/api/v1/models",
 			Summary: "List installed models and what is resident.",
 		}, {

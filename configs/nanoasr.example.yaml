@@ -220,6 +220,20 @@ diarization:
   min_duration_on: 0.3
   min_duration_off: 0.5
 
+isolation:
+  # Voice isolation: find the voices of a recording, let a person pick one,
+  # keep it and remove the rest (Voxlock). Needs diarization.enabled. The one
+  # feature that keeps audio between requests: the upload and the isolated
+  # voice live under storage.temp_dir until ttl passes with nothing happening,
+  # the isolation is deleted, or the server stops.
+  enabled: false
+  model: voxlock-int8
+  embedding_model: campplus-sv-zh-en
+  ttl: 1h
+  concurrency: 1                # isolations running at once; the rest queue
+  max_isolations: 8             # open at once, which bounds their disk
+  num_threads: 2                # claimed from asr.inference_slots while running
+
 storage:
   db_path: /var/lib/nanoasr/nanoasr.db
   # Empty picks a nanoasr-spool directory under the system temp dir. Queued

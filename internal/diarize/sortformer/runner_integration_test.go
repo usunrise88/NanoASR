@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/usunrise88/nanoasr/internal/ortenv"
 )
 
 // modelDir is where the exported graphs live: SORTFORMER_MODEL_DIR, or the
@@ -36,7 +38,7 @@ func newTestRunner(t testing.TB, threads int) *ortRunner {
 	t.Helper()
 	dir := modelDir(t)
 	r, err := newORTRunner(filepath.Join(dir, "embed.onnx"), filepath.Join(dir, "step.onnx"),
-		sessionTuning{IntraOpThreads: threads})
+		ortenv.Tuning{IntraOpThreads: threads})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,10 +124,10 @@ func TestRunnerCancelsAStep(t *testing.T) {
 func BenchmarkStep684(b *testing.B) {
 	for _, tc := range []struct {
 		name string
-		tune sessionTuning
+		tune ortenv.Tuning
 	}{
-		{"spinning", sessionTuning{IntraOpThreads: 4}},
-		{"no-spinning", sessionTuning{IntraOpThreads: 4, NoSpinning: true}},
+		{"spinning", ortenv.Tuning{IntraOpThreads: 4}},
+		{"no-spinning", ortenv.Tuning{IntraOpThreads: 4, NoSpinning: true}},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			dir := modelDir(b)

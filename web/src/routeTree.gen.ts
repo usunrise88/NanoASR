@@ -14,6 +14,8 @@ import { Route as HotwordsRouteImport } from './routes/hotwords'
 import { Route as JobsRouteImport } from './routes/jobs'
 import { Route as ModelsRouteImport } from './routes/models'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as IsolateIndexRouteImport } from './routes/isolate.index'
+import { Route as IsolateIsolationIdRouteImport } from './routes/isolate.$isolationId'
 import { Route as ResultJobIdRouteImport } from './routes/result.$jobId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -41,6 +43,16 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const IsolateIndexRoute = IsolateIndexRouteImport.update({
+  id: '/isolate/',
+  path: '/isolate/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IsolateIsolationIdRoute = IsolateIsolationIdRouteImport.update({
+  id: '/isolate/$isolationId',
+  path: '/isolate/$isolationId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ResultJobIdRoute = ResultJobIdRouteImport.update({
   id: '/result/$jobId',
   path: '/result/$jobId',
@@ -53,7 +65,9 @@ export interface FileRoutesByFullPath {
   '/jobs': typeof JobsRoute
   '/models': typeof ModelsRoute
   '/settings': typeof SettingsRoute
+  '/isolate/$isolationId': typeof IsolateIsolationIdRoute
   '/result/$jobId': typeof ResultJobIdRoute
+  '/isolate/': typeof IsolateIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -61,7 +75,9 @@ export interface FileRoutesByTo {
   '/jobs': typeof JobsRoute
   '/models': typeof ModelsRoute
   '/settings': typeof SettingsRoute
+  '/isolate/$isolationId': typeof IsolateIsolationIdRoute
   '/result/$jobId': typeof ResultJobIdRoute
+  '/isolate': typeof IsolateIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -70,14 +86,31 @@ export interface FileRoutesById {
   '/jobs': typeof JobsRoute
   '/models': typeof ModelsRoute
   '/settings': typeof SettingsRoute
+  '/isolate/$isolationId': typeof IsolateIsolationIdRoute
   '/result/$jobId': typeof ResultJobIdRoute
+  '/isolate/': typeof IsolateIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/hotwords' | '/jobs' | '/models' | '/settings' | '/result/$jobId'
+    | '/'
+    | '/hotwords'
+    | '/jobs'
+    | '/models'
+    | '/settings'
+    | '/isolate/$isolationId'
+    | '/result/$jobId'
+    | '/isolate/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/hotwords' | '/jobs' | '/models' | '/settings' | '/result/$jobId'
+  to:
+    | '/'
+    | '/hotwords'
+    | '/jobs'
+    | '/models'
+    | '/settings'
+    | '/isolate/$isolationId'
+    | '/result/$jobId'
+    | '/isolate'
   id:
     | '__root__'
     | '/'
@@ -85,7 +118,9 @@ export interface FileRouteTypes {
     | '/jobs'
     | '/models'
     | '/settings'
+    | '/isolate/$isolationId'
     | '/result/$jobId'
+    | '/isolate/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -94,7 +129,9 @@ export interface RootRouteChildren {
   JobsRoute: typeof JobsRoute
   ModelsRoute: typeof ModelsRoute
   SettingsRoute: typeof SettingsRoute
+  IsolateIsolationIdRoute: typeof IsolateIsolationIdRoute
   ResultJobIdRoute: typeof ResultJobIdRoute
+  IsolateIndexRoute: typeof IsolateIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -134,6 +171,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/isolate/': {
+      id: '/isolate/'
+      path: '/isolate'
+      fullPath: '/isolate/'
+      preLoaderRoute: typeof IsolateIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/isolate/$isolationId': {
+      id: '/isolate/$isolationId'
+      path: '/isolate/$isolationId'
+      fullPath: '/isolate/$isolationId'
+      preLoaderRoute: typeof IsolateIsolationIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/result/$jobId': {
       id: '/result/$jobId'
       path: '/result/$jobId'
@@ -150,7 +201,9 @@ const rootRouteChildren: RootRouteChildren = {
   JobsRoute: JobsRoute,
   ModelsRoute: ModelsRoute,
   SettingsRoute: SettingsRoute,
+  IsolateIsolationIdRoute: IsolateIsolationIdRoute,
   ResultJobIdRoute: ResultJobIdRoute,
+  IsolateIndexRoute: IsolateIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

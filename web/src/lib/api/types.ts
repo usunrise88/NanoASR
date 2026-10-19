@@ -229,3 +229,74 @@ export function isTerminal(status: JobStatus): boolean {
 export function flatWords(result: Result): Word[] {
   return result.segments.flatMap((s) => s.words ?? [])
 }
+
+// --- voice isolation ---------------------------------------------------------
+// Mirrors internal/core/isolation.go.
+
+export type IsolationStatus =
+  | 'queued'
+  | 'analysing'
+  | 'awaiting_selection'
+  | 'extracting'
+  | 'done'
+  | 'failed'
+
+export type AudioFormat = 'wav' | 'mp3'
+
+export interface VoiceSample {
+  /** "window": 3 s from `start`; "assembled": joined from the voice's clean pieces. */
+  kind: 'window' | 'assembled'
+  start?: number
+  similarity: number
+}
+
+export interface IsolationVoice {
+  speaker: string
+  total_speech: number
+  turns: number
+  sample?: VoiceSample
+  /** Why the voice has no sample, when it has none. */
+  reason?: string
+}
+
+export interface IsolationSelection {
+  speaker: string
+  sample_start?: number
+}
+
+export interface IsolationResult {
+  speaker: string
+  name: string
+  duration: number
+  sample_rate: number
+  job_id?: string
+}
+
+export interface Isolation {
+  id: string
+  status: IsolationStatus
+  stage?: string
+  percent?: number
+  position?: number
+  filename?: string
+  source: 'api' | 'ui'
+  duration?: number
+  voices?: IsolationVoice[]
+  selected?: IsolationSelection
+  result?: IsolationResult
+  formats?: AudioFormat[]
+  warnings?: Warning[]
+  error?: JobError
+  created_at: string
+  expires_at: string
+}
+
+export interface IsolationInfo {
+  enabled: boolean
+  formats?: AudioFormat[]
+}
+
+/** Work is queued or running: the isolation is worth watching. */
+export function isolationBusy(status: IsolationStatus): boolean {
+  return status === 'queued' || status === 'analysing' || status === 'extracting'
+}

@@ -110,6 +110,16 @@ diarization:
   min_duration_on: 0.3
   min_duration_off: 0.5
 
+
+isolation:
+  # Voice isolation: keep one voice of a recording and remove the rest
+  # (needs diarization). Off by default because it keeps the upload and the
+  # isolated voice on disk until ttl passes; nanoasr models pull -configured
+  # fetches its models once it is on.
+  enabled: false
+  model: voxlock-int8
+  embedding_model: campplus-sv-zh-en
+  ttl: 1h
 storage:
   db_path: {{.DBPath}}
   # Written out rather than left empty, which would resolve to one shared

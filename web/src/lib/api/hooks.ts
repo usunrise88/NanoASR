@@ -9,6 +9,13 @@ import {
 
 import {
   cancelJob,
+  createIsolation,
+  deleteIsolation,
+  extractVoice,
+  getIsolation,
+  isolationEventsPath,
+  isolationInfo,
+  transcribeIsolation,
   createDictionary,
   deleteDictionary,
   downloadPath,
@@ -29,7 +36,18 @@ import {
 } from './client'
 import { stream } from './sse'
 import type { DictionaryInput } from './client'
-import { isTerminal, type Dictionary, type DownloadProgress, type Job, type JobFilter, type ModelInfo } from './types'
+import {
+  isolationBusy,
+  isTerminal,
+  type Dictionary,
+  type DownloadProgress,
+  type Isolation,
+  type IsolationSelection,
+  type Job,
+  type JobFilter,
+  type ModelInfo,
+  type TranscribeOptions,
+} from './types'
 
 /** Query keys, in one place so an invalidation cannot miss a reader. */
 export const keys = {
@@ -39,6 +57,8 @@ export const keys = {
   job: (id: string) => ['job', id] as const,
   dictionaries: (query: string) => ['hotwords', query] as const,
   dictionary: (key: string) => ['hotword', key] as const,
+  isolationInfo: ['isolation-info'] as const,
+  isolation: (id: string) => ['isolation', id] as const,
 }
 
 export function useModels() {
@@ -263,4 +283,72 @@ export function useModelDownload(): DownloadState & { start: (id: string) => voi
   )
 
   return { ...state, start }
+}
+
+// --- voice isolation ---------------------------------------------------------
+
+export function useIsolationInfo() {
+  return useQuery({ queryKey: keys.isolationInfo, queryFn: isolationInfo, staleTime: 60_000 })
+}
+
+export function useIsolation(id: string) {
+  return useQuery({ queryKey: keys.isolation(id), queryFn: () => getIsolation(id), retry: false })
+}
+
+export function useCreateIsolation(): UseMutationResult<Isolation, Error, { file: File; numSpeakers?: number }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ file, numSpeakers }) => createIsolation(file, numSpeakers),
+    onSuccess: (iso) => qc.setQueryData(keys.isolation(iso.id), iso),
+  })
+}
+
+export function useExtractVoice(id: string): UseMutationResult<Isolation, Error, IsolationSelection> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (selection) => extractVoice(id, selection),
+    onSuccess: (iso) => qc.setQueryData(keys.isolation(iso.id), iso),
+  })
+}
+
+export function useTranscribeIsolation(id: string): UseMutationResult<Job, Error, TranscribeOptions> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (options) => transcribeIsolation(id, options),
+    onSuccess: (job) => {
+      qc.setQueryData(keys.job(job.id), job)
+      void qc.invalidateQueries({ queryKey: keys.isolation(id) })
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useDeleteIsolation(): UseMutationResult<void, Error, string> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: deleteIsolation,
+    onSuccess: (_, id) => qc.removeQueries({ queryKey: keys.isolation(id) }),
+  })
+}
+
+/**
+ * Follows an isolation while it works, writing every state into the query
+ * cache. The server ends the stream when the isolation waits on a person, so
+ * choosing a voice — which makes it busy again — starts a new one.
+ */
+export function useIsolationStream(iso: Isolation | undefined): void {
+  const qc = useQueryClient()
+  const id = iso?.id
+  const busy = iso !== undefined && isolationBusy(iso.status)
+
+  useEffect(() => {
+    if (!id || !busy) return
+    const controller = new AbortController()
+    void stream<Isolation>(isolationEventsPath(id), {
+      signal: controller.signal,
+      onEvent: (_event, next) => qc.setQueryData(keys.isolation(id), next),
+      onDone: () => void qc.invalidateQueries({ queryKey: keys.isolation(id) }),
+    })
+    return () => controller.abort()
+  }, [id, busy, qc])
 }

@@ -49,6 +49,7 @@ func (a *Adapter) Mount(mux *http.ServeMux, svc core.Service, deps adapter.Deps)
 			"this API key is not permitted to administer models"))
 	})
 	a.mountDictionaries(mux, deps, admin)
+	a.mountIsolation(mux, deps)
 
 	for pattern, h := range map[string]http.HandlerFunc{
 		"POST /api/v1/models/{id}/download": a.download(deps), // SSE progress

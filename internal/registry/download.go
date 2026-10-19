@@ -446,29 +446,38 @@ func copyWithProgress(ctx context.Context, dst io.Writer, src io.Reader, modelID
 // installBareFile handles a model distributed as a single file rather than an
 // archive — a VAD is one .onnx, and so are several supporting models.
 //
-// The manifest has to name exactly one file, because otherwise there is no way
-// to know which of several roles the download is supposed to fill.
+// Of the files the manifest names, exactly one may be left once source.extra
+// has claimed its own, because otherwise there is no way to know which role
+// the download is supposed to fill.
 func installBareFile(src, dest string, m Manifest) error {
-	if len(m.Files) != 1 {
-		return permanentf(
-			"model %s is not an archive, so its manifest must name exactly one file; it names %d",
-			m.ID, len(m.Files))
+	// The files source.extra brings are named already; the bare download is
+	// the one file left over. Voxlock is two graphs published side by side,
+	// one the source and one an extra, and neither is an archive.
+	extra := map[string]bool{}
+	for _, e := range m.Source.Extra {
+		extra[e.Name] = true
 	}
-
-	var name string
+	var roles []string
 	for role, file := range m.Files {
-		// Validate the name through the same containment check the loader
-		// uses, then keep the relative form for the join below.
-		if _, err := m.FilePath(dest, role); err != nil {
-			return err
+		if !extra[file] {
+			roles = append(roles, role)
 		}
-		name = file
+	}
+	if len(roles) != 1 {
+		return permanentf(
+			"model %s is not an archive, so its manifest must name exactly one file "+
+				"besides source.extra; it names %d", m.ID, len(roles))
+	}
+	// Validate the name through the same containment check the loader uses,
+	// then keep the relative form for the join below.
+	if _, err := m.FilePath(dest, roles[0]); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
-	return os.Rename(src, filepath.Join(dest, name))
+	return os.Rename(src, filepath.Join(dest, m.Files[roles[0]]))
 }
 
 // flattenSingleDirectory lifts the contents of a lone top-level directory.

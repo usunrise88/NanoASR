@@ -11,11 +11,16 @@ import (
 type Code string
 
 const (
-	CodeInvalidRequest        Code = "invalid_request"
-	CodeUnauthorized          Code = "unauthorized"
-	CodeModelForbidden        Code = "model_forbidden"
-	CodeModelNotFound         Code = "model_not_found"
-	CodeJobNotFound           Code = "job_not_found"
+	CodeInvalidRequest    Code = "invalid_request"
+	CodeUnauthorized      Code = "unauthorized"
+	CodeModelForbidden    Code = "model_forbidden"
+	CodeModelNotFound     Code = "model_not_found"
+	CodeJobNotFound       Code = "job_not_found"
+	CodeIsolationNotFound Code = "isolation_not_found"
+	// CodeIsolationBusy is an isolation asked to do something its state does
+	// not allow yet: extract while the voices are still being found, fetch a
+	// result that is not there.
+	CodeIsolationBusy         Code = "isolation_busy"
 	CodeDictionaryNotFound    Code = "dictionary_not_found"
 	CodeDictionaryExists      Code = "dictionary_exists"
 	CodeFileTooLarge          Code = "file_too_large"
@@ -76,9 +81,9 @@ func (c Code) HTTPStatus() int {
 		return http.StatusUnauthorized
 	case CodeModelForbidden:
 		return http.StatusForbidden
-	case CodeModelNotFound, CodeJobNotFound, CodeDictionaryNotFound:
+	case CodeModelNotFound, CodeJobNotFound, CodeDictionaryNotFound, CodeIsolationNotFound:
 		return http.StatusNotFound
-	case CodeDictionaryExists:
+	case CodeDictionaryExists, CodeIsolationBusy:
 		return http.StatusConflict
 	case CodeFileTooLarge, CodeDurationExceeded:
 		return http.StatusRequestEntityTooLarge

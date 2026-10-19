@@ -57,6 +57,9 @@ func configuredModels(cfg config.Config) []string {
 			ids = append(ids, cfg.Diarization.Model)
 		}
 	}
+	if cfg.Isolation.Enabled {
+		ids = append(ids, cfg.Isolation.Model, cfg.Isolation.EmbeddingModel)
+	}
 	// The streaming model, but only when the dialect that serves it is on:
 	// realtime.model keeps its default value in every configuration, and
 	// fetching a model nobody asked for is 128 MB of surprise.

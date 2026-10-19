@@ -247,3 +247,29 @@ func TestDefaultDictionariesAreCheckedAndCanonicalised(t *testing.T) {
 		t.Error("default dictionaries were accepted with hotwords switched off")
 	}
 }
+
+// Isolation finds the voices with the diarizer: switching it on alone is the
+// configuration that looks set up and fails on the first upload.
+func TestIsolationNeedsDiarization(t *testing.T) {
+	cfg := Default()
+	cfg.Auth.Mode = "open"
+	cfg.Server.Addr = "127.0.0.1:8080"
+	cfg.ASR.Variants.Max = 1
+	cfg.Isolation.Enabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "diarization") {
+		t.Fatalf("isolation without diarization: %v", err)
+	}
+	cfg.Diarization.Enabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the defaults with both on: %v", err)
+	}
+	cfg.Isolation.MaxIsolations = 0
+	if err := cfg.Validate(); err == nil {
+		t.Error("fewer isolations allowed than may run at once")
+	}
+	cfg.Isolation.MaxIsolations = 8
+	cfg.Isolation.TTL.Duration = 0
+	if err := cfg.Validate(); err == nil {
+		t.Error("a zero ttl was accepted")
+	}
+}

@@ -515,6 +515,46 @@ models:
     commercial_use: "yes"
 
   # ---------------------------------------------------------------------------
+  # Voice isolation (target-speaker extraction): a recording and 3 s of one
+  # voice in, that voice alone out. Not an archive: two graphs published side
+  # by side, the extractor as the source and the enrollment graph beside it.
+  #
+  # Trained on English (LibriSpeech, AMI). Through the server, on two-speaker
+  # dialogues with an overlap, a voice comes out +18 dB SI-SDR better in
+  # English and +15 dB in Russian, with the other voice 39 and 33 dB down
+  # (median). What the model gets wrong on its own — the stretches where the
+  # chosen voice is silent, and the start of its next turn — internal/tse
+  # covers with a CAM++ gate and a fresh state per turn.
+  - id: voxlock-int8
+    revision: "2026-10-12"
+    kind: tse
+    family: voxlock
+    display_name: Voxlock voice isolation (int8)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      chunk: chunk_int8.onnx
+      enroll: enroll.onnx
+    resources:
+      # measured: ~440 MB added by the first isolation of a 3.6-minute
+      # recording, with campplus-sv-zh-en (96) and the audio buffers
+      approx_rss_mb: 340
+    source:
+      url: https://huggingface.co/arbazsiddiqui/voxlock/resolve/a50f4e1d109301d4b6f61dec57ebb1a61e7d8f03/onnx/chunk_int8.onnx
+      sha256: f0d2b0aaf95affe8894ea008d0105be4f5f5354f7244835534c31b1a7dd4699a
+      size_bytes: 66608213
+      extra:
+        - name: enroll.onnx
+          url: https://huggingface.co/arbazsiddiqui/voxlock/resolve/a50f4e1d109301d4b6f61dec57ebb1a61e7d8f03/onnx/enroll.onnx
+          sha256: 86645cba23f207def0b31a6e74a615d3b7a813b4fdf957c53b3af2905ba2ffd3
+          size_bytes: 12475387
+    license: apache-2.0
+    commercial_use: "yes"
+    notes: >-
+      Trained on English; works on Russian on the measured mixtures. The voice
+      sample is exactly 3 s, and output is 16 kHz mono.
+
+  # ---------------------------------------------------------------------------
   # English, transducer, SentencePiece. Small enough for CI, and the only entry
   # with a BPE vocabulary — the branch of word assembly the Russian models never
   # exercise.
