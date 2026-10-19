@@ -558,7 +558,7 @@ setting. It asks for an API key on the first `401` response.
 | Screen | Purpose |
 |---|---|
 | Transcribe | File upload, model and option selection, progress tracking |
-| Result | Player with word highlighting, search and export; a diarized result reads as a conversation — a lane per speaker under the waveform, turns in each speaker's colour, who spoke how much, a filter by speaker |
+| Result | Player with word highlighting, search and export; a diarized result reads as a conversation — a lane per speaker under the waveform, turns in each speaker's colour, who spoke how much, a filter by speaker, and speakers named in place (kept with the job, used by SRT/VTT) |
 | Jobs | History, statuses, filters, cancellation, result review |
 | Models | Catalog, weight downloads, residency, pinning, hot swap |
 | Dictionaries | Hotword lists: search across phrases, create and edit, upload and download, and which installed models they apply to |
@@ -591,6 +591,7 @@ there, and `GET /docs/openapi.json` is the same endpoint list for a client gener
 | `GET` | `/api/v1/jobs` | History with cursor pagination |
 | `GET` | `/api/v1/jobs/{id}` | Job state and result |
 | `GET` | `/api/v1/jobs/{id}/events` | SSE event stream |
+| `PATCH` | `/api/v1/jobs/{id}` | Name a diarized job's speakers: `{"speaker_names": {"spk_0": "Anna"}}` |
 | `DELETE` | `/api/v1/jobs/{id}` | Cancel a job |
 | `GET` | `/api/v1/models` | Resident and installed models |
 | `GET` | `/api/v1/catalog` | Built-in model catalog |

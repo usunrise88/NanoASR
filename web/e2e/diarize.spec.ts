@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 /**
  * A diarized result reads as a conversation: turns by speaker, a lane per
- * speaker under the waveform, who spoke how much.
+ * speaker under the waveform, who spoke how much, speakers a person names.
  *
  * Needs diarization switched on; without it the job comes back without
  * speakers and the suite skips. The clip is the two-voice fixture
@@ -43,8 +43,21 @@ test('a diarized result reads as a conversation', async ({ page }) => {
   await page.locator('[data-word]').first().click()
   await expect(page.locator('[data-current]').first()).toBeVisible()
 
-  // A speaker's card hides that speaker's turns.
   const first = (await page.locator('[data-turn]').first().getAttribute('data-turn')) ?? ''
+
+  // A speaker is named on its card; the name labels its turns, the subtitles,
+  // and is still there after a reload. A Latin name, as in isolation.spec.
+  const card = page.locator(`[data-share="${first}"]`)
+  await card.getByRole('button', { name: /^(Rename|Переименовать)$/ }).click()
+  await card.getByRole('textbox').fill('Anna')
+  await card.getByRole('textbox').press('Enter')
+  await expect(page.locator(`[data-turn="${first}"]`).first()).toContainText('Anna')
+  const vtt = await (await page.request.get(`/api/v1/jobs/${id}?response_format=vtt`)).text()
+  expect(vtt).toContain('<v Anna>')
+  await page.reload()
+  await expect(page.locator(`[data-share="${first}"] [data-voice-name]`)).toHaveText('Anna')
+
+  // A speaker's card hides that speaker's turns.
   await page.locator(`[data-share="${first}"]`).getByRole('button', { name: /^(Hide|Скрыть)$/ }).click()
   await expect(page.locator(`[data-turn="${first}"]`)).toHaveCount(0)
 })

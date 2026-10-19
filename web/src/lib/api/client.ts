@@ -136,6 +136,15 @@ export function getJob(id: string): Promise<Job> {
   return request<Job>(`/jobs/${encodeURIComponent(id)}`)
 }
 
+/** Names a finished diarized job's speakers; an empty name gives the id back. */
+export function renameJobSpeakers(id: string, names: Record<string, string>): Promise<Job> {
+  return request<Job>(`/jobs/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ speaker_names: names }),
+  })
+}
+
 export function listJobs(filter: JobFilter = {}): Promise<JobPage> {
   const q = new URLSearchParams()
   for (const status of filter.status ?? []) q.append('status', status)

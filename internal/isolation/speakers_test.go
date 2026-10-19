@@ -119,7 +119,7 @@ func TestVoicesAreNamed(t *testing.T) {
 	}
 
 	// Nothing changes when any of it is wrong.
-	long := strings.Repeat("я", maxName+1)
+	long := strings.Repeat("я", core.MaxSpeakerName+1)
 	for _, names := range []map[string]string{
 		{"spk_9": "Борис"},
 		{"spk_0": "Борис", "spk_1": long},

@@ -30,6 +30,7 @@ import {
   importDictionary,
   listDictionaries,
   getJob,
+  renameJobSpeakers,
   jobEventsPath,
   listCatalog,
   listJobs,
@@ -89,6 +90,15 @@ export function useModel(id: string | undefined): ModelInfo | undefined {
 
 export function useJob(id: string, enabled = true) {
   return useQuery({ queryKey: keys.job(id), queryFn: () => getJob(id), enabled })
+}
+
+/** Names a diarized job's speakers; the job comes back with the names. */
+export function useRenameJobSpeakers(id: string): UseMutationResult<Job, Error, Record<string, string>> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (names: Record<string, string>) => renameJobSpeakers(id, names),
+    onSuccess: (job) => qc.setQueryData(keys.job(id), job),
+  })
 }
 
 export function useJobHistory(filter: JobFilter) {

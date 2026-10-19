@@ -35,6 +35,17 @@ type fakeService struct {
 	gotRequest core.Request
 	gotFilter  core.JobFilter
 	canceled   []string
+	gotNames   map[string]string
+}
+
+func (f *fakeService) RenameSpeakers(_ context.Context, _ string, names map[string]string) (*core.Job, error) {
+	f.mu.Lock()
+	f.gotNames = names
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.job, nil
 }
 
 func (f *fakeService) Transcribe(_ context.Context, req core.Request) (*core.Result, error) {

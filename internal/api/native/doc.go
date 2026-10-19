@@ -45,6 +45,14 @@ func (*Adapter) Doc() adapter.Doc {
 				"rather than replays. A job that has already finished yields one " +
 				"catch-up event and closes.",
 		}, {
+			Method:  "PATCH",
+			Path:    "/api/v1/jobs/{id}",
+			Summary: "Name the speakers of a finished diarized job.",
+			Detail: `JSON: {"speaker_names": {"spk_0": "Anna"}}; an empty name gives a ` +
+				"speaker its id back. The names are kept with the result as " +
+				"speakers[].name, beside the ids the segments carry, and label the " +
+				"srt and vtt cues.",
+		}, {
 			Method:  "DELETE",
 			Path:    "/api/v1/jobs/{id}",
 			Summary: "Cancel a queued or running job.",

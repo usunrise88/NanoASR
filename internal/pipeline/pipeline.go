@@ -11,7 +11,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/usunrise88/nanoasr/internal/asr"
@@ -129,6 +131,10 @@ type Pipeline struct {
 	// which is the one case where a request naming a dictionary cannot be
 	// honoured and has to be told so.
 	dictionaries core.Dictionaries
+
+	// renaming serialises speaker renames: each rewrites the stored result,
+	// and two at once would each write back the other's old names.
+	renaming sync.Mutex
 }
 
 func New(decoder *audio.Router, segmenter vad.Segmenter, models *pool.Pool, governor *pool.Governor, opt Options) *Pipeline {
@@ -691,6 +697,44 @@ func (p *Pipeline) Watch(ctx context.Context, id string, after int64) (<-chan co
 		}
 	}()
 	return out, nil
+}
+
+func (p *Pipeline) RenameSpeakers(ctx context.Context, id string, names map[string]string) (*core.Job, error) {
+	p.renaming.Lock()
+	defer p.renaming.Unlock()
+	rec, err := p.record(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	res := rec.Job.Result
+	if rec.Job.Status != core.JobSucceeded || res == nil || len(res.Speakers) == 0 {
+		return nil, core.Errorf(core.CodeInvalidRequest,
+			"job %s has no speakers to name: it is %s, and only a finished diarized job has them", id, rec.Job.Status)
+	}
+	// Everything is checked before anything changes: half a rename is one
+	// nobody asked for.
+	clean := map[string]string{}
+	for speaker, name := range names {
+		if !slices.ContainsFunc(res.Speakers, func(s core.Speaker) bool { return s.ID == speaker }) {
+			return nil, core.Errorf(core.CodeInvalidRequest, "job %s has no speaker %q", id, speaker).
+				WithParam("speaker_names")
+		}
+		n, err := core.SpeakerName(name)
+		if err != nil {
+			return nil, core.AsError(err).WithParam("speaker_names")
+		}
+		clean[speaker] = n
+	}
+	for i := range res.Speakers {
+		if n, ok := clean[res.Speakers[i].ID]; ok {
+			res.Speakers[i].Name = n
+		}
+	}
+	if err := p.store.Update(ctx, rec); err != nil {
+		return nil, err
+	}
+	j := rec.Job
+	return &j, nil
 }
 
 // record reads a job and enforces the ownership rule.

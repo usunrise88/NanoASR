@@ -504,3 +504,33 @@ func TestTranscriptBySpeakers(t *testing.T) {
 		t.Errorf("a bad format: %+v", p)
 	}
 }
+
+func TestJobSpeakersAreNamed(t *testing.T) {
+	a, b := "spk_0", "spk_1"
+	svc := &fakeService{job: &core.Job{ID: "job_1", Status: core.JobSucceeded, Result: &core.Result{
+		Segments: []core.Segment{
+			{Start: 0, End: 1, Text: "привет", Speaker: &a},
+			{Start: 1, End: 2, Text: "здравствуйте", Speaker: &b},
+		},
+		Speakers: []core.Speaker{{ID: "spk_0", Name: "Анна"}, {ID: "spk_1"}},
+	}}}
+	srv := newServer(t, svc, adapter.Deps{})
+	c := srv.Client()
+
+	resp := sendTo(t, c, http.MethodPatch, srv.URL+"/api/v1/jobs/job_1", "application/json",
+		`{"speaker_names":{"spk_0":"Анна"}}`)
+	if resp.StatusCode != http.StatusOK || svc.gotNames["spk_0"] != "Анна" {
+		t.Fatalf("rename: %d %v", resp.StatusCode, svc.gotNames)
+	}
+	resp = sendTo(t, c, http.MethodPatch, srv.URL+"/api/v1/jobs/job_1", "application/json", `{"names":{}}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("an unknown field: %d", resp.StatusCode)
+	}
+
+	// Subtitles label a cue by the name; an unnamed speaker keeps its id.
+	resp = sendTo(t, c, http.MethodGet, srv.URL+"/api/v1/jobs/job_1?response_format=vtt", "", "")
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "<v Анна>привет</v>") || !strings.Contains(string(body), "<v spk_1>") {
+		t.Errorf("vtt:\n%s", body)
+	}
+}

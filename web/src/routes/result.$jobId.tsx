@@ -20,7 +20,7 @@ import {
   Spinner,
 } from '@/components/ui'
 import { fetchTranscript } from '@/lib/api/client'
-import { useJob, useJobStream, shouldWatch } from '@/lib/api/hooks'
+import { useJob, useJobStream, useRenameJobSpeakers, shouldWatch } from '@/lib/api/hooks'
 import {
   flatWords,
   isTerminal,
@@ -53,7 +53,9 @@ function ResultPage() {
 
   const query = useJob(jobId)
   const live = useJobStream(jobId, shouldWatch(query.data))
-  const job = live ?? query.data
+  // Once the job is over the cache is the truth: it has the result, which
+  // the last streamed state may not, and a rename of its speakers lands there.
+  const job = query.data && isTerminal(query.data.status) ? query.data : (live ?? query.data)
 
   const [file, setFile] = useState<File | undefined>(() => recall(jobId))
   const [currentTime, setCurrentTime] = useState(0)
@@ -70,7 +72,31 @@ function ResultPage() {
     [jobResult],
   )
   const talkShares = useMemo(() => (jobResult && talk ? shares(jobResult, talk.turns) : []), [jobResult, talk])
-  const lanes = useMemo(() => (jobResult && talk ? speakerLanes(jobResult) : []), [jobResult, talk])
+  // The speakers as the conversation components know voices: in the
+  // result's order, which fixes their colours, with the names given them.
+  const voices = useMemo(
+    () =>
+      (jobResult?.speakers ?? []).map((s) => ({
+        speaker: s.id,
+        ...(s.name ? { name: s.name } : {}),
+        total_speech: s.total_speech,
+        turns: s.segments,
+      })),
+    [jobResult],
+  )
+  const lanes = useMemo(() => (jobResult && talk ? speakerLanes(jobResult, voices) : []), [jobResult, talk, voices])
+  const rename = useRenameJobSpeakers(jobId)
+
+  async function renameSpeaker(speaker: string, name: string) {
+    try {
+      // The live stream is over for a finished job; what the page shows is
+      // the cached job, which the rename's answer replaces.
+      await rename.mutateAsync({ [speaker]: name })
+    } catch (err) {
+      toast.error(t('isolate.renameFailed'), { description: err instanceof Error ? err.message : String(err) })
+      throw err
+    }
+  }
 
   const onReady = useCallback((handle: PlayerHandle) => {
     player.current = handle
@@ -175,8 +201,9 @@ function ResultPage() {
         <Section title={t('isolate.speakers')} description={t('result.speakersHint')}>
           <SpeakerShares
             shares={talkShares}
-            voices={undefined}
+            voices={voices}
             hidden={hidden}
+            onRename={job.status === 'succeeded' ? renameSpeaker : undefined}
             onToggle={(s) =>
               setHidden((prev) => {
                 const next = new Set(prev)
@@ -207,7 +234,7 @@ function ResultPage() {
                 {talk ? (
                   <Conversation
                     talk={talk}
-                    voices={undefined}
+                    voices={voices}
                     time={currentTime}
                     onSeek={seek}
                     query={search}

@@ -25,6 +25,11 @@ type Service interface {
 	// already finished yields one catch-up event and then closes: keeping a
 	// replay buffer alive for work that will never change again buys nothing.
 	Watch(ctx context.Context, id string, after int64) (<-chan JobEvent, error)
+
+	// RenameSpeakers names the speakers of a finished diarized job: names maps
+	// a speaker id to what to call it, and an empty name gives the id back.
+	// The names are kept with the result, beside the ids the segments carry.
+	RenameSpeakers(ctx context.Context, id string, names map[string]string) (*Job, error)
 }
 
 // ModelState is where a model sits in the download → load → ready lifecycle.

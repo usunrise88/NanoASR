@@ -29,7 +29,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/usunrise88/nanoasr/internal/core"
 	"github.com/usunrise88/nanoasr/internal/diarize"
@@ -453,9 +452,6 @@ func (s *Service) Sample(ctx context.Context, id, speaker string) (io.ReadCloser
 	}
 }
 
-// maxName bounds a voice's name: it labels transcript lines and names files.
-const maxName = 64
-
 func (s *Service) Update(ctx context.Context, id string, upd core.IsolationUpdate) (*core.Isolation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -471,10 +467,9 @@ func (s *Service) Update(ctx context.Context, id string, upd core.IsolationUpdat
 			return nil, core.Errorf(core.CodeInvalidRequest, "isolation %s has no voice %q", id, speaker).
 				WithParam("names")
 		}
-		name = cleanName(name)
-		if utf8.RuneCountInString(name) > maxName {
-			return nil, core.Errorf(core.CodeInvalidRequest, "a voice's name is at most %d characters", maxName).
-				WithParam("names")
+		name, err := core.SpeakerName(name)
+		if err != nil {
+			return nil, core.AsError(err).WithParam("names")
 		}
 		names[speaker] = name
 	}
@@ -507,17 +502,6 @@ func (s *Service) Update(ctx context.Context, id string, upd core.IsolationUpdat
 	s.saveLocked(sess)
 	v := s.viewLocked(sess)
 	return &v, nil
-}
-
-// cleanName drops what has no place in a label or a file name: control
-// characters, and space at either end.
-func cleanName(name string) string {
-	return strings.TrimSpace(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, name))
 }
 
 // idleLocked checks that nothing is running, so a voice can be chosen.
