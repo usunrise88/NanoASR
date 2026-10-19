@@ -279,8 +279,17 @@ export async function exportDictionary(key: string): Promise<string> {
 
 // --- voice isolation ---------------------------------------------------------
 
-export function isolationInfo(): Promise<IsolationInfo> {
-  return request<IsolationInfo>('/isolation')
+/**
+ * Whether the server offers voice isolation. A quiet probe: the header asks it
+ * on every page, and a 401 here must not open the key prompt over a page that
+ * did not need a key — the settings screen, where the key is typed, least of
+ * all. Without a key, or on a server that predates the feature, the answer is
+ * simply "not here".
+ */
+export async function isolationInfo(): Promise<IsolationInfo> {
+  const response = await fetch(`${BASE}/isolation`, { headers: authHeaders() })
+  if (!response.ok) return { enabled: false }
+  return (await response.json()) as IsolationInfo
 }
 
 export function createIsolation(file: File, numSpeakers?: number): Promise<Isolation> {

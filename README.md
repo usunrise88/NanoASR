@@ -1371,8 +1371,63 @@ isolation:
   num_threads: 2                      # claimed from asr.inference_slots while running
 ```
 
-`nanoasr models pull -configured` fetches both models (107 MB). Without them the server
-starts, and the first isolation fails with the command that fixes it.
+| Setting | Default | Purpose |
+|---|---|---|
+| `enabled` | `false` | Turns the feature on; refused at startup without `diarization.enabled` |
+| `model` | `voxlock-int8` | The extractor, a catalog entry of kind `tse` |
+| `embedding_model` | `campplus-sv-zh-en` | Chooses each voice's sample and drives the gate; any `embedding` entry, but the measurements below are with this one |
+| `ttl` | `1h` | How long an isolation that is not working keeps its audio after the last thing that happened to it |
+| `concurrency` | `1` | Isolations analysed or extracted at once; the rest wait their turn |
+| `max_isolations` | `8` | Isolations open at once; the next upload gets `queue_full`. Each holds up to two 16-bit copies of its recording on disk (115 MB per hour of audio each) |
+| `num_threads` | `2` | The extractor's threads, claimed from `asr.inference_slots` while it runs, so isolation and recognition share the CPU rather than oversubscribe it |
+
+The voices are found by the diarizer configured under `diarization`, so its backend and
+model decide how well they are told apart; MP3 needs ffmpeg — the
+same one that decodes uploads, already in the Docker image.
+
+### Turning it on
+
+Off by default, and nothing changes for a server that leaves it off — upgrading to this
+version keeps no audio anywhere it did not before.
+
+1. In the server's configuration — `/opt/nanoasr/nanoasr.yaml` from the installer,
+   `C:\ProgramData\NanoASR\nanoasr.yaml` on Windows, whatever `-config` names otherwise —
+   set both:
+
+   ```yaml
+   diarization:
+     enabled: true
+   isolation:
+     enabled: true
+   ```
+
+2. Fetch the models (Voxlock 79 MB, CAM++ 28 MB, and the diarizer if it is not there yet):
+
+   ```bash
+   sudo -u nanoasr /opt/nanoasr/nanoasr models pull -configured -config /opt/nanoasr/nanoasr.yaml
+   ```
+
+   Skipping this is not fatal: the server starts, and the first isolation fails with this
+   command in its error.
+
+3. Restart: `sudo systemctl restart nanoasr`, or `nanoasr service restart`.
+
+4. Check: `GET /api/v1/isolation` answers `{"enabled":true,"formats":["wav","mp3"]}`, the
+   startup log has a `voice isolation configured` line, and the web interface shows a
+   **Voice isolation** item in its header.
+
+**Docker.** The image reads `/etc/nanoasr/nanoasr.yaml`, a copy of
+`configs/nanoasr.example.yaml`. Mount your own over it with the two settings above, and the
+models download into the data volume on first use (or run `models pull -configured` once in
+the container):
+
+```yaml
+services:
+  nanoasr:
+    volumes:
+      - nanoasr-data:/var/lib/nanoasr
+      - ./nanoasr.yaml:/etc/nanoasr/nanoasr.yaml:ro
+```
 
 **Where the audio lives.** This is the one feature that keeps audio between requests,
 because a person chooses in the middle. The upload, the samples and the isolated voice are

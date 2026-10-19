@@ -100,6 +100,11 @@ export interface StreamOptions<T> {
   signal?: AbortSignal
   /** How many times to reconnect before giving up. */
   maxRetries?: number
+  /**
+   * GET unless the endpoint starts work, as a model download does: that one
+   * is a POST, and a GET would only ever be answered 405.
+   */
+  method?: 'GET' | 'POST'
 }
 
 const RETRY_DELAY_MS = [500, 2_000, 5_000]
@@ -163,6 +168,7 @@ async function readOnce<T>(
   if (lastEventId) headers['Last-Event-ID'] = lastEventId
 
   const response = await fetch(path, {
+    method: opts.method ?? 'GET',
     headers,
     ...(opts.signal ? { signal: opts.signal } : {}),
   })
