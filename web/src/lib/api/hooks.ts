@@ -34,6 +34,8 @@ import {
   submitJob,
   unloadModel,
 } from './client'
+import { useAuth } from '@/lib/auth'
+
 import { stream } from './sse'
 import type { DictionaryInput } from './client'
 import {
@@ -288,7 +290,10 @@ export function useModelDownload(): DownloadState & { start: (id: string) => voi
 // --- voice isolation ---------------------------------------------------------
 
 export function useIsolationInfo() {
-  return useQuery({ queryKey: keys.isolationInfo, queryFn: isolationInfo, staleTime: 60_000 })
+  // Keyed by the API key: the answer without one is "not here", and saving a
+  // key has to ask again.
+  const { key } = useAuth()
+  return useQuery({ queryKey: [...keys.isolationInfo, key], queryFn: isolationInfo, staleTime: 60_000 })
 }
 
 export function useIsolation(id: string) {
