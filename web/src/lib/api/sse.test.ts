@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { SseParser } from './sse'
+import { SseParser, stream } from './sse'
 
 describe('SseParser', () => {
   it('reads a complete frame', () => {
@@ -93,5 +93,34 @@ describe('SseParser', () => {
     const events = new SseParser().push('event: succeeded\ndata: {}\n\n')
 
     expect(events[0]?.id).toBe('')
+  })
+})
+
+describe('stream', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  function serve(body: string) {
+    const calls: RequestInit[] = []
+    vi.stubGlobal('fetch', (_path: string, init: RequestInit) => {
+      calls.push(init)
+      return Promise.resolve(new Response(body, { status: 200 }))
+    })
+    return calls
+  }
+
+  // A model download is started by POST; the server answers a GET with 405,
+  // which is how the download button came to do nothing at all.
+  it('sends the method it is given', async () => {
+    const calls = serve('event: progress\ndata: {"done":true}\n\nevent: done\ndata: {}\n\n')
+    const events: string[] = []
+    await stream('/api/v1/models/x/download', { method: 'POST', onEvent: (e) => events.push(e) })
+    expect(calls.map((c) => c.method)).toEqual(['POST'])
+    expect(events).toEqual(['progress'])
+  })
+
+  it('reads with GET by default', async () => {
+    const calls = serve('event: done\ndata: {}\n\n')
+    await stream('/api/v1/jobs/x/events', { onEvent: () => {} })
+    expect(calls.map((c) => c.method)).toEqual(['GET'])
   })
 })

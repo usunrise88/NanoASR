@@ -263,6 +263,9 @@ export function useModelDownload(): DownloadState & { start: (id: string) => voi
       setState({ progress: undefined, error: undefined, running: true })
 
       void stream<DownloadProgress>(downloadPath(id), {
+        // Starting a download is a POST; reconnecting re-posts, which the
+        // server answers by resuming the partial file rather than restarting.
+        method: 'POST',
         signal: controller.signal,
         onEvent: (_event, tick) => {
           setState({
