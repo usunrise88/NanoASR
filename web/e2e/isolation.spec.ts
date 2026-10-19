@@ -11,6 +11,19 @@ import { expect, test, type Page } from '@playwright/test'
  * pitched into a second one.
  */
 const CLIP = '../testdata/audio/ru-2spk.wav'
+const FIND = /^(Find the voices|Найти голоса)$/
+
+/**
+ * Picks the clip on the isolation page. The URL changes before the route's
+ * chunk has loaded, and until it has the page on screen is the one before —
+ * which has a file input of its own. Waiting for this page's own button puts
+ * the file where this page will read it.
+ */
+async function chooseFile(page: Page) {
+  await expect(page.getByRole('button', { name: FIND })).toBeVisible()
+  await page.setInputFiles('input[type=file]', CLIP)
+  await expect(page.getByRole('button', { name: FIND })).toBeEnabled()
+}
 
 test.beforeEach(async ({ page }) => {
   const info = await page.request.get('/api/v1/isolation')
@@ -39,8 +52,8 @@ test('find the voices, keep one, download it and transcribe it', async ({ page }
   await page.getByRole('link', { name: /^(Voice isolation|Выделение голоса)$/ }).click()
   await page.waitForURL(/\/ui\/isolate\/?$/)
 
-  await page.setInputFiles('input[type=file]', CLIP)
-  await page.getByRole('button', { name: /^(Find the voices|Найти голоса)$/ }).click()
+  await chooseFile(page)
+  await page.getByRole('button', { name: FIND }).click()
   await page.waitForURL(/\/ui\/isolate\/iso_/)
 
   // Both voices, each with a sample to listen to.
@@ -70,10 +83,10 @@ test('find the voices, keep one, download it and transcribe it', async ({ page }
 
 test('name the voices, isolate them all and read the conversation by speaker', async ({ page }) => {
   await page.goto('/ui/isolate')
-  await page.setInputFiles('input[type=file]', CLIP)
+  await chooseFile(page)
   // Kept: it is listed, and it would survive a restart.
   await page.getByRole('switch').click()
-  await page.getByRole('button', { name: /^(Find the voices|Найти голоса)$/ }).click()
+  await page.getByRole('button', { name: FIND }).click()
   await page.waitForURL(/\/ui\/isolate\/iso_/)
   const id = /iso_[0-9a-f]+/.exec(page.url())?.[0] ?? ''
 
