@@ -1,3 +1,10 @@
+// Package sortformer binds internal/diarize to NVIDIA's Nemotron-3-Diarization,
+// an end-to-end Sortformer that orders speakers by first arrival and so has no
+// clustering step and no threshold to tune.
+//
+// The model runs as two ONNX graphs through onnxruntime directly, not through
+// sherpa-onnx, which has no Sortformer support; internal/ortenv brings up the
+// one onnxruntime the process shares with sherpa-onnx.
 package sortformer
 
 import (
@@ -13,6 +20,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/core"
 	"github.com/usunrise88/nanoasr/internal/diarize"
+	"github.com/usunrise88/nanoasr/internal/ortenv"
 )
 
 // Files are the model's files on disk.
@@ -67,7 +75,7 @@ func New(opt Options) (*Diarizer, error) {
 	if opt.Resolve == nil {
 		return nil, core.Errorf(core.CodeInternal, "sortformer: no model resolver")
 	}
-	if _, err := runtimeLibrary(); err != nil {
+	if err := ortenv.Supported(); err != nil {
 		return nil, err
 	}
 	return &Diarizer{opt: opt}, nil
@@ -179,7 +187,7 @@ func loadModel(f Files, threads int) (*model, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := newORTRunner(f.Embed, f.Step, sessionTuning{IntraOpThreads: threads})
+	r, err := newORTRunner(f.Embed, f.Step, ortenv.Tuning{IntraOpThreads: threads})
 	if err != nil {
 		return nil, err
 	}

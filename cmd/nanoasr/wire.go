@@ -16,6 +16,7 @@ import (
 	"github.com/usunrise88/nanoasr/internal/diarize"
 	diarizesherpa "github.com/usunrise88/nanoasr/internal/diarize/sherpa"
 	diarizesortformer "github.com/usunrise88/nanoasr/internal/diarize/sortformer"
+	"github.com/usunrise88/nanoasr/internal/isolation"
 	"github.com/usunrise88/nanoasr/internal/job"
 	"github.com/usunrise88/nanoasr/internal/pipeline"
 	"github.com/usunrise88/nanoasr/internal/pool"
@@ -56,6 +57,12 @@ type server struct {
 	store   *sqlite.Store
 	spool   *spool.Spool
 	webhook *webhook.Sender
+
+	// isolation is nil unless isolation.enabled; its models load with the
+	// first isolation and are freed after it stops.
+	isolation       *isolation.Service
+	isolationModels *isolationModels
+	isolationMB     int
 }
 
 // build assembles the server from configuration. Every failure here is a
@@ -142,7 +149,11 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		return nil, err
 	}
 
-	svc := pipeline.New(decoder, segmenter, models, pool.NewGovernor(cfg.ASR.InferenceSlots),
+	// One CPU budget for everything that runs inference: recognition,
+	// diarization and post-processing claim it in the pipeline, and voice
+	// isolation claims it around its own work.
+	governor := pool.NewGovernor(cfg.ASR.InferenceSlots)
+	svc := pipeline.New(decoder, segmenter, models, governor,
 		pipeline.Options{
 			DefaultModel:     cfg.ASR.DefaultModel,
 			MaxDuration:      cfg.Audio.MaxDuration.Duration,
@@ -182,6 +193,17 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 	// reports into the queue's hub, so there is no second hub to get wrong.
 	svc.Attach(queue, store)
 
+	iso, isoModels, isoMB, err := buildIsolation(ctx, cfg, reg, decoder, diarizer, governor, svc.Submit, log)
+	if err != nil {
+		models.Close()
+		_ = segmenter.Close()
+		closeDiarizer(diarizer)
+		closeStreaming(streaming)
+		closePost()
+		_ = store.Close()
+		return nil, err
+	}
+
 	return &server{
 		service:    svc,
 		models:     service.NewModels(reg, models),
@@ -197,6 +219,10 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		store:      store,
 		spool:      sp,
 		webhook:    hooks,
+
+		isolation:       iso,
+		isolationModels: isoModels,
+		isolationMB:     isoMB,
 	}, nil
 }
 
@@ -480,6 +506,12 @@ func (s *server) Close() {
 	if s.vad != nil {
 		_ = s.vad.Close()
 	}
+	// Isolation stops before the diarizer and its own models are freed:
+	// its workers use both.
+	if s.isolation != nil {
+		s.isolation.Close()
+	}
+	s.isolationModels.Close()
 	closeDiarizer(s.diarizer)
 	if s.closePost != nil {
 		s.closePost()
@@ -675,6 +707,15 @@ func closeDiarizer(d diarize.Diarizer) {
 	if d != nil {
 		_ = d.Close()
 	}
+}
+
+// isolationService returns the isolation service, or a nil interface when this
+// server has none, for the reason given at realtimeService.
+func (s *server) isolationService() core.IsolationService {
+	if s.isolation == nil {
+		return nil
+	}
+	return s.isolation
 }
 
 // realtimeService returns the realtime service, or a nil interface when this

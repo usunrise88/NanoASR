@@ -1,13 +1,11 @@
-// Package sortformer binds internal/diarize to NVIDIA's Nemotron-3-Diarization,
-// an end-to-end Sortformer that orders speakers by first arrival and so has no
-// clustering step and no threshold to tune.
+// Package ortenv is the one onnxruntime environment of the process, for the
+// engines that run ONNX graphs directly rather than through sherpa-onnx: the
+// Sortformer diarizer and the Voxlock voice isolator.
 //
-// The model runs as two ONNX graphs through onnxruntime directly, not through
-// sherpa-onnx, which has no Sortformer support. What sherpa-onnx does provide is
-// the onnxruntime library itself: this package loads that same copy rather than
-// shipping a second one, so the process keeps one onnxruntime however many
-// engines use it.
-package sortformer
+// sherpa-onnx already carries the onnxruntime library, and this package
+// loads that same copy rather than shipping a second one, so the process keeps
+// one onnxruntime however many engines use it.
+package ortenv
 
 import (
 	"fmt"
@@ -43,8 +41,15 @@ func runtimeLibrary() (string, error) {
 	default:
 		// macOS links the dylib by an install name a bare dlopen does not
 		// match, and the release matrix builds no darwin binary anyway.
-		return "", fmt.Errorf("the sortformer diarizer is not supported on %s", runtime.GOOS)
+		return "", fmt.Errorf("onnxruntime engines are not supported on %s", runtime.GOOS)
 	}
+}
+
+// Supported reports whether this platform can run the direct engines at all,
+// so a constructor can refuse at startup rather than on first use.
+func Supported() error {
+	_, err := runtimeLibrary()
+	return err
 }
 
 var (
@@ -52,16 +57,16 @@ var (
 	envErr  error
 )
 
-// ensureEnvironment brings up the onnxruntime environment once per process.
+// Ensure brings up the onnxruntime environment once per process.
 //
-// It is never torn down. Diarizers come and go — every test builds several — but
+// It is never torn down. Engines come and go — every test builds several — but
 // the environment belongs to the process, and destroying it under a live
 // session is undefined behaviour for no gain: the library stays mapped either
 // way, because sherpa-onnx holds it.
 //
 // A failure is remembered rather than retried: every way this can fail is a
 // property of the build or the host, and none of them fixes itself.
-func ensureEnvironment() error {
+func Ensure() error {
 	envOnce.Do(func() {
 		name, err := runtimeLibrary()
 		if err != nil {
@@ -76,17 +81,17 @@ func ensureEnvironment() error {
 		// Two builds of onnxruntime in one process would be two thread pools,
 		// two allocators and two sets of global state that each assume they
 		// are alone. The version check is the cheap way to know it is one.
-		if got, want := ort.GetVersion(), sonnx.GetOnnxruntimeVersion(); !sameVersion(got, want) {
+		if got, want := ort.GetVersion(), sonnx.GetOnnxruntimeVersion(); !SameVersion(got, want) {
 			envErr = core.Errorf(core.CodeInternal,
-				"onnxruntime loaded for the diarizer is %s, but sherpa-onnx runs %s", got, want)
+				"onnxruntime loaded for the direct engines is %s, but sherpa-onnx runs %s", got, want)
 		}
 	})
 	return envErr
 }
 
-// sameVersion compares the version strings the two bindings report, which do
+// SameVersion compares the version strings the two bindings report, which do
 // not agree on decoration: one may carry a leading "v" or trailing build text.
-func sameVersion(a, b string) bool {
+func SameVersion(a, b string) bool {
 	norm := func(s string) string {
 		s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "v"))
 		if i := strings.IndexAny(s, " +-"); i >= 0 {
@@ -102,7 +107,7 @@ func sameVersion(a, b string) bool {
 // job checks that the file is the one the archive ships — the check that the
 // bare-name load above found sherpa's copy and not, on Windows, System32's.
 func RuntimeInfo() (version, path string, err error) {
-	if err := ensureEnvironment(); err != nil {
+	if err := Ensure(); err != nil {
 		return "", "", err
 	}
 	paths, err := loadedRuntime()
@@ -113,4 +118,45 @@ func RuntimeInfo() (version, path string, err error) {
 		return "", "", fmt.Errorf("expected one onnxruntime in the process, found %d: %v", len(paths), paths)
 	}
 	return ort.GetVersion(), paths[0], nil
+}
+
+// Tuning is what every session gets.
+type Tuning struct {
+	// IntraOpThreads is the thread budget of one Run. The caller reserves
+	// exactly this many slots from the pipeline governor around the Run.
+	IntraOpThreads int
+	// NoSpinning stops idle onnxruntime workers from busy-waiting between
+	// kernels. Spinning threads burn CPU outside the governor's accounting,
+	// which is CPU sherpa's recognizers were counting on.
+	NoSpinning bool
+}
+
+// SessionOptions builds the options every direct session is created with.
+// The caller destroys them once its sessions exist.
+func SessionOptions(tune Tuning) (*ort.SessionOptions, error) {
+	opts, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, core.Errorf(core.CodeInternal, "cannot create onnxruntime session options").WithCause(err)
+	}
+	threads := tune.IntraOpThreads
+	if threads < 1 {
+		threads = 1
+	}
+	steps := []error{
+		opts.SetIntraOpNumThreads(threads),
+		// One graph, one Run at a time per call: inter-op parallelism would
+		// only add threads the governor does not know about.
+		opts.SetInterOpNumThreads(1),
+		opts.SetExecutionMode(ort.ExecutionModeSequential),
+	}
+	if tune.NoSpinning {
+		steps = append(steps, opts.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"))
+	}
+	for _, e := range steps {
+		if e != nil {
+			_ = opts.Destroy()
+			return nil, core.Errorf(core.CodeInternal, "cannot configure onnxruntime session").WithCause(e)
+		}
+	}
+	return opts, nil
 }

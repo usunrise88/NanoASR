@@ -7,6 +7,7 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 
 	"github.com/usunrise88/nanoasr/internal/core"
+	"github.com/usunrise88/nanoasr/internal/ortenv"
 )
 
 // Model dimensions the graphs are exported with. They are properties of the
@@ -61,22 +62,11 @@ type ortRunner struct {
 	stepSess  *ort.DynamicAdvancedSession
 }
 
-// sessionTuning is what every session gets.
-type sessionTuning struct {
-	// IntraOpThreads is the thread budget of one Run. The pipeline reserves
-	// exactly this many slots from its governor around the diarize stage.
-	IntraOpThreads int
-	// NoSpinning stops idle onnxruntime workers from busy-waiting between
-	// kernels. Spinning threads burn CPU outside the governor's accounting,
-	// which is CPU sherpa's recognizers were counting on.
-	NoSpinning bool
-}
-
-func newORTRunner(embedPath, stepPath string, tune sessionTuning) (*ortRunner, error) {
-	if err := ensureEnvironment(); err != nil {
+func newORTRunner(embedPath, stepPath string, tune ortenv.Tuning) (*ortRunner, error) {
+	if err := ortenv.Ensure(); err != nil {
 		return nil, err
 	}
-	opts, err := sessionOptions(tune)
+	opts, err := ortenv.SessionOptions(tune)
 	if err != nil {
 		return nil, err
 	}
@@ -93,34 +83,6 @@ func newORTRunner(embedPath, stepPath string, tune sessionTuning) (*ortRunner, e
 		return nil, core.Errorf(core.CodeInternal, "cannot load %s", stepPath).WithCause(err)
 	}
 	return r, nil
-}
-
-func sessionOptions(tune sessionTuning) (*ort.SessionOptions, error) {
-	opts, err := ort.NewSessionOptions()
-	if err != nil {
-		return nil, core.Errorf(core.CodeInternal, "cannot create onnxruntime session options").WithCause(err)
-	}
-	threads := tune.IntraOpThreads
-	if threads < 1 {
-		threads = 1
-	}
-	steps := []error{
-		opts.SetIntraOpNumThreads(threads),
-		// One graph, one Run at a time per call: inter-op parallelism would
-		// only add threads the governor does not know about.
-		opts.SetInterOpNumThreads(1),
-		opts.SetExecutionMode(ort.ExecutionModeSequential),
-	}
-	if tune.NoSpinning {
-		steps = append(steps, opts.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"))
-	}
-	for _, e := range steps {
-		if e != nil {
-			_ = opts.Destroy()
-			return nil, core.Errorf(core.CodeInternal, "cannot configure onnxruntime session").WithCause(e)
-		}
-	}
-	return opts, nil
 }
 
 func (r *ortRunner) embed(feats []float32, frames int) ([]float32, error) {

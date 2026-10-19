@@ -89,6 +89,8 @@ Key implementation properties:
 - Inverse text normalisation for Russian: numbers, dates, times, currency, phone
   numbers and percentages.
 - Diarization: speaker attribution per word and segment splitting at turn boundaries.
+- Voice isolation: find the voices of a recording, listen to each, and keep one of them
+  alone as WAV or MP3 — or transcribe it. See [Voice isolation](#voice-isolation).
 
 **Operations**
 
@@ -558,6 +560,7 @@ setting. It asks for an API key on the first `401` response.
 | Jobs | History, statuses, filters, cancellation, result review |
 | Models | Catalog, weight downloads, residency, pinning, hot swap |
 | Dictionaries | Hotword lists: search across phrases, create and edit, upload and download, and which installed models they apply to |
+| Voice isolation | Upload, listen to the voices found, keep one; the original and the isolated voice side by side, download, transcription. Shown where the server has it on |
 | Settings | Effective server configuration, read-only |
 
 The interface runs entirely on top of the public API and has no endpoints of its own.
@@ -595,6 +598,13 @@ there, and `GET /docs/openapi.json` is the same endpoint list for a client gener
 | `POST` | `/api/v1/models/{id}/pin` | Protect from LRU eviction |
 | `POST` | `/api/v1/models/{id}/reload` | Hot-swap a revision |
 | `GET` | `/api/v1/config` | Effective configuration |
+| `POST` | `/api/v1/isolations` | Voice isolation: upload, voices found in the background |
+| `GET` | `/api/v1/isolations/{id}` | Its voices, the chosen one, the result; `/events` over SSE |
+| `GET` | `/api/v1/isolations/{id}/voices/{speaker}/sample` | A voice's 3-second sample, WAV |
+| `POST` | `/api/v1/isolations/{id}/extract` | Keep a voice |
+| `GET` | `/api/v1/isolations/{id}/result` | The isolated voice, `format=wav` or `mp3` |
+| `POST` | `/api/v1/isolations/{id}/transcribe` | Queue it for transcription |
+| `DELETE` | `/api/v1/isolations/{id}` | Delete it and its audio |
 
 Model and configuration management requires an administrative key. Errors are returned
 as RFC 9457 `application/problem+json`.
@@ -1315,6 +1325,124 @@ The sample rate of the diarization models is checked against
 `audio.target_sample_rate` at startup; a mismatch prevents the server from
 starting.
 
+## Voice isolation
+
+Voice isolation keeps one voice of a recording and removes the others: a call with a
+colleague talking in the background, one side of an interview, a single speaker out of a
+meeting. It works in three steps, because the voice is chosen by ear:
+
+1. **Find the voices.** The diarizer (the one configured under `diarization`) finds who
+   speaks when, and for each voice the server picks 3 seconds of it speaking alone — the
+   *sample*.
+2. **Listen and choose.** Each voice comes with its sample. The sample is exactly the audio
+   the extractor will be told to keep, so what you hear is what decides the result; when it
+   is the wrong voice, name another place in the recording to take it from.
+3. **Take the voice.** The extractor removes everything that is not that voice. The result
+   is the length of the recording, 16 kHz mono, as WAV or MP3, and can be sent straight to
+   transcription.
+
+The extractor is [Voxlock](https://huggingface.co/arbazsiddiqui/voxlock) (Apache-2.0), a
+27M-parameter causal band-split RNN fine-tuned for target-speaker extraction, run through
+onnxruntime in-process. Two things around it are NanoASR's own, because the model alone
+gets them wrong:
+
+- **The voice is told apart by a speaker embedding, not by the extractor alone.** Where the
+  chosen voice is silent and somebody else speaks, the extractor tends to hand that voice
+  over instead of silence. A gate on its output embeds each 1.5-second stretch with CAM++
+  and mutes the ones closer to another voice found in the recording than to the chosen one.
+  A comparison with the other voices rather than a fixed threshold: on two voices of one
+  speaker pitched apart, the other voice scored up to 0.44 against the chosen sample and
+  the chosen voice as low as 0.40, so any one number cuts both.
+- **Every turn starts from a fresh state.** The model carries an LSTM state through the
+  recording, and after a few seconds of the other speaker it lets the chosen voice go: on a
+  real Russian dialogue a single pass muted the first second of 17 of one speaker's 52
+  turns and 7 of the other's 31. The recording is cut at the chosen voice's turns, each part
+  extracted from a fresh state with half a second of lead-in — 0 and 1 lost turn starts
+  (a 0.5-second word) on the same dialogue, and still one pass over the audio.
+
+```yaml
+isolation:
+  enabled: true                       # needs diarization.enabled too
+  model: voxlock-int8
+  embedding_model: campplus-sv-zh-en
+  ttl: 1h                             # how long an idle isolation keeps its audio
+  concurrency: 1                      # isolations running at once; the rest queue
+  max_isolations: 8                   # open at once, which bounds their disk
+  num_threads: 2                      # claimed from asr.inference_slots while running
+```
+
+`nanoasr models pull -configured` fetches both models (107 MB). Without them the server
+starts, and the first isolation fails with the command that fixes it.
+
+**Where the audio lives.** This is the one feature that keeps audio between requests,
+because a person chooses in the middle. The upload, the samples and the isolated voice are
+kept under `storage.temp_dir` until `ttl` passes with nothing happening to the isolation,
+until it is deleted, or until the server stops — the directory is emptied at startup.
+Transcription jobs are unchanged: a job made from an isolated voice holds its own copy and
+deletes it when it finishes, like any other.
+
+```sh
+# 1. upload; the voices are found in the background
+curl -H "Authorization: Bearer $KEY" -F file=@call.wav \
+  http://127.0.0.1:8080/api/v1/isolations
+# {"id":"iso_…","status":"queued",…}
+
+# follow it, or poll GET /api/v1/isolations/iso_…
+curl -N -H "Authorization: Bearer $KEY" http://127.0.0.1:8080/api/v1/isolations/iso_…/events
+# "status":"awaiting_selection","voices":[{"speaker":"spk_0","total_speech":81.3,
+#   "turns":27,"sample":{"kind":"window","start":19.75,"similarity":0.93}},…]
+
+# 2. listen to a voice
+curl -H "Authorization: Bearer $KEY" -o spk_0.wav \
+  http://127.0.0.1:8080/api/v1/isolations/iso_…/voices/spk_0/sample
+
+# 3. keep it (or {"speaker":"spk_0","sample_start":42.5} for a sample of your choosing)
+curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"speaker":"spk_0"}' http://127.0.0.1:8080/api/v1/isolations/iso_…/extract
+
+# when "status" is "done": the voice alone, or straight to transcription
+curl -H "Authorization: Bearer $KEY" -o call-spk_0.mp3 \
+  "http://127.0.0.1:8080/api/v1/isolations/iso_…/result?format=mp3"
+curl -H "Authorization: Bearer $KEY" -d model=gigaam-v3-ctc-punct-ru \
+  http://127.0.0.1:8080/api/v1/isolations/iso_…/transcribe
+# {"id":"job_…","status":"queued",…}
+```
+
+`extract` may be repeated for another voice; each replaces the previous result.
+`GET /api/v1/isolation` says whether the feature is on and which formats are offered; on a
+server without it every isolation route answers `capability_unavailable`.
+
+### What has been measured
+
+Through the server, on two-speaker dialogues built from audiobook readers — five turns
+with an overlap of 3 seconds — each voice isolated and compared with its own track.
+Two CPU threads of a 2.1 GHz Xeon.
+
+| Language | Isolations | SI-SDR gain | The chosen voice | The other voice | Time |
+|---|---|---|---|---|---|
+| English (LibriSpeech) | 20 | +18.4 dB (worst +7.4) | +0.6 dB | −39 dB median (worst −29) | 0.39x real time |
+| Russian (Russian LibriSpeech) | 6 | +14.6 dB (worst +9.6) | +0.4 dB | −33 dB median (worst −17) | 0.38x real time |
+
+On a real Russian conversation (3.6 minutes of the
+[Dialogs](https://huggingface.co/datasets/langswap/dialogs-ru-emotional-conversations)
+corpus, two speakers): both voices found, the other speaker 29 and 49 dB down, the chosen
+one unchanged (correlation 0.996 and 0.999 with the input in its own turns). Finding the
+voices took 14 s; each extraction 0.42–0.46x real time.
+
+**Limits.**
+
+- Voxlock is trained on English. Russian works on everything above, but it is less
+  measured; telephone audio, reverberant rooms and music are not measured at all.
+- Where both people speak at once the chosen voice is cleaner, not clean: in the Russian
+  dialogue above, three seconds of overlap at equal level went from −1.7 to 6.3 dB SI-SDR.
+- A voice that speaks on its own for less than 1.5 seconds has no sample; choose a place
+  with `sample_start`. One never alone for 3 seconds in a row gets a sample joined from its pieces.
+- The sample is exactly 3 seconds: the exported model accepts no other length.
+- The output is 16 kHz mono whatever the input was.
+- CPU only, like the sortformer diarizer. Memory: about 440 MB more once the models are
+  loaded, plus two float copies of the recording while an isolation runs (230 MB per hour
+  of audio each).
+
 ## Example requests
 
 `KEY` below is an API key issued by `nanoasr init` or `nanoasr key issue`.
@@ -1572,6 +1700,7 @@ separate punctuation model is required for Russian.
 | `campplus-sv-voxceleb` | Speaker embeddings | multi | 30 MB | Permitted |
 | `campplus-sv-zh-en` | Speaker embeddings | multi | 28 MB | Permitted |
 | `wespeaker-voxceleb-resnet34` | Speaker embeddings | multi | 27 MB | Permitted |
+| `voxlock-int8` | Voice isolation (target speaker) | multi | 79 MB | Permitted (Apache-2.0) |
 
 "Unconfirmed" means nobody has established the terms from the download itself. The
 `registry.strict_license` setting refuses to download weights whose commercial use is

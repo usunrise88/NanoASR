@@ -209,3 +209,19 @@ func TestInitGivesTheInstallationItsOwnSpool(t *testing.T) {
 			cfg.Storage.TempDir)
 	}
 }
+
+// An upgrade that switches isolation on fetches what it needs before the
+// first upload does.
+func TestConfiguredModelsCoverIsolation(t *testing.T) {
+	cfg := config.Default()
+	cfg.ASR.DefaultModel = initASRModel
+	if got := configuredModels(cfg); slices.Contains(got, cfg.Isolation.Model) {
+		t.Errorf("the extractor is fetched with isolation off: %v", got)
+	}
+	cfg.Diarization.Enabled = true
+	cfg.Isolation.Enabled = true
+	got := configuredModels(cfg)
+	if !slices.Contains(got, cfg.Isolation.Model) || !slices.Contains(got, cfg.Isolation.EmbeddingModel) {
+		t.Errorf("configuredModels = %v, missing the isolation models", got)
+	}
+}

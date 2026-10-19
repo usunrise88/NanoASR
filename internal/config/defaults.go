@@ -131,6 +131,17 @@ func Default() Config {
 			MinDurationOn:  0.3,
 			MinDurationOff: 0.5,
 		},
+		Isolation: Isolation{
+			Model: "voxlock-int8",
+			// The embedding the gate and the sample choice were measured
+			// with, and the one sherpa diarization already defaults to.
+			EmbeddingModel: "campplus-sv-zh-en",
+			TTL:            Dur(time.Hour),
+			Concurrency:    1,
+			MaxIsolations:  8,
+			// 0.35x real time at two threads on the measured hardware.
+			NumThreads: 2,
+		},
 		Storage: Storage{DBPath: "/var/lib/nanoasr/nanoasr.db"},
 		Log:     Log{Level: "info", Format: "json"},
 	}

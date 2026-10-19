@@ -1,9 +1,13 @@
 import { apiKey, reportAuthRequired } from '@/lib/auth'
 
 import type {
+  AudioFormat,
   Dictionary,
   DictionaryPage,
   DownloadProgress,
+  Isolation,
+  IsolationInfo,
+  IsolationSelection,
   Job,
   JobFilter,
   JobPage,
@@ -271,6 +275,75 @@ export async function exportDictionary(key: string): Promise<string> {
   if (response.status === 401) reportAuthRequired()
   if (!response.ok) throw await toError(response)
   return response.text()
+}
+
+// --- voice isolation ---------------------------------------------------------
+
+export function isolationInfo(): Promise<IsolationInfo> {
+  return request<IsolationInfo>('/isolation')
+}
+
+export function createIsolation(file: File, numSpeakers?: number): Promise<Isolation> {
+  const form = new FormData()
+  form.set('file', file)
+  if (numSpeakers) form.set('num_speakers', String(numSpeakers))
+  return request<Isolation>('/isolations', { method: 'POST', body: form })
+}
+
+export function getIsolation(id: string): Promise<Isolation> {
+  return request<Isolation>(`/isolations/${encodeURIComponent(id)}`)
+}
+
+export function extractVoice(id: string, selection: IsolationSelection): Promise<Isolation> {
+  return request<Isolation>(`/isolations/${encodeURIComponent(id)}/extract`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(selection),
+  })
+}
+
+/** Submits the isolated voice as a job, with the run screen's options. */
+export function transcribeIsolation(id: string, options: TranscribeOptions): Promise<Job> {
+  const form = new URLSearchParams()
+  for (const [name, value] of Object.entries(options)) {
+    if (value === undefined || value === '' || value === false) continue
+    if (Array.isArray(value)) {
+      for (const item of value) form.append(`${name}[]`, String(item))
+      continue
+    }
+    form.set(name, String(value))
+  }
+  return request<Job>(`/isolations/${encodeURIComponent(id)}/transcribe`, { method: 'POST', body: form })
+}
+
+export function deleteIsolation(id: string): Promise<void> {
+  return request<void>(`/isolations/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/**
+ * Fetches audio the server holds for an isolation — a voice sample or the
+ * isolated voice — as a Blob.
+ *
+ * Through fetch rather than an <audio src>: the element cannot send the API
+ * key, and a key in the query string would land in the access log.
+ */
+async function fetchAudio(path: string): Promise<Blob> {
+  const response = await fetch(BASE + path, { headers: authHeaders() })
+  if (response.status === 401) reportAuthRequired()
+  if (!response.ok) throw await toError(response)
+  return response.blob()
+}
+
+export function fetchVoiceSample(id: string, speaker: string): Promise<Blob> {
+  return fetchAudio(`/isolations/${encodeURIComponent(id)}/voices/${encodeURIComponent(speaker)}/sample`)
+}
+
+export function fetchIsolated(id: string, format: AudioFormat): Promise<Blob> {
+  return fetchAudio(`/isolations/${encodeURIComponent(id)}/result?format=${format}`)
+}
+
+export function isolationEventsPath(id: string): string {
+  return `${BASE}/isolations/${encodeURIComponent(id)}/events`
 }
 
 export function downloadPath(id: string): string {

@@ -1,0 +1,9 @@
+{
+  "reference": "voxlock 1.1.1 core.VoxLock(precision='int8').isolate",
+  "model_revision": "a50f4e1d109301d4b6f61dec57ebb1a61e7d8f03",
+  "clip_sha256": "d8aaaa18a5098d7c6de0595ae7ac1e64cacd0d4022af3595213bdaf23be77e69",
+  "interferer_gain": 0.7,
+  "samples": 132640,
+  "decimate": 8,
+  "output_rms": 0.030478427186608315
+}

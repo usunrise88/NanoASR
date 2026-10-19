@@ -227,7 +227,37 @@ func (c *Config) Validate() error {
 	if err := c.validatePostProc(); err != nil {
 		return err
 	}
-	return c.validateDiarization()
+	if err := c.validateDiarization(); err != nil {
+		return err
+	}
+	return c.validateIsolation()
+}
+
+// validateIsolation refuses an isolation that cannot work: it finds the
+// voices with the diarizer, so there has to be one.
+func (c *Config) validateIsolation() error {
+	i := c.Isolation
+	if !i.Enabled {
+		return nil
+	}
+	if !c.Diarization.Enabled {
+		return fmt.Errorf("isolation.enabled is true but diarization.enabled is false; " +
+			"voice isolation finds the voices with the diarizer, so enable diarization too")
+	}
+	if i.Model == "" || i.EmbeddingModel == "" {
+		return fmt.Errorf("isolation.enabled is true but isolation.model or isolation.embedding_model is empty")
+	}
+	if i.TTL.Duration <= 0 {
+		return fmt.Errorf("isolation.ttl must be positive, got %s", i.TTL.Duration)
+	}
+	if i.Concurrency < 1 || i.NumThreads < 1 {
+		return fmt.Errorf("isolation.concurrency and isolation.num_threads must be at least 1")
+	}
+	if i.MaxIsolations < i.Concurrency {
+		return fmt.Errorf("isolation.max_isolations (%d) must be at least isolation.concurrency (%d)",
+			i.MaxIsolations, i.Concurrency)
+	}
+	return nil
 }
 
 // validatePostProc refuses post-processing that is switched on but has nothing

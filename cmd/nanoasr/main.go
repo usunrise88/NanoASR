@@ -31,8 +31,8 @@ import (
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/config"
 	"github.com/usunrise88/nanoasr/internal/core"
-	diarizesortformer "github.com/usunrise88/nanoasr/internal/diarize/sortformer"
 	"github.com/usunrise88/nanoasr/internal/httpx"
+	"github.com/usunrise88/nanoasr/internal/ortenv"
 	"github.com/usunrise88/nanoasr/internal/registry"
 	"github.com/usunrise88/nanoasr/internal/ui"
 )
@@ -121,9 +121,9 @@ func printVersion() {
 	// What the loaded libraries can do, not what the configuration asked for:
 	// `nanoasr gpu` reports both and explains any difference.
 	fmt.Printf("runtime     %s\n", sherpa.Probe().Summary())
-	// The diarizer loads onnxruntime by name, trusting it to find the copy
+	// The direct engines (Sortformer, Voxlock) load onnxruntime by name, trusting it to find the copy
 	// above; printing where it came from is how the release job checks that.
-	if v, path, err := diarizesortformer.RuntimeInfo(); err != nil {
+	if v, path, err := ortenv.RuntimeInfo(); err != nil {
 		fmt.Printf("diarizer    unavailable: %v\n", err)
 	} else {
 		fmt.Printf("diarizer    onnxruntime %s %s\n", v, path)
@@ -206,9 +206,9 @@ func serve(ctx context.Context, args []string) (rerr error) {
 
 	// Sizing is derived from the host when the operator has not measured their
 	// hardware yet, so say out loud what that implies before it becomes an OOM.
-	if est := cfg.PeakMemoryEstimateMB(srv.diarizerMB); est > 0 {
+	if est := cfg.PeakMemoryEstimateMB(srv.diarizerMB + srv.isolationMB); est > 0 {
 		log.Info("estimated peak memory", "mb", est,
-			"note", "resident models, the diarizer and decoded PCM of every concurrent job")
+			"note", "resident models, the diarizer, voice isolation and decoded PCM of every concurrent job")
 	}
 	srv.preload(ctx, cfg.ASR.DefaultModel, log)
 	go srv.preloadDiarizer(ctx, log)
@@ -218,6 +218,9 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		return err
 	}
 	srv.startRealtime(ctx)
+	if srv.isolation != nil {
+		srv.isolation.Start(ctx)
+	}
 	go srv.purgeHistory(ctx, cfg.Jobs.HistoryTTL.Duration, log)
 	go srv.purgePool(ctx, cfg.ASR.IdleTTL.Duration, log)
 
@@ -263,6 +266,7 @@ func serve(ctx context.Context, args []string) (rerr error) {
 	if err := adapter.MountAll(mux, cfg.API.Dialects, srv.service, adapter.Deps{
 		Models:       srv.models,
 		Realtime:     srv.realtimeService(),
+		Isolation:    srv.isolationService(),
 		Dictionaries: srv.store.Dictionaries(),
 		HotwordPolicy: core.HotwordPolicy{
 			Enabled:      cfg.PostProc.Hotwords.Enabled,

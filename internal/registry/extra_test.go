@@ -336,3 +336,29 @@ func TestCompleteDoesNotPointTheManifestAtAFileThatIsNotThere(t *testing.T) {
 		t.Errorf("manifest files = %v, want the fetched file wired", back.Files)
 	}
 }
+
+// Two graphs published side by side and no archive: the bare download fills
+// the one role source.extra does not.
+func TestABareFileMayCarryExtras(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "chunk_int8.onnx")
+	if err := os.WriteFile(src, []byte("chunk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := manifestWithExtra("https://example.test/enroll.onnx", sum([]byte("x")), 1)
+	m.Source.Extra[0].Name = "enroll.onnx"
+	m.Files = map[string]string{"chunk": "chunk_int8.onnx", "enroll": "enroll.onnx"}
+
+	dest := filepath.Join(t.TempDir(), "unpacked")
+	if err := installBareFile(src, dest, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "chunk_int8.onnx")); err != nil {
+		t.Errorf("the download is not where files: says: %v", err)
+	}
+
+	// Two roles left over is still ambiguous.
+	m.Files["other"] = "other.onnx"
+	if err := installBareFile(src, filepath.Join(t.TempDir(), "x"), m); err == nil {
+		t.Error("a bare download with two unclaimed roles was installed")
+	}
+}

@@ -20,6 +20,7 @@ type Config struct {
 	Jobs        Jobs        `yaml:"jobs"`
 	PostProc    PostProc    `yaml:"postproc"`
 	Diarization Diarization `yaml:"diarization"`
+	Isolation   Isolation   `yaml:"isolation"`
 	Storage     Storage     `yaml:"storage"`
 	Log         Log         `yaml:"log"`
 }
@@ -365,12 +366,41 @@ type Clustering struct {
 	Threshold   float32 `yaml:"threshold"`
 }
 
+// Isolation is voice isolation: find the voices of a recording with the
+// diarizer, let a person pick one, keep it and remove the rest.
+//
+// It is the one feature that keeps audio between requests, because a person
+// picks the voice in the middle: the upload, the voice samples and the
+// isolated voice live under storage.temp_dir until TTL passes with nothing
+// happening, until the isolation is deleted, or until the server stops.
+type Isolation struct {
+	Enabled bool `yaml:"enabled"`
+	// Model is the extractor's catalog id (kind: tse).
+	Model string `yaml:"model"`
+	// EmbeddingModel chooses each voice's sample and tells the voices apart
+	// in the extractor's output (kind: embedding).
+	EmbeddingModel string `yaml:"embedding_model"`
+	// TTL is how long an isolation that is not working lives after the last
+	// thing that happened to it.
+	TTL Duration `yaml:"ttl"`
+	// Concurrency is how many isolations run at once; the rest wait.
+	Concurrency int `yaml:"concurrency"`
+	// MaxIsolations bounds how many exist at once, and so the disk they
+	// hold: up to two 16-bit copies of a recording each.
+	MaxIsolations int `yaml:"max_isolations"`
+	// NumThreads is the extractor's thread budget, claimed from
+	// asr.inference_slots while an isolation runs.
+	NumThreads int `yaml:"num_threads"`
+}
+
 // Storage has no keep_audio_ttl knob, and that is the point.
 //
 // Uploaded audio outlives its job by exactly nothing: internal/spool deletes it
 // when the job reaches a terminal state, and startup cleanup deletes whatever a
 // crash left behind. Zero was the only supported value of that setting, so
 // removing it turns decision §15 from a default into a property (SPEC §2.1).
+// The exception is isolation, above, whose audio has a TTL of its own and
+// still never outlives the process.
 type Storage struct {
 	DBPath  string `yaml:"db_path"`
 	TempDir string `yaml:"temp_dir"`

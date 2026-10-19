@@ -23,6 +23,8 @@ type Deps struct {
 	// Realtime is nil unless a streaming model is loaded, which is the normal
 	// case: a dialect that needs it must say so rather than assume.
 	Realtime core.RealtimeService
+	// Isolation is nil unless isolation.enabled.
+	Isolation core.IsolationService
 	// Dictionaries is the hotword dictionary store, nil on a server built
 	// without one. A dialect that offers dictionary management must say so
 	// rather than assume, the same way Realtime is handled.

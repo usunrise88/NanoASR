@@ -3,6 +3,7 @@ import { Bell, HalfMoon, Settings, SunLight, Translate } from 'iconoir-react'
 
 import { Inline } from '@/components/layout'
 import { Button, IconButton, Popover } from '@/components/ui'
+import { useIsolationInfo } from '@/lib/api/hooks'
 import { currentLanguage, setLanguage, useT } from '@/lib/i18n'
 import { clearAll, markAllRead, useNotifications, useUnreadCount } from '@/lib/notifications'
 import { setTheme, useTheme } from '@/lib/theme'
@@ -13,6 +14,9 @@ import { setTheme, useTheme } from '@/lib/theme'
  */
 export function AppHeader() {
   const t = useT()
+  // Offered only where the server can do it; the page itself explains a
+  // server that cannot, for someone who follows an old link.
+  const isolation = useIsolationInfo()
   return (
     <header className="sticky top-0 z-20 border-b border-[var(--border-subtle)] bg-[var(--bg-canvas)]/85 backdrop-blur">
       <div className="mx-auto flex h-12 w-full max-w-5xl items-center gap-6 px-6">
@@ -25,6 +29,7 @@ export function AppHeader() {
             <NavLink to="/models" label={t('nav.models')} />
             <NavLink to="/hotwords" label={t('nav.hotwords')} />
             <NavLink to="/jobs" label={t('nav.jobs')} />
+            {isolation.data?.enabled && <NavLink to="/isolate" label={t('nav.isolate')} />}
           </Inline>
         </nav>
         <Inline gap={1}>
