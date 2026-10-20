@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
 	"github.com/usunrise88/nanoasr/internal/core"
@@ -70,7 +71,7 @@ func (f *fakeIsolation) Audio(_ context.Context, _ string, format core.AudioForm
 	if f.err != nil {
 		return nil, f.err
 	}
-	return sized{strings.NewReader("RIFF-audio"), 10}, nil
+	return seekable{bytes.NewReader([]byte("RIFF-audio-0123456789"))}, nil
 }
 
 func (f *fakeIsolation) TranscribeSpeakers(_ context.Context, _ string, req core.Request) (*core.Isolation, error) {
@@ -94,6 +95,21 @@ func (f *fakeIsolation) Transcript(context.Context, string) (*core.Result, error
 }
 
 func (f *fakeIsolation) CanKeep() bool { return true }
+
+func (f *fakeIsolation) Peaks(_ context.Context, _, speaker string, buckets int) (*core.AudioPeaks, error) {
+	f.mu.Lock()
+	f.gotSpeaker = speaker
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &core.AudioPeaks{Duration: 10, Values: make([]float32, buckets)}, nil
+}
+
+// seekable is audio a player may ask for in parts.
+type seekable struct{ *bytes.Reader }
+
+func (seekable) Close() error { return nil }
 
 func (f *fakeIsolation) Create(_ context.Context, req core.IsolationRequest) (*core.Isolation, error) {
 	f.mu.Lock()
@@ -418,8 +434,22 @@ func TestTracksByVoice(t *testing.T) {
 
 	resp = sendTo(t, c, http.MethodGet, url+"/api/v1/isolations/iso_1/audio", "", "")
 	body, _ = io.ReadAll(resp.Body)
-	if string(body) != "RIFF-audio" || resp.Header.Get("Content-Disposition") != "attachment; filename=call.wav" {
-		t.Errorf("audio: %q %q", body, resp.Header.Get("Content-Disposition"))
+	if string(body) != "RIFF-audio-0123456789" || resp.Header.Get("Content-Disposition") != "attachment; filename=call.wav" ||
+		resp.Header.Get("Accept-Ranges") != "bytes" {
+		t.Errorf("audio: %q %q %q", body, resp.Header.Get("Content-Disposition"), resp.Header.Get("Accept-Ranges"))
+	}
+	// A player asks for the part it plays.
+	req, _ := http.NewRequest(http.MethodGet, url+"/api/v1/isolations/iso_1/audio", nil)
+	req.Header.Set("Range", "bytes=11-14")
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent || string(body) != "0123" ||
+		resp.Header.Get("Content-Type") != "audio/wav" {
+		t.Errorf("a range: %d %q %q", resp.StatusCode, body, resp.Header.Get("Content-Type"))
 	}
 
 	resp = sendTo(t, c, http.MethodPost, url+"/api/v1/isolations/iso_1/extract-all", "", "")
@@ -532,5 +562,49 @@ func TestJobSpeakersAreNamed(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "<v Анна>привет</v>") || !strings.Contains(string(body), "<v spk_1>") {
 		t.Errorf("vtt:\n%s", body)
+	}
+}
+
+type signer struct{}
+
+func (signer) Sign(c core.Caller, path string) (string, time.Time) {
+	return path + "?ticket=for-" + c.KeyID, time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+}
+
+func TestMediaLinks(t *testing.T) {
+	iso := newFakeIsolation()
+	iso.iso.Duration = 10
+	iso.iso.Voices = []core.IsolationVoice{{Speaker: "spk_0", Sample: &core.VoiceSample{}}, {Speaker: "spk_1"}}
+	iso.iso.Tracks = []core.IsolationResult{{Speaker: "spk_0"}}
+
+	type links struct {
+		Audio     string            `json:"audio"`
+		Tracks    map[string]string `json:"tracks"`
+		Samples   map[string]string `json:"samples"`
+		ExpiresAt *time.Time        `json:"expires_at"`
+	}
+	// Without keys a path is its own URL.
+	srv := newServer(t, &fakeService{}, adapter.Deps{Isolation: iso})
+	var open links
+	decode(t, do(t, srv, http.MethodGet, "/api/v1/isolations/iso_1/media"), &open)
+	if open.Audio != "/api/v1/isolations/iso_1/audio" || open.Tracks["spk_0"] != "/api/v1/isolations/iso_1/tracks/spk_0" ||
+		open.Samples["spk_0"] != "/api/v1/isolations/iso_1/voices/spk_0/sample" || len(open.Samples) != 1 || open.ExpiresAt != nil {
+		t.Errorf("open links %+v", open)
+	}
+	// With keys each carries its ticket.
+	srv = newServer(t, &fakeService{}, adapter.Deps{Isolation: iso, Signer: signer{}})
+	var signed links
+	decode(t, do(t, srv, http.MethodGet, "/api/v1/isolations/iso_1/media"), &signed)
+	if !strings.HasSuffix(signed.Tracks["spk_0"], "/tracks/spk_0?ticket=for-") || signed.ExpiresAt == nil {
+		t.Errorf("signed links %+v", signed)
+	}
+
+	var peaks core.AudioPeaks
+	decode(t, do(t, srv, http.MethodGet, "/api/v1/isolations/iso_1/peaks?speaker=spk_0&buckets=500"), &peaks)
+	if len(peaks.Values) != 500 || iso.gotSpeaker != "spk_0" {
+		t.Errorf("peaks %d for %q", len(peaks.Values), iso.gotSpeaker)
+	}
+	if p := problemOf(t, do(t, srv, http.MethodGet, "/api/v1/isolations/iso_1/peaks?buckets=x")); p.Param != "buckets" {
+		t.Errorf("bad buckets: %+v", p)
 	}
 }

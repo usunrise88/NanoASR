@@ -40,6 +40,10 @@ type IsolationService interface {
 	// Audio is the recording itself, as the isolation holds it: mono, at
 	// the extractor's rate, on the same timeline as every track.
 	Audio(ctx context.Context, id string, format AudioFormat) (io.ReadCloser, error)
+	// Peaks is the waveform of the recording (an empty speaker) or of one
+	// voice's track, for a player that streams the audio rather than
+	// downloading and decoding all of it to draw one.
+	Peaks(ctx context.Context, id, speaker string, buckets int) (*AudioPeaks, error)
 	// Result is one voice's track in the given format. An empty speaker is
 	// the voice chosen last, or the only track there is.
 	Result(ctx context.Context, id, speaker string, format AudioFormat) (io.ReadCloser, error)
@@ -77,6 +81,13 @@ func (f AudioFormat) ContentType() string {
 		return "audio/mpeg"
 	}
 	return "audio/wav"
+}
+
+// AudioPeaks is a waveform: the loudness of equal stretches of the audio, RMS,
+// scaled so the loudest is 1.
+type AudioPeaks struct {
+	Duration float64   `json:"duration"`
+	Values   []float32 `json:"values"`
 }
 
 // IsolationStatus is where an isolation is.

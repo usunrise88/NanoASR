@@ -610,6 +610,8 @@ there, and `GET /docs/openapi.json` is the same endpoint list for a client gener
 | `POST` | `/api/v1/isolations/{id}/extract-all` | Isolate every voice, a track each |
 | `GET` | `/api/v1/isolations/{id}/tracks/{speaker}` | A voice's track, `format=wav` or `mp3` (`/result` is the voice chosen last) |
 | `GET` | `/api/v1/isolations/{id}/audio` | The recording, on the tracks' timeline |
+| `GET` | `/api/v1/isolations/{id}/media` | URLs to stream the recording, tracks and samples from, signed for a media element |
+| `GET` | `/api/v1/isolations/{id}/peaks` | The waveform of the recording or a track (`speaker=`), drawn on the server |
 | `POST` | `/api/v1/isolations/{id}/transcribe` | Queue one track for transcription |
 | `POST` | `/api/v1/isolations/{id}/transcript` | Transcribe by speaker: every voice isolated and transcribed alone, then merged |
 | `GET` | `/api/v1/isolations/{id}/transcript` | The transcript by speaker: `json`, `text`, `srt`, `vtt` |
@@ -1456,6 +1458,13 @@ until it is deleted, or until the server stops — what is not kept is deleted a
 work that a restart interrupted is not resumed but reported. `allow_keep: false` forbids
 it. Transcription jobs are unchanged: a job made from a track holds its own copy and
 deletes it when it finishes, like any other.
+
+**Playing it.** The web interface streams the recording and the tracks rather than
+downloading them first: WAV is served with Range, so playback starts with the first second
+and a jump fetches only what it plays, and the waveform is drawn on the server. An
+`<audio>` element cannot send the API key, and the key must not go in a URL where logs and
+history would keep it, so `GET …/media` hands out URLs that each carry a ticket — that path,
+read-only, for the key that asked, for 12 hours, signed with a secret made at startup.
 
 ### Every voice, and a transcript by speaker
 

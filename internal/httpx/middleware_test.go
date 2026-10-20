@@ -28,7 +28,7 @@ func authedServer(t *testing.T, public ...string) http.Handler {
 	mux.Handle("/v1/admin", RequireAdmin(nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })))
 
-	return Chain(mux, Auth(store, public...))
+	return Chain(mux, Auth(store, nil, public...))
 }
 
 func request(t *testing.T, h http.Handler, path, token string) *httptest.ResponseRecorder {
@@ -164,7 +164,7 @@ func TestTheRootIsExemptWithoutExemptingEverything(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := Auth(keys, "/healthz", "/")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := Auth(keys, nil, "/healthz", "/")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
 

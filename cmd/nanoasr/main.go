@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
 	"github.com/usunrise88/nanoasr/internal/api/docs"
@@ -263,6 +264,15 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		}
 		return out
 	}
+	// Tickets let the web player stream a recording through a media element,
+	// which cannot send a key. Without keys there is nothing to sign, and a
+	// path is its own URL.
+	var tickets *httpx.Tickets
+	var signer adapter.Signer
+	if cfg.Auth.Mode != "open" {
+		tickets = httpx.NewTickets(12 * time.Hour)
+		signer = tickets
+	}
 	if err := adapter.MountAll(mux, cfg.API.Dialects, srv.service, adapter.Deps{
 		Models:       srv.models,
 		Realtime:     srv.realtimeService(),
@@ -277,6 +287,7 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		},
 		MaxUploadBytes: cfg.Server.MaxUploadBytes,
 		ConfigSnapshot: snapshot,
+		Signer:         signer,
 	}); err != nil {
 		return err
 	}
@@ -351,7 +362,7 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		// Health probes cannot present a credential, a browser does not send a
 		// bearer token when loading a script tag, and the reference is public
 		// on purpose. Everything else is authenticated.
-		mw = append(mw, httpx.Auth(keys, public...))
+		mw = append(mw, httpx.Auth(keys, tickets, public...))
 
 		// Rate limiting comes after Auth because there is nothing to attribute
 		// a rate to until the key is known, and unauthenticated traffic is

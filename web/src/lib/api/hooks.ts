@@ -13,11 +13,11 @@ import {
   deleteIsolation,
   extractAll,
   extractVoice,
-  fetchIsolationAudio,
-  fetchTrack,
   getIsolation,
   isolationEventsPath,
   isolationInfo,
+  isolationMedia,
+  isolationPeaks,
   listIsolations,
   speakerTranscript,
   transcribeIsolation,
@@ -395,17 +395,26 @@ export function useSpeakerTranscript(iso: Isolation | undefined) {
 }
 
 /**
- * Audio the server holds for an isolation, as WAV: the recording itself
- * (speaker undefined) or one voice's track. version names the extraction, so
- * a voice isolated again is fetched again.
+ * The URLs an isolation's audio plays from. Asked again when the tracks
+ * change, and well before the tickets in them expire.
  */
-export function useIsolationWav(id: string, speaker: string | undefined, version: string, enabled = true) {
+export function useIsolationMedia(iso: Isolation | undefined) {
+  const tracks = (iso?.tracks ?? []).map((t) => `${t.speaker}:${t.sample_start ?? ''}`).join(',')
   return useQuery({
-    queryKey: ['isolation-wav', id, speaker ?? '', version],
-    queryFn: () => (speaker ? fetchTrack(id, speaker, 'wav') : fetchIsolationAudio(id, 'wav')),
+    queryKey: ['isolation-media', iso?.id ?? '', tracks, iso?.voices?.length ?? 0],
+    queryFn: () => isolationMedia(iso?.id ?? ''),
+    enabled: iso !== undefined && (iso.duration ?? 0) > 0,
+    staleTime: 60 * 60_000,
+  })
+}
+
+/** The waveform of the recording (speaker '') or of a track, drawn by the server. */
+export function useIsolationPeaks(id: string, speaker: string, version: string, buckets: number, enabled = true) {
+  return useQuery({
+    queryKey: ['isolation-peaks', id, speaker, version, buckets],
+    queryFn: () => isolationPeaks(id, speaker, buckets),
     enabled,
     staleTime: Infinity,
-    gcTime: 60_000,
     retry: false,
   })
 }

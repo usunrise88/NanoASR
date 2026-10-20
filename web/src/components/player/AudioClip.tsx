@@ -9,16 +9,20 @@ import { useT } from '@/lib/i18n'
  * A short clip with a play button, a seekable bar and a clock: a voice sample,
  * or the isolated voice beside the original.
  *
- * The audio is a Blob, or a function that fetches one: a voice sample is only
- * fetched when somebody presses play, so a recording with eight voices does not
- * download eight samples nobody listens to. Starting one clip stops the others
- * on the page — two voices at once is exactly what this screen removes.
+ * The audio is a URL the element streams from, a Blob, or a function that
+ * fetches one. A URL is what a recording on the server should be: playback
+ * starts with the first second downloaded and a jump fetches only what it
+ * plays, where a Blob of an hour's WAV is a hundred megabytes to wait for
+ * before the first word. Starting one clip stops the others on the page —
+ * two voices at once is exactly what this screen removes.
  */
 export function AudioClip({
+  src,
   blob,
   load,
   label,
 }: {
+  src?: string | undefined
   blob?: Blob | undefined
   load?: (() => Promise<Blob>) | undefined
   label: string
@@ -47,6 +51,10 @@ export function AudioClip({
     if (url) URL.revokeObjectURL(url)
   }, [url])
 
+  // A streamed URL plays as it arrives; until the first of it has, the button
+  // says it is working rather than looking pressed for nothing.
+  const [waiting, setWaiting] = useState(false)
+
   const pendingPlay = useRef(false)
   useEffect(() => {
     if (url && pendingPlay.current) {
@@ -58,7 +66,7 @@ export function AudioClip({
   const toggle = useCallback(async () => {
     const el = audio.current
     if (!el) return
-    if (!url) {
+    if (!src && !url) {
       if (!load) return
       setLoading(true)
       setError(undefined)
@@ -75,7 +83,7 @@ export function AudioClip({
     }
     if (el.paused) void el.play()
     else el.pause()
-  }, [url, load])
+  }, [src, url, load])
 
   useEffect(() => {
     const el = audio.current
@@ -87,7 +95,16 @@ export function AudioClip({
     const onOther = (e: Event) => {
       if ((e as CustomEvent<HTMLAudioElement>).detail !== el) el.pause()
     }
-    const onPause = () => setPlaying(false)
+    const onPause = () => {
+      setPlaying(false)
+      setWaiting(false)
+    }
+    const onWaiting = () => setWaiting(true)
+    const onPlaying = () => setWaiting(false)
+    const onFailed = () => {
+      setWaiting(false)
+      setError(el.error?.message || t('isolate.audioFailed'))
+    }
     const onTime = () => setTime(el.currentTime)
     const onMeta = () => setDuration(Number.isFinite(el.duration) ? el.duration : 0)
     el.addEventListener('play', onPlay)
@@ -95,6 +112,9 @@ export function AudioClip({
     el.addEventListener('ended', onPause)
     el.addEventListener('timeupdate', onTime)
     el.addEventListener('loadedmetadata', onMeta)
+    el.addEventListener('waiting', onWaiting)
+    el.addEventListener('playing', onPlaying)
+    el.addEventListener('error', onFailed)
     document.addEventListener('nanoasr:clip-play', onOther)
     return () => {
       el.removeEventListener('play', onPlay)
@@ -102,9 +122,12 @@ export function AudioClip({
       el.removeEventListener('ended', onPause)
       el.removeEventListener('timeupdate', onTime)
       el.removeEventListener('loadedmetadata', onMeta)
+      el.removeEventListener('waiting', onWaiting)
+      el.removeEventListener('playing', onPlaying)
+      el.removeEventListener('error', onFailed)
       document.removeEventListener('nanoasr:clip-play', onOther)
     }
-  }, [])
+  }, [t])
 
   function seek(e: MouseEvent<HTMLDivElement>) {
     const el = audio.current
@@ -118,10 +141,10 @@ export function AudioClip({
 
   return (
     <div className="flex min-w-0 items-center gap-2" data-clip={label}>
-      <audio ref={audio} src={url} preload="metadata" />
+      <audio ref={audio} src={src ?? url} preload="metadata" />
       <IconButton
         label={playing ? t('isolate.pause') : t('isolate.play')}
-        busy={loading}
+        busy={loading || waiting}
         onClick={() => void toggle()}
       >
         {playing ? <Pause width={14} height={14} /> : <Play width={14} height={14} />}

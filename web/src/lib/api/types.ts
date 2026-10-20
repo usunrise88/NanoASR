@@ -336,6 +336,23 @@ export interface IsolationInfo {
   keep?: boolean
 }
 
+/**
+ * Where a page plays an isolation's audio from. On a server with keys each URL
+ * carries a ticket for itself, since a media element cannot send the key.
+ */
+export interface IsolationMedia {
+  audio?: string
+  tracks: Record<string, string>
+  samples: Record<string, string>
+  expires_at?: string
+}
+
+/** A waveform: RMS of equal stretches, the loudest scaled to 1. */
+export interface AudioPeaks {
+  duration: number
+  values: number[]
+}
+
 export interface IsolationUpdate {
   keep?: boolean
   names?: Record<string, string>

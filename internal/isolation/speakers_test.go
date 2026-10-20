@@ -1,7 +1,9 @@
 package isolation
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -583,7 +585,9 @@ func TestDropEchoes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	w := func(word string, start float64) core.Word { return core.Word{Word: word, Start: start, End: start + 0.3} }
+	w := func(word string, start float64) core.Word {
+		return core.Word{Word: word, Start: start, End: start + 0.3}
+	}
 	parts := []part{
 		{speaker: "a", result: &core.Result{Segments: []core.Segment{
 			{Start: 0, End: 2, Text: "кого мы отбросим", Words: []core.Word{w("Кого", 0.2), w("мы,", 0.6), w("отбросим", 1.0)}},
@@ -613,5 +617,55 @@ func TestDropEchoes(t *testing.T) {
 	// in both.
 	if got != 4 || text(parts[0].result) != "кого мы отбросим|угу" || text(parts[1].result) != "Да.|Угу." {
 		t.Fatalf("dropped %d: a %q, b %q", got, text(parts[0].result), text(parts[1].result))
+	}
+}
+
+func TestPeaksAndSeekableAudio(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := context.Background()
+	iso := f.analysed(t, ctx, core.IsolationRequest{})
+	if _, err := f.svc.Extract(ctx, iso.ID, core.IsolationSelection{Speaker: "spk_1"}); err != nil {
+		t.Fatal(err)
+	}
+	f.wait(t, ctx, iso.ID)
+
+	p, err := f.svc.Peaks(ctx, iso.ID, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture's recording is level throughout: every column is the loudest.
+	if p.Duration != 10 || len(p.Values) != 100 || p.Values[0] != 1 || p.Values[99] != 1 {
+		t.Errorf("recording peaks %v %v", p.Duration, p.Values[:3])
+	}
+	if p, err = f.svc.Peaks(ctx, iso.ID, "spk_1", 10); err != nil || len(p.Values) != 10 {
+		t.Errorf("track peaks %v %v", p, err)
+	}
+	if _, err := f.svc.Peaks(ctx, iso.ID, "spk_0", 10); core.AsError(err).Code != core.CodeIsolationBusy {
+		t.Errorf("peaks of a voice not isolated: %v", err)
+	}
+	if _, err := f.svc.Peaks(ctx, iso.ID, "", 0); core.AsError(err).Code != core.CodeInvalidRequest {
+		t.Errorf("no buckets: %v", err)
+	}
+
+	// The audio seeks: a part read from the middle is that part of the whole.
+	rc, err := f.svc.Result(ctx, iso.ID, "spk_1", core.AudioWAV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	whole, _ := io.ReadAll(rc)
+	rs, ok := rc.(io.ReadSeeker)
+	if !ok {
+		t.Fatal("a track does not seek")
+	}
+	if _, err := rs.Seek(30, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	part := make([]byte, 40)
+	if _, err := io.ReadFull(rs, part); err != nil || !bytes.Equal(part, whole[30:70]) {
+		t.Errorf("a part across the header: %v", err)
+	}
+	if end, _ := rs.Seek(0, io.SeekEnd); end != int64(len(whole)) {
+		t.Errorf("the end at %d of %d", end, len(whole))
 	}
 }

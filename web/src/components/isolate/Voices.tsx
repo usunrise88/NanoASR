@@ -5,7 +5,14 @@ import { Inline, Stack } from '@/components/layout'
 import { AudioClip } from '@/components/player/AudioClip'
 import { Badge, Button, Input } from '@/components/ui'
 import { fetchTrack, fetchVoiceSample } from '@/lib/api/client'
-import type { AudioFormat, Isolation, IsolationResult, IsolationSelection, IsolationVoice } from '@/lib/api/types'
+import type {
+  AudioFormat,
+  Isolation,
+  IsolationMedia,
+  IsolationResult,
+  IsolationSelection,
+  IsolationVoice,
+} from '@/lib/api/types'
 import { saveBlob } from '@/lib/download'
 import { clock } from '@/lib/format'
 import { useT } from '@/lib/i18n'
@@ -24,12 +31,16 @@ import { VoiceName } from './VoiceName'
  */
 export function Voices({
   iso,
+  media,
   busy,
   onChoose,
   onRename,
   onTranscribe,
 }: {
   iso: Isolation
+  // media is where the samples and tracks stream from; until it is known
+  // they are fetched whole.
+  media: IsolationMedia | undefined
   busy: boolean
   onChoose: (selection: IsolationSelection) => void
   onRename: (speaker: string, name: string) => Promise<void>
@@ -41,6 +52,7 @@ export function Voices({
         <VoiceRow
           key={voice.speaker}
           iso={iso}
+          media={media}
           voice={voice}
           index={index}
           track={iso.tracks?.find((t) => t.speaker === voice.speaker)}
@@ -57,6 +69,7 @@ export function Voices({
 
 function VoiceRow({
   iso,
+  media,
   voice,
   index,
   track,
@@ -67,6 +80,7 @@ function VoiceRow({
   onTranscribe,
 }: {
   iso: Isolation
+  media: IsolationMedia | undefined
   voice: IsolationVoice
   index: number
   track: IsolationResult | undefined
@@ -125,6 +139,7 @@ function VoiceRow({
                 ? t('isolate.sampleAt', { start: clock(voice.sample.start ?? 0) })
                 : t('isolate.sampleAssembled')
             }
+            src={media?.samples[voice.speaker]}
             load={() => fetchVoiceSample(iso.id, voice.speaker)}
           />
         ) : (
@@ -161,6 +176,7 @@ function VoiceRow({
         {track && (
           <Track
             iso={iso}
+            src={media?.tracks[track.speaker]}
             track={track}
             label={t('isolate.isolated', { speaker: voice.name || voice.speaker })}
             busy={busy}
@@ -175,12 +191,14 @@ function VoiceRow({
 /** One voice's track: to listen to, to download, to transcribe alone. */
 function Track({
   iso,
+  src,
   track,
   label,
   busy,
   onTranscribe,
 }: {
   iso: Isolation
+  src: string | undefined
   track: IsolationResult
   label: string
   busy: boolean
@@ -203,7 +221,7 @@ function Track({
   return (
     <div className="rounded-[var(--radius-md)] bg-[var(--bg-raised)] px-2.5 py-2" data-track={track.speaker}>
       <Stack gap={2}>
-        <AudioClip label={label} load={() => fetchTrack(iso.id, track.speaker, 'wav')} />
+        <AudioClip label={label} src={src} load={() => fetchTrack(iso.id, track.speaker, 'wav')} />
         <Inline gap={1}>
           {(iso.formats ?? ['wav']).map((format) => (
             <Button

@@ -116,7 +116,12 @@ type adminLookup interface {
 //
 // Open mode does not install this middleware at all, and config.Validate
 // refuses open mode on a non-loopback address.
-func Auth(keys KeyStore, publicPrefixes ...string) Middleware {
+//
+// tickets, when set, also admits a read of one path by a URL signed for it
+// (see Tickets): what a media element needs, since it cannot send a header.
+// The key a ticket names must still exist, and its rights are read now, not
+// when the ticket was made.
+func Auth(keys KeyStore, tickets *Tickets, publicPrefixes ...string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if isPublicPath(r.URL.Path, publicPrefixes) {
@@ -128,11 +133,19 @@ func Auth(keys KeyStore, publicPrefixes ...string) Middleware {
 			if token == "" {
 				token = websocketToken(r)
 			}
-			if token == "" {
-				unauthorized(w)
-				return
+			var id string
+			var ok bool
+			switch {
+			case token != "":
+				id, ok = keys.Verify(r.Context(), token)
+			default:
+				id, ok = tickets.verify(r)
+				if ok {
+					if l, can := keys.(adminLookup); can {
+						_, ok = l.Lookup(id)
+					}
+				}
 			}
-			id, ok := keys.Verify(r.Context(), token)
 			if !ok {
 				unauthorized(w)
 				return

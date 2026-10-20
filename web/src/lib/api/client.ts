@@ -9,6 +9,8 @@ import type {
   IsolationInfo,
   IsolationSelection,
   IsolationUpdate,
+  IsolationMedia,
+  AudioPeaks,
   Job,
   JobFilter,
   JobPage,
@@ -408,6 +410,18 @@ async function fetchAudio(path: string): Promise<Blob> {
 
 export function fetchVoiceSample(id: string, speaker: string): Promise<Blob> {
   return fetchAudio(`/isolations/${encodeURIComponent(id)}/voices/${encodeURIComponent(speaker)}/sample`)
+}
+
+/** The URLs the isolation's audio plays from, as a media element can fetch them. */
+export function isolationMedia(id: string): Promise<IsolationMedia> {
+  return request<IsolationMedia>(`/isolations/${encodeURIComponent(id)}/media`)
+}
+
+/** The waveform of the recording, or of one voice's track. */
+export function isolationPeaks(id: string, speaker: string, buckets: number): Promise<AudioPeaks> {
+  const q = new URLSearchParams({ buckets: String(buckets) })
+  if (speaker) q.set('speaker', speaker)
+  return request<AudioPeaks>(`/isolations/${encodeURIComponent(id)}/peaks?${q.toString()}`)
 }
 
 /** One voice's track. */

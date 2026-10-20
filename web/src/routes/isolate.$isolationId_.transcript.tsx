@@ -12,8 +12,9 @@ import { Badge, Button, EmptyState, ErrorState, Input, Skeleton } from '@/compon
 import { ApiError, speakerTranscriptText } from '@/lib/api/client'
 import {
   useIsolation,
+  useIsolationMedia,
+  useIsolationPeaks,
   useIsolationStream,
-  useIsolationWav,
   useSpeakerTranscript,
   useUpdateIsolation,
 } from '@/lib/api/hooks'
@@ -36,6 +37,9 @@ export const Route = createFileRoute('/isolate/$isolationId_/transcript')({
   component: TranscriptPage,
   staticData: { pageMeta },
 })
+
+/** Columns in the waveform the server draws: the player's own count. */
+const PEAK_BUCKETS = 2000
 
 /**
  * The transcript by speaker, read as a conversation and listened to.
@@ -130,11 +134,15 @@ function Reading({ iso, result }: { iso: Isolation; result: Result }) {
   const [resume, setResume] = useState<{ at: number; play: boolean }>()
   const original = recall(iso.id)
   const track = iso.tracks?.find((tr) => tr.speaker === listen)
-  const wav = useIsolationWav(iso.id, listen || undefined, track?.sample_start?.toString() ?? '', !(listen === '' && original))
-  const blob = listen === '' && original ? original : wav.data
-  const file = useMemo(
-    () => (blob ? (blob instanceof File ? blob : new File([blob], `${listen || 'audio'}.wav`, { type: 'audio/wav' })) : undefined),
-    [blob, listen],
+  // The browser's own copy of the recording plays as it is; anything the
+  // server holds streams, with the waveform the server drew for it.
+  const local = listen === '' ? original : undefined
+  const media = useIsolationMedia(iso)
+  const src = local ? undefined : listen ? media.data?.tracks[listen] : media.data?.audio
+  const peaks = useIsolationPeaks(iso.id, listen, track?.sample_start?.toString() ?? '', PEAK_BUCKETS, !local)
+  const serverPeaks = useMemo(
+    () => (peaks.data ? { values: Float32Array.from(peaks.data.values), duration: peaks.data.duration } : undefined),
+    [peaks.data],
   )
 
   const player = useRef<PlayerHandle>(null)
@@ -198,10 +206,12 @@ function Reading({ iso, result }: { iso: Isolation; result: Result }) {
             </Inline>
             {tr?.stale && <p className="text-[12px] text-[var(--text-secondary)]">{t('isolate.transcriptStale')}</p>}
 
-            {file ? (
+            {local || src ? (
               <Player
                 key={listen}
-                file={file}
+                file={local}
+                src={src}
+                peaks={serverPeaks}
                 result={result}
                 words={talk.words}
                 currentTime={time}
@@ -222,8 +232,8 @@ function Reading({ iso, result }: { iso: Isolation; result: Result }) {
                   />
                 }
               />
-            ) : wav.isError ? (
-              <ErrorState title={t('isolate.audioFailed')} detail={String(wav.error)} />
+            ) : media.isError ? (
+              <ErrorState title={t('isolate.audioFailed')} detail={String(media.error)} />
             ) : (
               <Skeleton className="h-[120px] w-full" />
             )}
