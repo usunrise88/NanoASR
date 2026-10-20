@@ -257,6 +257,10 @@ func (c *Config) validateIsolation() error {
 		return fmt.Errorf("isolation.max_isolations (%d) must be at least isolation.concurrency (%d)",
 			i.MaxIsolations, i.Concurrency)
 	}
+	if i.LeakFloorDB > 0 {
+		return fmt.Errorf("isolation.leak_floor_db is how much quieter a word may be, in dB below the recording: "+
+			"zero or negative, got %g", i.LeakFloorDB)
+	}
 	if i.AllowKeep && i.MaxKept < 1 {
 		return fmt.Errorf("isolation.max_kept must be at least 1 when isolation.allow_keep is true")
 	}

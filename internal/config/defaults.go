@@ -141,6 +141,9 @@ func Default() Config {
 			MaxIsolations:  8,
 			AllowKeep:      true,
 			MaxKept:        100,
+			// Between what a voice said and what leaked into its track from
+			// another, measured on a 38-minute meeting (internal/isolation).
+			LeakFloorDB: -25,
 			// 0.35x real time at two threads on the measured hardware.
 			NumThreads: 2,
 		},

@@ -88,6 +88,12 @@ type Options struct {
 	Engine func(ctx context.Context) (Engine, error)
 	// Jobs transcribes the tracks; nil means the server has no queue.
 	Jobs Jobs
+	// LeakFloorDB is how much quieter than the recording a word may be in its
+	// own track and still be counted that voice's in the transcript by
+	// speaker; below it, it is another voice leaking through. A negative
+	// floor also leaves out the quieter copy of words two tracks both hold
+	// (leak.go). Zero keeps every word.
+	LeakFloorDB float64
 	// MP3 encodes the WAV read from in as MP3, and closes in when its
 	// output is closed; nil means MP3 is not offered.
 	MP3 func(ctx context.Context, in io.ReadCloser) (io.ReadCloser, error)

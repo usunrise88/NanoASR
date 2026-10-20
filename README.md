@@ -1381,6 +1381,7 @@ isolation:
   allow_keep: true                    # let a person keep one until they delete it
   max_kept: 100                       # kept at once
   num_threads: 2                      # claimed from asr.inference_slots while running
+  leak_floor_db: -25                  # by speaker: leave out words another voice leaked into a track
 ```
 
 | Setting | Default | Purpose |
@@ -1394,6 +1395,7 @@ isolation:
 | `max_isolations` | `8` | Isolations open at once, not counting kept ones; the next upload gets `queue_full`. Each holds a 16-bit copy of its recording and one per voice isolated (115 MB per hour of audio each) |
 | `allow_keep` | `true` | Lets a person keep an isolation — its recording, tracks, names and transcript — until they delete it. `false` refuses `keep` with `capability_unavailable` and hides the checkbox |
 | `max_kept` | `100` | Kept isolations at once; the next one gets `queue_full` |
+| `leak_floor_db` | `-25` | Transcript by speaker: a word this many dB quieter in its voice's track than in the recording is another voice leaking through, and is left out; the quieter copy of words two tracks both hold goes too. `0` keeps every word |
 | `num_threads` | `2` | The extractor's threads, claimed from `asr.inference_slots` while it runs, so isolation and recognition share the CPU rather than oversubscribe it |
 
 The voices are found by the diarizer configured under `diarization`, so its backend and
@@ -1470,6 +1472,17 @@ seconds of overlap, ordinary diarization dropped one speaker's line and gave the
 the other's to the wrong person; by speaker, both lines came out whole and each under its
 own name. The price is a transcription per voice, and the isolation first: 30 seconds for
 a 35-second two-voice dialogue on two threads.
+
+A track turns the other voices down, not off, and the recogniser hears quiet speech as
+well as loud, so a track's own transcript can carry another voice's words — a line for
+somebody who said nothing, at the moment somebody else said it. Each word is held against
+the recording: what a voice said is about as loud in its track as in the recording, and
+what leaked is far quieter. On a 38-minute three-voice meeting the two fell apart with a
+gap between them — within 15 dB of the recording, and 33 to 51 dB below it — and the floor,
+`leak_floor_db`, sits in the gap at 25 dB. Where the extractor let a voice through at full
+strength the same words come out of two tracks at once; then the copy in the louder track
+stays, a phrase at a time. On that meeting this took the words two tracks shared from 140
+to 7. The transcript's warnings say how many words were left out.
 
 Voices can be **named** (`PATCH` with `{"names": {"spk_0": "Anna"}}`) at any time: the
 tracks are downloaded under the names, and the transcript — including one already made —

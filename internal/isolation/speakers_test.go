@@ -478,3 +478,140 @@ func TestTheListIsTheCallersNewestFirst(t *testing.T) {
 		f.wait(t, alice, id)
 	}
 }
+
+// A voice that is only faintly in a track — another voice leaking through —
+// is left out of that track's transcript, and the transcript says so.
+func TestLeakedWordsAreLeftOut(t *testing.T) {
+	f := newFixture(t, func(o *Options) { o.LeakFloorDB = DefaultLeakFloorDB })
+	f.eng.faint = 1 // spk_0's sample: its track is a leak
+	f.jobs.segments = map[string][]core.Segment{
+		"call-spk_0.wav": {seg(5, 6, "эхо")},
+		"call-spk_1.wav": {seg(5, 6, "сказано")},
+	}
+	ctx := context.Background()
+	iso := f.analysed(t, ctx, core.IsolationRequest{})
+	if _, err := f.svc.TranscribeSpeakers(ctx, iso.ID, core.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	got := f.wait(t, ctx, iso.ID)
+	if got.Transcript == nil || got.Transcript.Status != core.JobSucceeded {
+		t.Fatalf("transcript %+v", got.Transcript)
+	}
+	res, err := f.svc.Transcript(ctx, iso.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Segments) != 1 || *res.Segments[0].Speaker != "spk_1" || res.Text != "сказано" {
+		t.Fatalf("segments %+v", res.Segments)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		found = found || w.Code == "isolation_leaks_dropped"
+	}
+	if !found {
+		t.Errorf("warnings %+v", res.Warnings)
+	}
+}
+
+func TestDropLeaks(t *testing.T) {
+	dir := t.TempDir()
+	// The recording: speech throughout, then silence. The track: the voice
+	// for a second, then 40 dB down, then a second at -20 dB.
+	rec := make([]float32, 4*SampleRate)
+	track := make([]float32, 4*SampleRate)
+	for i := range 3 * SampleRate {
+		rec[i] = 0.3
+	}
+	for i := range SampleRate {
+		track[i] = 0.3
+		track[SampleRate+i] = 0.003
+		track[2*SampleRate+i] = 0.03
+	}
+	for name, x := range map[string][]float32{"rec": rec, "track": track} {
+		if err := writePCM(filepath.Join(dir, name), x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := func(word string, start float64) core.Word {
+		return core.Word{Word: word, Start: start, End: start + 0.3}
+	}
+	res := &core.Result{Segments: []core.Segment{
+		{Start: 0, End: 2, Text: "сказал эхо", Words: []core.Word{w("сказал", 0.2), w("эхо", 1.2)}},
+		{Start: 1.1, End: 1.9, Text: "только эхо", Words: []core.Word{w("только", 1.2), w("эхо", 1.5)}},
+		// Quieter by 20 dB: above a 25 dB floor, the voice's own.
+		{Start: 2.1, End: 2.5, Text: "тихо", Words: []core.Word{w("тихо", 2.1)}},
+		// The recording is silent here: nothing to hold the word against.
+		{Start: 3.2, End: 3.6, Text: "пауза", Words: []core.Word{w("пауза", 3.2)}},
+		// No word timings: the segment is judged whole.
+		{Start: 1.2, End: 1.8, Text: "без слов"},
+	}}
+	n, err := dropLeaks(res, filepath.Join(dir, "track"), filepath.Join(dir, "rec"), DefaultLeakFloorDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, s := range res.Segments {
+		texts = append(texts, s.Text)
+	}
+	if n != 5 || strings.Join(texts, "|") != "сказал|тихо|пауза" {
+		t.Fatalf("dropped %d, left %q", n, texts)
+	}
+	if s := res.Segments[0]; s.End != 0.5 || len(s.Words) != 1 {
+		t.Errorf("the shortened segment %+v", s)
+	}
+	// Zero keeps everything.
+	if n, _ := dropLeaks(res, filepath.Join(dir, "track"), filepath.Join(dir, "rec"), 0); n != 0 {
+		t.Errorf("a zero floor dropped %d", n)
+	}
+}
+
+func TestDropEchoes(t *testing.T) {
+	dir := t.TempDir()
+	// Track a holds a phrase at full level, track b the same phrase 1 dB
+	// down — the extractor let it through — and a lone "да" each, b's 6 dB
+	// louder; then a lone "угу" in both at the same level.
+	n := 5 * SampleRate
+	a, b := make([]float32, n), make([]float32, n)
+	for i := range n {
+		a[i], b[i] = 0.3, 0.27
+	}
+	for i := 3 * SampleRate; i < 4*SampleRate; i++ {
+		a[i], b[i] = 0.1, 0.2
+	}
+	for name, x := range map[string][]float32{"a": a, "b": b} {
+		if err := writePCM(filepath.Join(dir, name), x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := func(word string, start float64) core.Word { return core.Word{Word: word, Start: start, End: start + 0.3} }
+	parts := []part{
+		{speaker: "a", result: &core.Result{Segments: []core.Segment{
+			{Start: 0, End: 2, Text: "кого мы отбросим", Words: []core.Word{w("Кого", 0.2), w("мы,", 0.6), w("отбросим", 1.0)}},
+			{Start: 3, End: 3.5, Text: "да", Words: []core.Word{w("да", 3.1)}},
+			{Start: 4.2, End: 4.6, Text: "угу", Words: []core.Word{w("угу", 4.2)}},
+		}}},
+		{speaker: "b", result: &core.Result{Segments: []core.Segment{
+			{Start: 0, End: 1.5, Text: "кого мы", Words: []core.Word{w("кого", 0.3), w("мы", 0.7)}},
+			{Start: 1.5, End: 2, Text: "отбросим.", Words: []core.Word{w("отбросим.", 1.1)}},
+			{Start: 3, End: 3.5, Text: "Да.", Words: []core.Word{w("Да.", 3.2)}},
+			{Start: 4.2, End: 4.6, Text: "Угу.", Words: []core.Word{w("Угу.", 4.25)}},
+		}}},
+	}
+	got, err := dropEchoes(parts, map[string]string{"a": filepath.Join(dir, "a"), "b": filepath.Join(dir, "b")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := func(r *core.Result) string {
+		var s []string
+		for _, seg := range r.Segments {
+			s = append(s, seg.Text)
+		}
+		return strings.Join(s, "|")
+	}
+	// The phrase stays whole in the louder track, across b's segment
+	// boundary; "да" stays where it is clearly louder; the even "угу" stays
+	// in both.
+	if got != 4 || text(parts[0].result) != "кого мы отбросим|угу" || text(parts[1].result) != "Да.|Угу." {
+		t.Fatalf("dropped %d: a %q, b %q", got, text(parts[0].result), text(parts[1].result))
+	}
+}
