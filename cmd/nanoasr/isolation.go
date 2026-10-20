@@ -87,6 +87,7 @@ func buildIsolation(
 		MaxIsolations: cfg.Isolation.MaxIsolations,
 		AllowKeep:     cfg.Isolation.AllowKeep,
 		MaxKept:       cfg.Isolation.MaxKept,
+		LeakFloorDB:   cfg.Isolation.LeakFloorDB,
 		Threads:       cfg.Isolation.NumThreads,
 		Governor:      governor,
 		Decode: func(ctx context.Context, r io.Reader) ([]float32, error) {

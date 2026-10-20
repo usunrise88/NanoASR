@@ -108,7 +108,12 @@ func (s *Service) followJobs(ctx context.Context, sess *session, req core.Reques
 		s.mu.Unlock()
 
 		done := s.awaitJobs(jobCtx, sess, jobs)
+		paths := map[string]string{}
+		for _, t := range tracks {
+			paths[t.speaker] = t.src.path
+		}
 		var parts []part
+		leaks := 0
 		for _, j := range done {
 			if j.Status != core.JobSucceeded || j.Result == nil {
 				msg := string(j.Status)
@@ -120,13 +125,30 @@ func (s *Service) followJobs(ctx context.Context, sess *session, req core.Reques
 				s.mu.Unlock()
 				return nil, core.Errorf(core.CodeInternal, "the transcription of %s did not succeed: %s", who, msg)
 			}
+			n, err := dropLeaks(j.Result, paths[j.speaker], filepath.Join(sess.dir, sourceFile), s.opt.LeakFloorDB)
+			if err != nil {
+				return nil, err
+			}
+			leaks += n
 			parts = append(parts, part{speaker: j.speaker, result: j.Result})
 		}
 		s.mu.Lock()
 		voices := slices.Clone(sess.view.Voices)
 		duration := sess.view.Duration
 		s.mu.Unlock()
-		return merge(sess.id, duration, voices, parts), nil
+		if s.opt.LeakFloorDB < 0 {
+			echoes, err := dropEchoes(parts, paths)
+			if err != nil {
+				return nil, err
+			}
+			leaks += echoes
+		}
+		res := merge(sess.id, duration, voices, parts)
+		if leaks > 0 {
+			res.Warnings = append(res.Warnings, core.Warning{Code: "isolation_leaks_dropped",
+				Message: fmt.Sprintf("%d words that came out of one voice's track but were another voice's were left out", leaks)})
+		}
+		return res, nil
 	}()
 
 	if err != nil && ctx.Err() != nil {

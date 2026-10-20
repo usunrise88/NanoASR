@@ -403,6 +403,11 @@ type Isolation struct {
 	// NumThreads is the extractor's thread budget, claimed from
 	// asr.inference_slots while an isolation runs.
 	NumThreads int `yaml:"num_threads"`
+	// LeakFloorDB leaves out of a transcript by speaker the words that are
+	// this much quieter in their voice's track than in the recording: another
+	// voice, turned down but not off, that the recogniser still heard. Zero
+	// keeps every word.
+	LeakFloorDB float64 `yaml:"leak_floor_db"`
 }
 
 // Storage has no keep_audio_ttl knob, and that is the point.

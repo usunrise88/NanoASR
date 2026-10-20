@@ -40,6 +40,10 @@ func (d *turns) Close() error { return nil }
 // tell its output from its input, and samples every voice it can from where
 // it first speaks.
 type halves struct {
+	// faint turns one voice's track down to a leak: the voice whose
+	// sample's embedding is this, 60 dB below the recording.
+	faint float32
+
 	mu        sync.Mutex
 	extracted []tse.Sample
 	others    [][][]float32
@@ -72,8 +76,12 @@ func (e *halves) Extract(_ context.Context, x []float32, s tse.Sample, others []
 	e.keep = append(e.keep, keep)
 	e.mu.Unlock()
 	y := make([]float32, len(x))
+	gain := float32(0.5)
+	if e.faint != 0 && s.Embedding[0] == e.faint {
+		gain = 0.001
+	}
 	for i := range x {
-		y[i] = x[i] / 2
+		y[i] = x[i] * gain
 	}
 	progress(0.5)
 	return y, nil

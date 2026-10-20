@@ -209,6 +209,7 @@ isolation:
   allow_keep: true              # let a person keep one until they delete it
   max_kept: 100                 # kept at once
   num_threads: 2                # claimed from asr.inference_slots while running
+  leak_floor_db: -25            # by speaker: a word this much quieter in its track than in the recording is another voice; 0 keeps all
 
 storage:
   db_path: ./.nanoasr.db

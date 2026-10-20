@@ -127,8 +127,23 @@ func (*Adapter) Doc() adapter.Doc {
 			Path:    "/api/v1/isolations/{id}/tracks/{speaker}",
 			Summary: "Download one voice's track.",
 			Detail: "format=wav (default) or mp3, 16 kHz mono, as long as the recording. " +
+				"WAV is served with Range, so a player starts at once and seeks anywhere. " +
 				"MP3 needs ffmpeg on the server. /result?speaker= is the same; " +
 				"/result alone is the voice chosen last.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations/{id}/media",
+			Summary: "URLs a media element can play the recording, tracks and samples from.",
+			Detail: "{audio, tracks: {speaker: url}, samples: {speaker: url}, expires_at}. An " +
+				"<audio src> cannot send the API key, so on a server with keys each URL " +
+				"carries a ticket for itself: that path, for reading, for this key, for " +
+				"12 hours. The key never goes in a URL; a restart voids every ticket.",
+		}, {
+			Method:  "GET",
+			Path:    "/api/v1/isolations/{id}/peaks",
+			Summary: "The waveform of the recording, or of one track with speaker=.",
+			Detail: "buckets=2000 by default: RMS of equal stretches, the loudest 1. For a " +
+				"player that streams the audio rather than decoding all of it to draw one.",
 		}, {
 			Method:  "GET",
 			Path:    "/api/v1/isolations/{id}/audio",

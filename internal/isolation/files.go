@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"time"
 
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/core"
@@ -61,11 +63,15 @@ func writeJSON(path string, v any) error {
 	return nil
 }
 
-// wavFile is a stored PCM file read as WAV: a header, then the file.
+// wavFile is a stored PCM file read as WAV: a header, then the file. It
+// seeks, so a player can ask for any part of it (a Range request) and start
+// playing before the rest has arrived.
 type wavFile struct {
-	io.Reader
-	f    *os.File
-	size int64
+	header []byte
+	f      *os.File
+	size   int64
+	off    int64
+	mod    time.Time
 }
 
 func openWAV(path string) (*wavFile, error) {
@@ -78,11 +84,43 @@ func openWAV(path string) (*wavFile, error) {
 		_ = f.Close()
 		return nil, core.Errorf(core.CodeInternal, "cannot read the isolated voice").WithCause(err)
 	}
-	return &wavFile{
-		Reader: io.MultiReader(bytes.NewReader(audio.WAVHeader(SampleRate, info.Size())), f),
-		f:      f,
-		size:   audio.WAVHeaderSize + info.Size(),
-	}, nil
+	header := audio.WAVHeader(SampleRate, info.Size())
+	return &wavFile{header: header, f: f, size: int64(len(header)) + info.Size(), mod: info.ModTime()}, nil
+}
+
+func (w *wavFile) Read(p []byte) (int, error) {
+	if w.off >= w.size {
+		return 0, io.EOF
+	}
+	h := int64(len(w.header))
+	if w.off < h {
+		n := copy(p, w.header[w.off:])
+		w.off += int64(n)
+		return n, nil
+	}
+	n, err := w.f.ReadAt(p, w.off-h)
+	w.off += int64(n)
+	if err == io.EOF && n > 0 {
+		err = nil
+	}
+	return n, err
+}
+
+func (w *wavFile) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+	case io.SeekCurrent:
+		offset += w.off
+	case io.SeekEnd:
+		offset += w.size
+	default:
+		return 0, errors.New("wav: bad whence")
+	}
+	if offset < 0 {
+		return 0, errors.New("wav: seek before the start")
+	}
+	w.off = offset
+	return offset, nil
 }
 
 func (w *wavFile) Close() error { return w.f.Close() }
@@ -90,9 +128,18 @@ func (w *wavFile) Close() error { return w.f.Close() }
 // Size is the length of the whole WAV, for Content-Length.
 func (w *wavFile) Size() int64 { return w.size }
 
+// ModTime is when the audio was written: a voice isolated again is a new
+// file, and a player that cached the old one must not keep playing it.
+func (w *wavFile) ModTime() time.Time { return w.mod }
+
+// memWAV is a WAV held in memory, a voice's sample: it seeks as a file does.
+type memWAV struct{ *bytes.Reader }
+
+func (memWAV) Close() error { return nil }
+
 func wavReader(x []float32) io.ReadCloser {
 	data := audio.EncodePCM16(x)
-	return io.NopCloser(io.MultiReader(bytes.NewReader(audio.WAVHeader(SampleRate, int64(len(data)))), bytes.NewReader(data)))
+	return memWAV{bytes.NewReader(append(audio.WAVHeader(SampleRate, int64(len(data))), data...))}
 }
 
 // resultSource hands a track to the job queue as an upload.

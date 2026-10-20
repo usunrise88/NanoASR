@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/usunrise88/nanoasr/internal/core"
 )
@@ -41,6 +42,16 @@ type Deps struct {
 	// handed the live struct and reach into it: what comes back is whatever the
 	// server decided is safe to show.
 	ConfigSnapshot func() any
+	// Signer makes URLs that authenticate themselves, for what a browser
+	// fetches without headers: a media element playing a recording as it
+	// downloads. Nil on a server without keys, where a path is its own URL.
+	Signer Signer
+}
+
+// Signer returns path with what authenticates the caller for reading it, and
+// when that expires.
+type Signer interface {
+	Sign(caller core.Caller, path string) (string, time.Time)
 }
 
 // Route is one endpoint, as the documentation page describes it.

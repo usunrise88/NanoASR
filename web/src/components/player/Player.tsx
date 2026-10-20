@@ -8,7 +8,7 @@ import { clock } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 
 import { Waveform } from './Waveform'
-import { usePeaks } from './usePeaks'
+import { usePeaks, type Peaks } from './usePeaks'
 import { nextWord, previousWord } from './wordIndex'
 
 /** Columns in the waveform. Enough detail for a long file, cheap to draw. */
@@ -21,7 +21,10 @@ export interface PlayerHandle {
 }
 
 /**
- * Transport, waveform and keyboard, over a local File.
+ * Transport, waveform and keyboard, over a local File or a URL the server
+ * streams. A File is decoded here for its waveform; a URL comes with the
+ * waveform the server drew, since decoding it here would mean downloading all
+ * of it first — exactly what streaming is for avoiding.
  *
  * The audio element is the source of truth for time — not React state — and the
  * position is read on each animation frame while playing. That keeps the
@@ -29,6 +32,8 @@ export interface PlayerHandle {
  */
 export function Player({
   file,
+  src,
+  peaks: given,
   result,
   words,
   currentTime,
@@ -39,7 +44,10 @@ export function Player({
   lanes,
   onPlaying,
 }: {
-  file: File
+  file?: File | undefined
+  src?: string | undefined
+  // peaks is the waveform of src; undefined draws a placeholder until it comes.
+  peaks?: Peaks | undefined
   result: Result
   words: Word[]
   currentTime: number
@@ -58,18 +66,27 @@ export function Player({
   const audio = useRef<HTMLAudioElement>(null)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState('1')
-  const { peaks, error } = usePeaks(file, BUCKETS)
+  const local = src ? undefined : file
+  const computed = usePeaks(local, BUCKETS)
+  const peaks = src ? given : computed.peaks
+  const error = src ? undefined : computed.error
 
   // One object URL per file, revoked when it changes: a leaked blob URL pins
   // the whole file in memory for the life of the tab.
-  const [url, setUrl] = useState(() => URL.createObjectURL(file))
-  const [tracked, setTracked] = useState(file)
-  if (tracked !== file) {
-    URL.revokeObjectURL(url)
-    setUrl(URL.createObjectURL(file))
-    setTracked(file)
+  const [objectURL, setObjectURL] = useState(() => (local ? URL.createObjectURL(local) : undefined))
+  const [tracked, setTracked] = useState(local)
+  if (tracked !== local) {
+    if (objectURL) URL.revokeObjectURL(objectURL)
+    setObjectURL(local ? URL.createObjectURL(local) : undefined)
+    setTracked(local)
   }
-  useEffect(() => () => URL.revokeObjectURL(url), [url])
+  useEffect(
+    () => () => {
+      if (objectURL) URL.revokeObjectURL(objectURL)
+    },
+    [objectURL],
+  )
+  const url = src ?? objectURL
 
   const seek = useCallback(
     (seconds: number) => {

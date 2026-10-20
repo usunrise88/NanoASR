@@ -5,10 +5,12 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/usunrise88/nanoasr/internal/api/adapter"
 	"github.com/usunrise88/nanoasr/internal/core"
@@ -35,6 +37,8 @@ func (a *Adapter) mountIsolation(mux *http.ServeMux, deps adapter.Deps) {
 		"POST /api/v1/isolations/{id}/extract":                extractVoice,
 		"POST /api/v1/isolations/{id}/extract-all":            extractAll,
 		"GET /api/v1/isolations/{id}/audio":                   isolationAudio,
+		"GET /api/v1/isolations/{id}/media":                   isolationMedia(iso, deps.Signer),
+		"GET /api/v1/isolations/{id}/peaks":                   isolationPeaks,
 		"GET /api/v1/isolations/{id}/result":                  isolationResult,
 		"GET /api/v1/isolations/{id}/tracks/{speaker}":        isolationResult,
 		"POST /api/v1/isolations/{id}/transcribe":             transcribeIsolation,
@@ -166,7 +170,7 @@ func voiceSample(iso core.IsolationService) http.HandlerFunc {
 		}
 		defer rc.Close()
 		w.Header().Set("Cache-Control", "private, max-age=300")
-		serveAudio(w, rc, core.AudioWAV, "")
+		serveAudio(w, r, rc, core.AudioWAV, "")
 	}
 }
 
@@ -288,7 +292,7 @@ func isolationAudio(iso core.IsolationService) http.HandlerFunc {
 		if info, err := iso.Isolation(r.Context(), id); err == nil && info.Filename != "" {
 			name = strings.TrimSuffix(filepath.Base(info.Filename), filepath.Ext(info.Filename))
 		}
-		serveAudio(w, rc, format, name+"."+string(format))
+		serveAudio(w, r, rc, format, name+"."+string(format))
 	}
 }
 
@@ -321,24 +325,102 @@ func isolationResult(iso core.IsolationService) http.HandlerFunc {
 				}
 			}
 		}
-		serveAudio(w, rc, format, name+"."+string(format))
+		serveAudio(w, r, rc, format, name+"."+string(format))
 	}
 }
 
-// serveAudio streams an audio body. A WAV knows its length; an MP3 is encoded
-// as it is sent and does not.
-func serveAudio(w http.ResponseWriter, rc io.Reader, format core.AudioFormat, filename string) {
+// serveAudio streams an audio body. A WAV the service can seek in is served
+// with Range: a player starts at once and jumps anywhere, fetching only what
+// it plays. An MP3 is encoded as it is sent, has no length to offer, and is
+// sent whole.
+func serveAudio(w http.ResponseWriter, r *http.Request, rc io.Reader, format core.AudioFormat, filename string) {
 	w.Header().Set("Content-Type", format.ContentType())
-	if s, ok := rc.(interface{ Size() int64 }); ok {
-		w.Header().Set("Content-Length", strconv.FormatInt(s.Size(), 10))
-	}
 	if filename != "" {
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+	}
+	if rs, ok := rc.(io.ReadSeeker); ok {
+		var mod time.Time
+		if m, ok := rc.(interface{ ModTime() time.Time }); ok {
+			mod = m.ModTime()
+		}
+		http.ServeContent(w, r, "", mod, rs)
+		return
+	}
+	if s, ok := rc.(interface{ Size() int64 }); ok {
+		w.Header().Set("Content-Length", strconv.FormatInt(s.Size(), 10))
 	}
 	w.WriteHeader(http.StatusOK)
 	// Past the header there is no status left to report a failure with; a
 	// truncated body is what the client sees, and the log has the reason.
 	_, _ = io.Copy(w, rc)
+}
+
+// isolationMedia lists the URLs a page plays the isolation's audio from: the
+// recording, every track, every sample. A media element cannot send the API
+// key, so on a server with keys each URL carries a ticket for itself
+// (httpx.Tickets), good for a few hours; without keys a path is its URL.
+func isolationMedia(iso core.IsolationService, signer adapter.Signer) func(core.IsolationService) http.HandlerFunc {
+	return func(core.IsolationService) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			id := r.PathValue("id")
+			info, err := iso.Isolation(r.Context(), id)
+			if err != nil {
+				WriteProblem(w, r, err)
+				return
+			}
+			caller := core.CallerOf(r.Context())
+			var expires *time.Time
+			link := func(path string) string {
+				if signer == nil {
+					return path
+				}
+				signed, exp := signer.Sign(caller, path)
+				expires = &exp
+				return signed
+			}
+			base := "/api/v1/isolations/" + url.PathEscape(id)
+			out := struct {
+				Audio     string            `json:"audio,omitempty"`
+				Tracks    map[string]string `json:"tracks"`
+				Samples   map[string]string `json:"samples"`
+				ExpiresAt *time.Time        `json:"expires_at,omitempty"`
+			}{Tracks: map[string]string{}, Samples: map[string]string{}}
+			if info.Duration > 0 {
+				out.Audio = link(base + "/audio")
+			}
+			for _, t := range info.Tracks {
+				out.Tracks[t.Speaker] = link(base + "/tracks/" + url.PathEscape(t.Speaker))
+			}
+			for _, v := range info.Voices {
+				if v.Sample != nil {
+					out.Samples[v.Speaker] = link(base + "/voices/" + url.PathEscape(v.Speaker) + "/sample")
+				}
+			}
+			out.ExpiresAt = expires
+			writeJSON(w, http.StatusOK, out)
+		}
+	}
+}
+
+func isolationPeaks(iso core.IsolationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		buckets := 2000
+		if v := r.URL.Query().Get("buckets"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				WriteProblem(w, r, core.Errorf(core.CodeInvalidRequest, "buckets must be a number").WithParam("buckets"))
+				return
+			}
+			buckets = n
+		}
+		out, err := iso.Peaks(r.Context(), r.PathValue("id"), r.URL.Query().Get("speaker"), buckets)
+		if err != nil {
+			WriteProblem(w, r, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		writeJSON(w, http.StatusOK, out)
+	}
 }
 
 func transcribeIsolation(iso core.IsolationService) http.HandlerFunc {

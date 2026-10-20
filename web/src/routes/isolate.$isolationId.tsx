@@ -15,6 +15,7 @@ import {
   useExtractVoice,
   useIsolation,
   useIsolationInfo,
+  useIsolationMedia,
   useIsolationStream,
   useTranscribeIsolation,
   useTranscribeSpeakers,
@@ -38,6 +39,12 @@ export const Route = createFileRoute('/isolate/$isolationId')({
   staticData: { pageMeta },
 })
 
+/**
+ * The longest track handed to the result page as a file, in seconds: five
+ * minutes of WAV is ten megabytes, a moment's download.
+ */
+const HAND_OVER = 300
+
 /** What the transcription sheet is open for: every voice, or one track. */
 type Sheet = { kind: 'speakers' } | { kind: 'track'; speaker: string } | undefined
 
@@ -56,6 +63,7 @@ function IsolationPage() {
   const single = useTranscribeIsolation(isolationId)
   const remove = useDeleteIsolation()
   const original = recall(isolationId)
+  const media = useIsolationMedia(iso).data
   const [sheet, setSheet] = useState<Sheet>()
 
   function failed(title: string, err: unknown) {
@@ -104,9 +112,12 @@ function IsolationPage() {
         return
       }
       const job = await single.mutateAsync({ options, speaker: sheet.speaker })
-      // The result page plays what it was given: the track it was run on.
+      // The result page plays what it was given: the track it was run on. A
+      // job keeps no audio to stream, so it is handed the file — when that
+      // is quick to fetch; a long track is not worth waiting on before the
+      // page opens, and the page asks for a file instead.
       const track = iso?.tracks?.find((tr) => tr.speaker === sheet.speaker)
-      if (track) {
+      if (track && track.duration <= HAND_OVER) {
         try {
           const wav = await fetchTrack(isolationId, track.speaker, 'wav')
           remember(job.id, new File([wav], `${track.name}.wav`, { type: 'audio/wav' }))
@@ -195,7 +206,7 @@ function IsolationPage() {
                 {w.message}
               </p>
             ))}
-            <OriginalClip iso={iso} original={original} />
+            <OriginalClip iso={iso} original={original} src={media?.audio} />
           </Stack>
         </Card>
       </Section>
@@ -229,6 +240,7 @@ function IsolationPage() {
         >
           <Voices
             iso={iso}
+            media={media}
             busy={busy || extract.isPending || extractAll.isPending}
             onChoose={(s) => void choose(s)}
             onRename={rename}
@@ -288,13 +300,13 @@ function IsolationPage() {
  * The recording itself: the browser's copy when this tab uploaded it, else
  * the server's, fetched when somebody presses play.
  */
-function OriginalClip({ iso, original }: { iso: Isolation; original: File | undefined }) {
+function OriginalClip({ iso, original, src }: { iso: Isolation; original: File | undefined; src: string | undefined }) {
   const t = useT()
   if (!original && !(iso.duration && iso.duration > 0)) return null
   return original ? (
     <AudioClip blob={original} label={t('isolate.original')} />
   ) : (
-    <AudioClip label={t('isolate.original')} load={() => fetchIsolationAudio(iso.id, 'wav')} />
+    <AudioClip label={t('isolate.original')} src={src} load={() => fetchIsolationAudio(iso.id, 'wav')} />
   )
 }
 
