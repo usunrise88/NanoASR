@@ -259,7 +259,11 @@ type Endpoint struct {
 }
 
 type Registry struct {
-	AllowDownload       bool     `yaml:"allow_download"`
+	AllowDownload bool `yaml:"allow_download"`
+	// AutoDownload lets a request that names an absent catalog model fetch
+	// it. Off, a model arrives only when somebody downloads it by name —
+	// what an application that lets its user choose the models wants.
+	AutoDownload        bool     `yaml:"auto_download"`
 	CatalogURL          string   `yaml:"catalog_url"`
 	Mirrors             []string `yaml:"mirrors"`
 	DownloadConcurrency int      `yaml:"download_concurrency"`

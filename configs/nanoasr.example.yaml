@@ -152,6 +152,7 @@ realtime:
 
 registry:
   allow_download: true
+  auto_download: true           # false → only an explicit download fetches a model
   catalog_url: ""               # empty → built-in catalog
   mirrors: []
   download_concurrency: 2

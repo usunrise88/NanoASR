@@ -2,6 +2,7 @@
 //
 //	nanoasr init    [-config path]   write a config and fetch the default models
 //	nanoasr serve   [-config path]   run the HTTP server
+//	nanoasr managed [-data-dir dir]  run as another application's background process
 //	nanoasr key     [list|issue|remove]  manage the api keys in a config file
 //	nanoasr models  [list|pull id]   inspect and fetch models
 //	nanoasr gpu                      report the execution provider and the GPU
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -63,6 +65,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		err = serve(context.Background(), os.Args[2:])
+	case "managed":
+		err = managedCommand(context.Background(), os.Args[2:], os.Stdin, os.Stdout)
 	case "init":
 		err = initCommand(os.Args[2:])
 	case "key", "keys":
@@ -98,6 +102,7 @@ func usage() {
 
   nanoasr init    [-config FILE] [-data-dir DIR] [-addr ADDR] [-force]
   nanoasr serve   [-config FILE] [-addr ADDR] [-log-file FILE]
+  nanoasr managed [-data-dir DIR] [-parent-pid PID] [-ui]
   nanoasr key     list | issue NAME [-admin] [-rps N] | remove NAME
   nanoasr models  list | catalog | pull ID... | pull -configured | inspect DIR [--probe WAV]
   nanoasr gpu     [-config FILE] [-provider cuda]
@@ -106,6 +111,9 @@ func usage() {
 
 Start here: "nanoasr init" writes a configuration, issues an admin and a
 user key, and downloads the models a Russian deployment needs.
+
+"nanoasr managed" is for an application that ships NanoASR and runs it in the
+background: see nanoasr-embedded.md.
 
 On Windows, "nanoasr --install" registers the service that runs it at boot;
 on Linux the same job is done by the nanoasr.service unit in the archive.
@@ -175,14 +183,6 @@ func serve(ctx context.Context, args []string) (rerr error) {
 	}
 
 	log := newLogger(cfg.Log, logw)
-	so, ort := sherpa.Versions()
-	log.Info("starting nanoasr",
-		"version", version, "sherpa_onnx", so, "onnxruntime", ort,
-		"addr", cfg.Server.Addr, "dialects", cfg.API.Dialects,
-		"inference_slots", cfg.ASR.InferenceSlots,
-		"num_threads", cfg.ASR.NumThreads,
-		"max_concurrent", cfg.Jobs.MaxConcurrent,
-		"max_resident_models", cfg.ASR.MaxResidentModels)
 
 	// Derived from the caller's context rather than from Background: under a
 	// Windows service the stop comes from the control manager and cancels that
@@ -199,6 +199,39 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		stop()
 	}()
 
+	return run(ctx, cfg, log, runOptions{})
+}
+
+// runOptions are what a caller of run adds to the server serve runs.
+type runOptions struct {
+	// listener is served instead of listening on server.addr.
+	listener net.Listener
+	// middleware runs after the request id, the access log and the security
+	// headers, and before authentication.
+	middleware []httpx.Middleware
+	// models wraps the model service the API is given.
+	models func(core.ModelService) core.ModelService
+	// mount adds routes beside the dialects'; routes documents them.
+	mount  func(mux *http.ServeMux, srv *server)
+	routes []adapter.Route
+	// serving is called once the listener accepts requests.
+	serving func(addr net.Addr)
+	// preloadInBackground serves before the default model is warm: a
+	// request that comes first waits for the load instead of the listener.
+	preloadInBackground bool
+}
+
+// run builds the server from cfg and serves it until ctx is done.
+func run(ctx context.Context, cfg config.Config, log *slog.Logger, opt runOptions) error {
+	so, ort := sherpa.Versions()
+	log.Info("starting nanoasr",
+		"version", version, "sherpa_onnx", so, "onnxruntime", ort,
+		"addr", cfg.Server.Addr, "dialects", cfg.API.Dialects,
+		"inference_slots", cfg.ASR.InferenceSlots,
+		"num_threads", cfg.ASR.NumThreads,
+		"max_concurrent", cfg.Jobs.MaxConcurrent,
+		"max_resident_models", cfg.ASR.MaxResidentModels)
+
 	srv, err := build(ctx, cfg, log)
 	if err != nil {
 		return err
@@ -211,7 +244,11 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		log.Info("estimated peak memory", "mb", est,
 			"note", "resident models, the diarizer, voice isolation and decoded PCM of every concurrent job")
 	}
-	srv.preload(ctx, cfg.ASR.DefaultModel, log)
+	if opt.preloadInBackground {
+		go srv.preload(ctx, cfg.ASR.DefaultModel, log)
+	} else {
+		srv.preload(ctx, cfg.ASR.DefaultModel, log)
+	}
 	go srv.preloadDiarizer(ctx, log)
 	srv.checkDefaultDictionaries(ctx, cfg.PostProc.Hotwords.DefaultDictionaries, log)
 
@@ -273,8 +310,12 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		tickets = httpx.NewTickets(12 * time.Hour)
 		signer = tickets
 	}
+	models := srv.models
+	if opt.models != nil {
+		models = opt.models(models)
+	}
 	if err := adapter.MountAll(mux, cfg.API.Dialects, srv.service, adapter.Deps{
-		Models:       srv.models,
+		Models:       models,
 		Realtime:     srv.realtimeService(),
 		Isolation:    srv.isolationService(),
 		Dictionaries: srv.store.Dictionaries(),
@@ -323,12 +364,15 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		Public:         public,
 		UIPath:         uiPathOrEmpty(cfg, uiMounted),
 		Dialects:       adapter.DocsFor(cfg.API.Dialects),
-		Server:         serverRoutes(cfg, uiMounted),
+		Server:         append(serverRoutes(cfg, uiMounted), opt.routes...),
 		Realtime:       realtimeInfo(srv),
 		MaxUploadBytes: cfg.Server.MaxUploadBytes,
 	})
 	if err != nil {
 		return err
+	}
+	if opt.mount != nil {
+		opt.mount(mux, srv)
 	}
 	mux.Handle("GET /docs", docsHandler)
 	mux.Handle("GET /docs/", docsHandler)
@@ -348,8 +392,9 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		httpx.Recover(log),
 		httpx.AccessLog(log),
 		httpx.SecurityHeaders(),
-		httpx.LimitBody(cfg.Server.MaxUploadBytes),
 	}
+	mw = append(mw, opt.middleware...)
+	mw = append(mw, httpx.LimitBody(cfg.Server.MaxUploadBytes))
 
 	if cfg.Auth.Mode == "open" {
 		log.Warn("authentication disabled", "addr", cfg.Server.Addr,
@@ -385,12 +430,24 @@ func serve(ctx context.Context, args []string) (rerr error) {
 		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.Duration,
 	}
 
+	// Listening here rather than in ListenAndServe makes a taken port a
+	// startup failure, and gives the address — a port chosen by the system,
+	// for managed — before anyone is told the server is up.
+	ln := opt.listener
+	if ln == nil {
+		if ln, err = net.Listen("tcp", cfg.Server.Addr); err != nil {
+			return err
+		}
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
+	if opt.serving != nil {
+		opt.serving(ln.Addr())
+	}
 
 	select {
 	case err := <-errCh:

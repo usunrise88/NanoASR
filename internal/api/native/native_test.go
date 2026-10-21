@@ -140,6 +140,12 @@ func (f *fakeModels) Reload(_ context.Context, id, rev string) error {
 	return f.record("reload:" + id + "@" + rev)
 }
 
+func (f *fakeModels) CancelDownload(_ context.Context, id string) error {
+	return f.record("cancel:" + id)
+}
+
+func (f *fakeModels) Delete(_ context.Context, id string) error { return f.record("delete:" + id) }
+
 // --- harness ----------------------------------------------------------------
 
 func newServer(t *testing.T, svc core.Service, deps adapter.Deps) *httptest.Server {
@@ -746,6 +752,27 @@ func TestModelActionsReachTheServiceAndReportTheNewState(t *testing.T) {
 	want := []string{"load:m", "unload:m", "reload:m@v3"}
 	if strings.Join(models.calls, ",") != strings.Join(want, ",") {
 		t.Errorf("calls = %v, want %v", models.calls, want)
+	}
+}
+
+func TestDeleteAndCancelReachTheService(t *testing.T) {
+	models := &fakeModels{}
+	srv := newServer(t, &fakeService{}, adapter.Deps{Models: models})
+
+	if resp := do(t, srv, http.MethodDelete, "/api/v1/models/m/download"); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("cancel status = %d", resp.StatusCode)
+	}
+	if resp := do(t, srv, http.MethodDelete, "/api/v1/models/m"); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d", resp.StatusCode)
+	}
+	want := []string{"cancel:m", "delete:m"}
+	if strings.Join(models.calls, ",") != strings.Join(want, ",") {
+		t.Errorf("calls = %v, want %v", models.calls, want)
+	}
+
+	models.err = core.Errorf(core.CodeModelInUse, "busy")
+	if resp := do(t, srv, http.MethodDelete, "/api/v1/models/m"); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("delete of a model in use = %d, want 409", resp.StatusCode)
 	}
 }
 

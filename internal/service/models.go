@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"sort"
+	"sync"
 
 	"github.com/usunrise88/nanoasr/internal/asr"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
@@ -20,10 +21,26 @@ import (
 type Models struct {
 	registry registry.Registry
 	pool     *pool.Pool
+
+	// reserved are the models the server holds outside the pool — the VAD,
+	// the streaming model, the diarizer — by id, with what holds them.
+	mu       sync.Mutex
+	reserved map[string]string
 }
 
 func NewModels(reg registry.Registry, p *pool.Pool) *Models {
-	return &Models{registry: reg, pool: p}
+	return &Models{registry: reg, pool: p, reserved: map[string]string{}}
+}
+
+// Reserve marks a model the server uses outside the pool, so Delete refuses
+// it: its files are open for as long as the process runs.
+func (m *Models) Reserve(id, role string) {
+	if id == "" {
+		return
+	}
+	m.mu.Lock()
+	m.reserved[id] = role
+	m.mu.Unlock()
 }
 
 // List merges what is on disk with what is resident, so one call answers both
@@ -72,7 +89,20 @@ func (m *Models) Catalog(ctx context.Context) ([]core.ModelInfo, error) {
 	}
 	out := make([]core.ModelInfo, 0, len(entries))
 	for _, man := range entries {
-		out = append(out, m.describe(man, core.ModelAbsent))
+		// What is already here, or on its way, says so: somebody choosing
+		// what to download should not have to merge two lists to find out.
+		state := core.ModelAbsent
+		if m.registry.Downloading(man.ID) {
+			state = core.ModelDownloading
+		} else if _, err := m.registry.Dir(man.ID); err == nil {
+			state = core.ModelDownloaded
+		}
+		info := m.describe(man, state)
+		info.SizeBytes = man.Source.SizeBytes
+		for _, e := range man.Source.Extra {
+			info.SizeBytes += e.SizeBytes
+		}
+		out = append(out, info)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
@@ -82,6 +112,39 @@ func (m *Models) Catalog(ctx context.Context) ([]core.ModelInfo, error) {
 // Whether downloading is permitted at all is the registry's decision.
 func (m *Models) Download(ctx context.Context, id string) (<-chan core.DownloadProgress, error) {
 	return m.registry.Fetch(ctx, id)
+}
+
+// CancelDownload stops a download; every caller following it sees the
+// cancellation as its outcome.
+func (m *Models) CancelDownload(_ context.Context, id string) error {
+	if !m.registry.Cancel(id) {
+		return core.Errorf(core.CodeModelNotFound, "model %q is not downloading", id)
+	}
+	return nil
+}
+
+// Delete removes a model from disk, unloading it first.
+//
+// A model a request is using is refused rather than drained: on Windows a
+// file an open model holds cannot be deleted, and everywhere the request
+// would be left running on weights that no longer exist.
+func (m *Models) Delete(ctx context.Context, id string) error {
+	m.mu.Lock()
+	role, held := m.reserved[id]
+	m.mu.Unlock()
+	if held {
+		return core.Errorf(core.CodeModelInUse,
+			"model %q is the server's %s; change the setting and restart before removing it", id, role)
+	}
+	for _, info := range m.pool.List() {
+		if info.ID == id && info.RefCount > 0 {
+			return core.Errorf(core.CodeModelInUse, "model %q is serving a request", id)
+		}
+	}
+	if err := m.pool.Unload(id); err != nil && core.AsError(err).Code != core.CodeModelNotFound {
+		return err
+	}
+	return m.registry.Remove(ctx, id)
 }
 
 // Load makes a model resident by taking and immediately releasing a lease: the

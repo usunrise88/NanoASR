@@ -20,8 +20,11 @@ const (
 	// CodeIsolationBusy is an isolation asked to do something its state does
 	// not allow yet: extract while the voices are still being found, fetch a
 	// result that is not there.
-	CodeIsolationBusy         Code = "isolation_busy"
-	CodeDictionaryNotFound    Code = "dictionary_not_found"
+	CodeIsolationBusy      Code = "isolation_busy"
+	CodeDictionaryNotFound Code = "dictionary_not_found"
+	// CodeModelInUse is a model that cannot be removed now: it is serving a
+	// request, downloading, or the server was started to use it.
+	CodeModelInUse            Code = "model_in_use"
 	CodeDictionaryExists      Code = "dictionary_exists"
 	CodeFileTooLarge          Code = "file_too_large"
 	CodeDurationExceeded      Code = "duration_exceeded"
@@ -83,7 +86,7 @@ func (c Code) HTTPStatus() int {
 		return http.StatusForbidden
 	case CodeModelNotFound, CodeJobNotFound, CodeDictionaryNotFound, CodeIsolationNotFound:
 		return http.StatusNotFound
-	case CodeDictionaryExists, CodeIsolationBusy:
+	case CodeDictionaryExists, CodeIsolationBusy, CodeModelInUse:
 		return http.StatusConflict
 	case CodeFileTooLarge, CodeDurationExceeded:
 		return http.StatusRequestEntityTooLarge

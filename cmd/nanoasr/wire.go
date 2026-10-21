@@ -206,7 +206,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 
 	return &server{
 		service:    svc,
-		models:     service.NewModels(reg, models),
+		models:     modelService(cfg, reg, models),
 		registry:   reg,
 		pool:       models,
 		vad:        segmenter,
@@ -224,6 +224,32 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		isolationModels: isoModels,
 		isolationMB:     isoMB,
 	}, nil
+}
+
+// modelService is the model administration surface, told which models the
+// server holds outside the pool so it refuses to delete them from under it.
+func modelService(cfg config.Config, reg registry.Registry, p *pool.Pool) *service.Models {
+	m := service.NewModels(reg, p)
+	if cfg.VAD.Enabled {
+		m.Reserve(cfg.VAD.Model, "voice activity detector")
+	}
+	if cfg.API.DialectEnabled(config.DialectRealtime) {
+		m.Reserve(cfg.Realtime.Model, "streaming model")
+	}
+	if cfg.Diarization.Enabled {
+		if cfg.Diarization.Backend == config.DiarizationSherpa {
+			m.Reserve(cfg.Diarization.SegmentationModel, "diarization segmentation model")
+			m.Reserve(cfg.Diarization.EmbeddingModel, "diarization embedding model")
+		} else {
+			m.Reserve(cfg.Diarization.Model, "diarization model")
+		}
+	}
+	m.Reserve(cfg.PostProc.Punctuation.Model, "punctuation model")
+	if cfg.Isolation.Enabled {
+		m.Reserve(cfg.Isolation.Model, "voice isolation model")
+		m.Reserve(cfg.Isolation.EmbeddingModel, "voice isolation embedding model")
+	}
+	return m
 }
 
 // resume brings the previous process's work forward.
@@ -340,6 +366,7 @@ func buildRegistry(cfg config.Config, log *slog.Logger) (*registry.Remote, error
 
 	remote, err := registry.NewRemote(local, downloader, registry.RemoteOptions{
 		AllowDownload: cfg.Registry.AllowDownload,
+		ExplicitOnly:  !cfg.Registry.AutoDownload,
 		StrictLicense: cfg.Registry.StrictLicense,
 		Concurrency:   cfg.Registry.DownloadConcurrency,
 		CatalogYAML:   catalogYAML,

@@ -29,6 +29,14 @@ type Registry interface {
 	Fetch(ctx context.Context, id string) (<-chan core.DownloadProgress, error)
 	// Dir returns the directory of an already-present model.
 	Dir(id string) (string, error)
+
+	// Remove deletes a model from disk. A model still downloading is
+	// refused; whether one is in use is for the caller to know.
+	Remove(ctx context.Context, id string) error
+	// Cancel stops a download in progress and reports whether there was one.
+	Cancel(id string) bool
+	// Downloading reports whether a download of id is in progress.
+	Downloading(id string) bool
 }
 
 // Downloader fetches and unpacks a model archive.
