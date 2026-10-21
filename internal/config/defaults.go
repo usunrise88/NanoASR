@@ -91,7 +91,7 @@ func Default() Config {
 				Rule3MinUtteranceLength: 20,
 			},
 		},
-		Registry: Registry{AllowDownload: true, DownloadConcurrency: 2},
+		Registry: Registry{AllowDownload: true, AutoDownload: true, DownloadConcurrency: 2},
 		Jobs: Jobs{
 			QueueSize: 100,
 			// Four gigabytes: enough for a realistic backlog of hour-long

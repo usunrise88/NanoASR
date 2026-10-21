@@ -105,7 +105,10 @@ func (fakeRegistry) Ensure(context.Context, string) (string, error)       { retu
 func (fakeRegistry) Fetch(context.Context, string) (<-chan core.DownloadProgress, error) {
 	return nil, nil
 }
-func (fakeRegistry) Dir(string) (string, error) { return "/models", nil }
+func (fakeRegistry) Dir(string) (string, error)           { return "/models", nil }
+func (fakeRegistry) Remove(context.Context, string) error { return nil }
+func (fakeRegistry) Cancel(string) bool                   { return false }
+func (fakeRegistry) Downloading(string) bool              { return false }
 
 // --- harness ----------------------------------------------------------------
 

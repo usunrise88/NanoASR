@@ -78,6 +78,8 @@ func (fakeModels) Load(context.Context, string) error           { return nil }
 func (fakeModels) Unload(context.Context, string) error         { return nil }
 func (fakeModels) Pin(context.Context, string, bool) error      { return nil }
 func (fakeModels) Reload(context.Context, string, string) error { return nil }
+func (fakeModels) CancelDownload(context.Context, string) error { return nil }
+func (fakeModels) Delete(context.Context, string) error         { return nil }
 
 func sampleResult() *core.Result {
 	speaker := "spk_0"

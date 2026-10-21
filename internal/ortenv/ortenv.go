@@ -38,9 +38,19 @@ func runtimeLibrary() (string, error) {
 		return "libonnxruntime.so", nil
 	case "windows":
 		return "onnxruntime.dll", nil
+	case "darwin":
+		// macOS links the dylib by its @rpath install name, which a bare
+		// dlopen does not search for. The path of the copy already loaded
+		// does match it, and dlopen hands back that same image.
+		paths, err := loadedRuntime()
+		if err != nil {
+			return "", err
+		}
+		if len(paths) != 1 {
+			return "", fmt.Errorf("expected one onnxruntime in the process, found %d: %v", len(paths), paths)
+		}
+		return paths[0], nil
 	default:
-		// macOS links the dylib by an install name a bare dlopen does not
-		// match, and the release matrix builds no darwin binary anyway.
 		return "", fmt.Errorf("onnxruntime engines are not supported on %s", runtime.GOOS)
 	}
 }

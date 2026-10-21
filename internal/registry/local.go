@@ -161,6 +161,30 @@ func (l *Local) Dir(id string) (string, error) {
 	return e.dir, nil
 }
 
+// Remove deletes the model's directory and forgets it. The bare id removes
+// the revision it resolves to, which is the one a request would get.
+func (l *Local) Remove(ctx context.Context, id string) error {
+	e, err := l.lookup(id)
+	if err != nil {
+		return err
+	}
+	// The directory came from scanning root, but a manifest is a file anyone
+	// with the models directory can write: never delete outside it.
+	if filepath.Dir(e.dir) != filepath.Clean(l.root) {
+		return core.Errorf(core.CodeInternal, "model %s is not in %s", id, l.root)
+	}
+	if err := os.RemoveAll(e.dir); err != nil {
+		return core.Errorf(core.CodeInternal, "cannot remove model %s", id).WithCause(err)
+	}
+	return l.Refresh(ctx)
+}
+
+// Cancel has nothing to cancel: Local never downloads.
+func (l *Local) Cancel(string) bool { return false }
+
+// Downloading is always false: Local never downloads.
+func (l *Local) Downloading(string) bool { return false }
+
 func (l *Local) lookup(id string) (entry, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

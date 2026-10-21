@@ -95,9 +95,12 @@ type ModelInfo struct {
 	// instance was not built with. Empty for the base instance, which is what
 	// ordinary traffic uses. It exists so that a model appearing twice in this
 	// list explains itself rather than looking like a bug.
-	Variant      string       `json:"variant,omitempty"`
-	RefCount     int          `json:"ref_count"`
-	RSSMB        int          `json:"rss_mb"`
+	Variant  string `json:"variant,omitempty"`
+	RefCount int    `json:"ref_count"`
+	RSSMB    int    `json:"rss_mb"`
+	// SizeBytes is what downloading the model costs, for the catalog: the
+	// archive and every file fetched beside it. Zero when unknown.
+	SizeBytes    int64        `json:"size_bytes,omitempty"`
 	LastUsedUnix int64        `json:"last_used_unix,omitempty"`
 	Capabilities Capabilities `json:"capabilities"`
 }
@@ -119,6 +122,12 @@ type ModelService interface {
 	Catalog(ctx context.Context) ([]ModelInfo, error)
 
 	Download(ctx context.Context, id string) (<-chan DownloadProgress, error)
+	// CancelDownload stops a download in progress.
+	CancelDownload(ctx context.Context, id string) error
+	// Delete removes a downloaded model from disk. A model serving a request,
+	// downloading, or held by the server since it started is refused with
+	// CodeModelInUse.
+	Delete(ctx context.Context, id string) error
 	Load(ctx context.Context, id string) error
 	Unload(ctx context.Context, id string) error
 	Pin(ctx context.Context, id string, pinned bool) error

@@ -54,12 +54,14 @@ func (a *Adapter) Mount(mux *http.ServeMux, svc core.Service, deps adapter.Deps)
 	a.mountIsolation(mux, deps)
 
 	for pattern, h := range map[string]http.HandlerFunc{
-		"POST /api/v1/models/{id}/download": a.download(deps), // SSE progress
-		"POST /api/v1/models/{id}/load":     a.load(deps),
-		"POST /api/v1/models/{id}/unload":   a.unload(deps),
-		"POST /api/v1/models/{id}/pin":      a.pin(deps),
-		"POST /api/v1/models/{id}/reload":   a.reload(deps), // hot swap
-		"GET /api/v1/config":                a.config(deps),
+		"POST /api/v1/models/{id}/download":   a.download(deps), // SSE progress
+		"DELETE /api/v1/models/{id}/download": a.cancelDownload(deps),
+		"DELETE /api/v1/models/{id}":          a.deleteModel(deps),
+		"POST /api/v1/models/{id}/load":       a.load(deps),
+		"POST /api/v1/models/{id}/unload":     a.unload(deps),
+		"POST /api/v1/models/{id}/pin":        a.pin(deps),
+		"POST /api/v1/models/{id}/reload":     a.reload(deps), // hot swap
+		"GET /api/v1/config":                  a.config(deps),
 	} {
 		mux.Handle(pattern, admin(h))
 	}
@@ -312,6 +314,34 @@ func (*Adapter) download(deps adapter.Deps) http.HandlerFunc {
 				}
 			}
 		}
+	}
+}
+
+func (*Adapter) cancelDownload(deps adapter.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if deps.Models == nil {
+			WriteProblem(w, r, core.Errorf(core.CodeInternal, "model service is not configured"))
+			return
+		}
+		if err := deps.Models.CancelDownload(r.Context(), r.PathValue("id")); err != nil {
+			WriteProblem(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (*Adapter) deleteModel(deps adapter.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if deps.Models == nil {
+			WriteProblem(w, r, core.Errorf(core.CodeInternal, "model service is not configured"))
+			return
+		}
+		if err := deps.Models.Delete(r.Context(), r.PathValue("id")); err != nil {
+			WriteProblem(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

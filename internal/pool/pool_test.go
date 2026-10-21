@@ -49,7 +49,10 @@ func (r fakeReg) Ensure(context.Context, string) (string, error)       { return 
 func (r fakeReg) Fetch(context.Context, string) (<-chan core.DownloadProgress, error) {
 	return nil, nil
 }
-func (r fakeReg) Dir(string) (string, error) { return "/tmp/models", nil }
+func (r fakeReg) Dir(string) (string, error)         { return "/tmp/models", nil }
+func (fakeReg) Remove(context.Context, string) error { return nil }
+func (fakeReg) Cancel(string) bool                   { return false }
+func (fakeReg) Downloading(string) bool              { return false }
 
 func newTestPool(t *testing.T, opt Options) (*Pool, map[string]*fakeRec) {
 	t.Helper()

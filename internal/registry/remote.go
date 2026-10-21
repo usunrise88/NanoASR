@@ -20,6 +20,12 @@ type RemoteOptions struct {
 	Concurrency int
 	// CatalogYAML overrides the built-in catalog, for a private mirror.
 	CatalogYAML []byte
+	// ExplicitOnly downloads a model only when somebody asks for it by
+	// name (Fetch, the download endpoint). Ensure, which a request naming an
+	// absent model reaches, then refuses instead of fetching: an application
+	// that lets its user choose what to download must not have a request
+	// pull a gigabyte behind their back.
+	ExplicitOnly bool
 }
 
 // Remote is a Local registry that can also download what the catalog offers.
@@ -115,6 +121,13 @@ func (r *Remote) Ensure(ctx context.Context, id string) (string, error) {
 	if dir, err := r.local.Dir(id); err == nil {
 		return dir, nil
 	}
+	if r.opt.ExplicitOnly && !r.Downloading(id) {
+		if _, ok := r.fromCatalog(id); ok {
+			return "", core.Errorf(core.CodeModelNotFound,
+				"model %q is not downloaded; download it first (POST /api/v1/models/%s/download)", id, id)
+		}
+		return r.local.Dir(id)
+	}
 
 	dl, err := r.begin(id)
 	if err != nil {
@@ -176,10 +189,51 @@ func (r *Remote) begin(id string) (*download, error) {
 		return dl, nil
 	}
 
-	dl := &download{done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(r.baseCtx)
+	dl := &download{done: make(chan struct{}), ctx: ctx, cancel: cancel}
 	r.inflight[m.ID] = dl
 	go r.run(m, dl)
 	return dl, nil
+}
+
+// Remove deletes an installed model. One still downloading is refused rather
+// than cancelled: the person who started it may not be the one removing it.
+func (r *Remote) Remove(ctx context.Context, id string) error {
+	if r.Downloading(id) {
+		return core.Errorf(core.CodeModelInUse,
+			"model %q is downloading; cancel the download first", id)
+	}
+	return r.local.Remove(ctx, id)
+}
+
+// Cancel stops the download of id. Every caller waiting on it gets the
+// cancellation as its outcome, and nothing of it is left on disk.
+func (r *Remote) Cancel(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	dl, ok := r.inflight[r.canonical(id)]
+	if ok {
+		dl.cancelled = true
+		dl.cancel()
+	}
+	return ok
+}
+
+// Downloading reports whether id is being fetched right now.
+func (r *Remote) Downloading(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.inflight[r.canonical(id)]
+	return ok
+}
+
+// canonical is the id downloads are keyed by: a catalog entry named by its
+// key ("id@revision") is the same download as one named by its id.
+func (r *Remote) canonical(id string) string {
+	if m, ok := r.fromCatalog(id); ok {
+		return m.ID
+	}
+	return id
 }
 
 // run performs one download and fans its progress out to every subscriber.
@@ -187,20 +241,25 @@ func (r *Remote) run(m Manifest, dl *download) {
 	defer func() {
 		r.mu.Lock()
 		delete(r.inflight, m.ID)
+		cancelled := dl.cancelled
 		r.mu.Unlock()
+		dl.cancel()
 
+		if cancelled {
+			dl.err = core.Errorf(core.CodeInvalidRequest, "the download of %s was cancelled", m.ID)
+		}
 		dl.finish(m.ID)
 	}()
 
 	select {
 	case r.slots <- struct{}{}:
 		defer func() { <-r.slots }()
-	case <-r.baseCtx.Done():
-		dl.err = r.baseCtx.Err()
+	case <-dl.ctx.Done():
+		dl.err = dl.ctx.Err()
 		return
 	}
 
-	progress, err := r.downloader.Download(r.baseCtx, m, r.local.root)
+	progress, err := r.downloader.Download(dl.ctx, m, r.local.root)
 	if err != nil {
 		dl.err = err
 		return
@@ -224,7 +283,7 @@ func (r *Remote) run(m Manifest, dl *download) {
 		return
 	}
 
-	if err := r.local.Refresh(r.baseCtx); err != nil {
+	if err := r.local.Refresh(dl.ctx); err != nil {
 		dl.err = err
 		return
 	}
@@ -258,6 +317,13 @@ type download struct {
 	done chan struct{}
 	dir  string
 	err  error
+
+	// ctx is the download's own, so one can be cancelled without the rest.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// cancelled is set under Remote.mu by Cancel, to tell a cancellation
+	// from a failure.
+	cancelled bool
 
 	mu          sync.Mutex
 	closed      bool

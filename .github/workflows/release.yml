@@ -1,8 +1,10 @@
 name: release
 
-# Four artefacts per tag: Linux and Windows, each with and without the embedded
-# web UI. The UI is a compile-time embed, so "without" is a separate binary
-# rather than a flag — which is the whole reason this matrix exists.
+# Six artefacts per tag: Linux and Windows, each with and without the embedded
+# web UI, and macOS on Apple silicon and Intel without it. The UI is a
+# compile-time embed, so "without" is a separate binary rather than a flag —
+# which is the whole reason this matrix exists. macOS ships headless because
+# it ships inside an application (nanoasr managed), which brings its own UI.
 on:
   push:
     tags: ["v*"]
@@ -60,6 +62,15 @@ jobs:
           - os: windows-latest
             goos: windows
             ui: "0"
+          # cgo against Apple's SDK: each architecture on its own runner.
+          - os: macos-15
+            goos: darwin
+            arch: arm64
+            ui: "0"
+          - os: macos-15-intel
+            goos: darwin
+            arch: amd64
+            ui: "0"
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -96,6 +107,7 @@ jobs:
         env:
           VERSION: ${{ inputs.tag || github.ref_name }}
           GOOS: ${{ matrix.goos }}
+          ARCH: ${{ matrix.arch || 'amd64' }}
           UI: ${{ matrix.ui }}
         run: |
           # Assigned first and echoed second, on purpose: a failing command
@@ -112,7 +124,8 @@ jobs:
         run: |
           mkdir -p check
           case "${{ matrix.goos }}" in
-            linux)   tar -xzf "${{ steps.dist.outputs.archive }}" -C check
+            linux|darwin)
+                     tar -xzf "${{ steps.dist.outputs.archive }}" -C check
                      bin=./nanoasr ;;
             # 7z rather than unzip: Git-bash on a Windows runner does not
             # necessarily carry unzip, and 7z is in the image.
@@ -136,6 +149,7 @@ jobs:
           [ "$diar_ver" = "$ort" ] || { echo "diarizer runs onnxruntime $diar_ver, sherpa-onnx $ort" >&2; exit 1; }
           case "${{ matrix.goos }}" in
             linux)   want='*/check/lib/libonnxruntime.so' ;;
+            darwin)  want='*/check/lib/libonnxruntime.dylib' ;;
             windows) want='*\\check\\onnxruntime.dll' ;;
           esac
           # shellcheck disable=SC2254
@@ -146,7 +160,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.goos }}-ui${{ matrix.ui }}
+          name: release-${{ matrix.goos }}-${{ matrix.arch || 'amd64' }}-ui${{ matrix.ui }}
           path: ${{ steps.dist.outputs.archive }}
 
   release:
@@ -233,7 +247,7 @@ jobs:
 
           ## Archives
 
-          Four of them, all self-contained apart from ffmpeg and the model
+          Six of them, all self-contained apart from ffmpeg and the model
           weights:
 
           | file | for |
@@ -242,10 +256,16 @@ jobs:
           | `nanoasr-<tag>-linux-amd64-noui.tar.gz` | Linux, headless |
           | `nanoasr-<tag>-windows-amd64.zip` | Windows, web UI included |
           | `nanoasr-<tag>-windows-amd64-noui.zip` | Windows, headless |
+          | `nanoasr-<tag>-darwin-arm64-noui.tar.gz` | macOS, Apple silicon, headless |
+          | `nanoasr-<tag>-darwin-amd64-noui.tar.gz` | macOS, Intel, headless |
 
           The native libraries travel inside the archive, so unpack the whole
-          thing rather than lifting the binary out: on Linux the RUNPATH points
-          at `./lib`, and on Windows the loader looks beside the `.exe`.
+          thing rather than lifting the binary out: on Linux and macOS the run
+          path points at `./lib`, and on Windows the loader looks beside the
+          `.exe`.
+
+          To ship NanoASR inside an application that runs it in the background,
+          see `nanoasr-embedded.md` in the repository: `nanoasr managed`.
 
           Then, in the unpacked directory:
 

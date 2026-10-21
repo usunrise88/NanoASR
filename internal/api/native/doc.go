@@ -183,11 +183,28 @@ func (*Adapter) Doc() adapter.Doc {
 			Method:  "GET",
 			Path:    "/api/v1/catalog",
 			Summary: "List the models available for download.",
+			Detail: "Each with its state here (absent, downloading or downloaded) and " +
+				"size_bytes, what downloading it costs.",
 		}, {
 			Method:  "POST",
 			Path:    "/api/v1/models/{id}/download",
 			Summary: "Download a catalog model, streaming progress as SSE.",
+			Detail: "Closing the stream does not stop the download; DELETE does. " +
+				"A second request for the same model joins the one running.",
+			Admin: true,
+		}, {
+			Method:  "DELETE",
+			Path:    "/api/v1/models/{id}/download",
+			Summary: "Cancel a download in progress.",
+			Detail:  "Everyone following it gets the cancellation as its last event; nothing of it stays on disk.",
 			Admin:   true,
+		}, {
+			Method:  "DELETE",
+			Path:    "/api/v1/models/{id}",
+			Summary: "Remove a downloaded model from disk.",
+			Detail: "409 model_in_use while it serves a request, downloads, or is held by the " +
+				"server since it started (the VAD, the streaming model, the diarizer).",
+			Admin: true,
 		}, {
 			Method:  "POST",
 			Path:    "/api/v1/models/{id}/load",

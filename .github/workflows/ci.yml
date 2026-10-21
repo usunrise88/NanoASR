@@ -60,6 +60,78 @@ jobs:
       - run: go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o dist/nanoasr ./cmd/nanoasr
       - name: smoke test
         run: ./dist/nanoasr version
+      - name: run as an application's background process
+        env:
+          NANOASR_MANAGED_BINARY: ${{ github.workspace }}/dist/nanoasr
+        run: go test ./cmd/nanoasr -run TestManagedBinary -v
+
+  # macOS ships inside applications (nanoasr managed), so it is built and
+  # tested here on every push rather than first meeting a Mac at release time.
+  macos:
+    runs-on: macos-15
+    needs: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: internal/ui/dist
+      - run: go vet ./...
+      - run: go test ./...
+      - name: archive, and run it from where it was unpacked
+        run: |
+          archive="$(UI=0 GOOS=darwin ARCH=arm64 VERSION=ci ./scripts/dist.sh)"
+          mkdir check && tar -xzf "$archive" -C check
+          out="$(cd check && ./nanoasr version)"
+          echo "$out"
+          # The run path, not the module cache, has to be where the libraries
+          # came from, or the archive only works on the machine that built it.
+          grep -q '^diarizer *onnxruntime .*/check/lib/libonnxruntime.dylib$' <<<"$out" ||
+            { echo "onnxruntime was not loaded from the archive" >&2; exit 1; }
+      - name: run as an application's background process
+        env:
+          NANOASR_MANAGED_BINARY: ${{ github.workspace }}/check/nanoasr
+        run: go test ./cmd/nanoasr -run TestManagedBinary -v
+
+  # Windows is where most of the applications that embed NanoASR run. The
+  # whole suite has never been made to pass there, so this holds the managed
+  # mode to it: its own tests, and the archive started the way an application
+  # starts it.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - name: ensure a C compiler
+        run: |
+          if ! command -v gcc >/dev/null; then
+            choco install mingw -y --no-progress
+            echo "C:\ProgramData\mingw64\mingw64\bin" >> "$GITHUB_PATH"
+          fi
+      - run: go test ./internal/managed
+      - name: archive
+        run: |
+          archive="$(UI=0 GOOS=windows VERSION=ci ./scripts/dist.sh)"
+          7z x -ocheck -bso0 -bsp0 "$archive"
+          (cd check && ./nanoasr.exe version)
+      - name: run as an application's background process
+        run: |
+          # The test binary links the same DLLs the archive carries; the
+          # loader finds them beside nanoasr.exe for the child, and on PATH
+          # for the test itself.
+          export PATH="$(cygpath -u "$GITHUB_WORKSPACE")/check:$PATH"
+          NANOASR_MANAGED_BINARY="$GITHUB_WORKSPACE\check\nanoasr.exe" \
+            go test ./cmd/nanoasr -run TestManagedBinary -v
 
   integration:
     runs-on: ubuntu-latest
