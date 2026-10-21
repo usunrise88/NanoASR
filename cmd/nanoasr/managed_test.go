@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -172,4 +174,24 @@ func TestManagedSetupIsKeptForTheNextStart(t *testing.T) {
 		t.Fatalf("the settings did not survive the restart: %v", settings)
 	}
 	again.stop(t)
+}
+
+// A start that fails says why, once, and nothing after: no stop was asked for.
+func TestManagedFailureIsOneFatalEvent(t *testing.T) {
+	dir := t.TempDir()
+	// A database that cannot be opened fails the server after the watchers
+	// are running, which is where a false "stopping" could come from.
+	if err := os.MkdirAll(filepath.Join(dir, "nanoasr.db"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inst := startManaged(t, dir)
+	if ev := inst.next(t); ev["event"] != "fatal" || ev["code"] != "server_failed" {
+		t.Fatalf("first event: %v", ev)
+	}
+	if err := <-inst.done; err == nil {
+		t.Fatal("the start did not fail")
+	}
+	for ev := range inst.events {
+		t.Errorf("an event after the fatal one: %v", ev)
+	}
 }

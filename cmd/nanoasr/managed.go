@@ -12,7 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -127,6 +127,11 @@ func managedCommand(ctx context.Context, args []string, stdin io.Reader, stdout 
 	defer cancel(nil)
 	ctx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
+	// Set before the cancels above run on the way out: the context ending
+	// because this function returned — after a fatal event, say — is not a
+	// stop anybody asked for, and must not be reported as one.
+	var returned atomic.Bool
+	defer returned.Store(true)
 	stop := func(reason string) { cancel(errors.New(reason)) }
 	if *watchStdin {
 		managed.WatchStdin(stdin, stop)
@@ -136,17 +141,17 @@ func managedCommand(ctx context.Context, args []string, stdin io.Reader, stdout 
 			return fail("parent_gone", err)
 		}
 	}
-	var stopping sync.Once
 	go func() {
 		<-ctx.Done()
-		stopping.Do(func() {
-			reason := "signal"
-			if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
-				reason = cause.Error()
-			}
-			log.Info("stopping", "reason", reason)
-			events.Emit(managed.EventStopping, map[string]any{"reason": reason})
-		})
+		if returned.Load() {
+			return
+		}
+		reason := "signal"
+		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+			reason = cause.Error()
+		}
+		log.Info("stopping", "reason", reason)
+		events.Emit(managed.EventStopping, map[string]any{"reason": reason})
 	}()
 
 	// The port is the system's choice: a fixed one is taken on some machine
