@@ -389,6 +389,10 @@ func buildDecoder(cfg config.Config, log *slog.Logger) *audio.Router {
 	if ff := audio.NewFFmpegDecoder(cfg.Audio.FFmpegPath, cfg.Audio.FFmpegTimeout.Duration); ff != nil {
 		decoders = append(decoders, ff)
 		log.Info("ffmpeg available", "path", ff.Path())
+		if !ff.SoxR() {
+			log.Warn("ffmpeg is built without libsoxr; resampling with the default resampler",
+				"path", ff.Path())
+		}
 	} else {
 		log.Warn("ffmpeg not found; only WAV and raw PCM will be accepted",
 			"configured_path", cfg.Audio.FFmpegPath)
