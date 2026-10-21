@@ -217,18 +217,41 @@ Archives are published on the [releases page](https://github.com/usunrise88/Nano
 | `nanoasr-<tag>-linux-amd64-noui.tar.gz` | Linux, without the web interface |
 | `nanoasr-<tag>-windows-amd64.zip` | Windows, web interface included |
 | `nanoasr-<tag>-windows-amd64-noui.zip` | Windows, without the web interface |
+| `nanoasr-<tag>-darwin-arm64-noui.tar.gz` | macOS, Apple silicon, without the web interface |
+| `nanoasr-<tag>-darwin-amd64-noui.tar.gz` | macOS, Intel, without the web interface |
 
 The web interface is embedded at compile time, so the build without it is a separate
 binary rather than a runtime flag.
 
 The native libraries (`libonnxruntime`, `libsherpa-onnx`) are contained in the archive.
-Unpack it in full: on Linux the binary's `RUNPATH` points at `./lib`, and on Windows the
-loader looks for the DLLs next to the executable.
+Unpack it in full: on Linux and macOS the binary's run path points at `./lib`, and on
+Windows the loader looks for the DLLs next to the executable.
 
 ```bash
 tar -xzf nanoasr-v1.1.0-linux-amd64.tar.gz -C ~/nanoasr
 cd ~/nanoasr
 ```
+
+### Inside an application
+
+An application that ships NanoASR — a softphone, a desktop recorder — runs it as a
+background child process with `nanoasr managed`, without a configuration file and
+without administrative rights, on Windows, Linux and macOS:
+
+```bash
+nanoasr managed -data-dir <dir> -parent-pid <application pid>
+```
+
+It takes a free loopback port, makes up a token and prints both on stdout as one line of
+JSON; it stops when its stdin closes, which the operating system does when the
+application exits. The first start has no settings: the application chooses the models
+through `PATCH /api/v1/managed/settings`, downloads them, and every later start comes
+up with that choice. Models are downloaded only when asked for by name.
+
+[`nanoasr-embedded.md`](nanoasr-embedded.md) is the whole contract, written for whoever
+integrates it: where the binaries go on each platform, how to start, stop and restart
+the process, the events, the first-run setup, and where the database and the models are
+kept.
 
 ### systemd service
 
@@ -594,8 +617,10 @@ there, and `GET /docs/openapi.json` is the same endpoint list for a client gener
 | `PATCH` | `/api/v1/jobs/{id}` | Name a diarized job's speakers: `{"speaker_names": {"spk_0": "Anna"}}` |
 | `DELETE` | `/api/v1/jobs/{id}` | Cancel a job |
 | `GET` | `/api/v1/models` | Resident and installed models |
-| `GET` | `/api/v1/catalog` | Built-in model catalog |
+| `GET` | `/api/v1/catalog` | Built-in model catalog, each entry with its state and download size |
 | `POST` | `/api/v1/models/{id}/download` | Download weights, progress over SSE |
+| `DELETE` | `/api/v1/models/{id}/download` | Cancel a download |
+| `DELETE` | `/api/v1/models/{id}` | Remove a downloaded model from disk |
 | `POST` | `/api/v1/models/{id}/load` | Load a model into memory |
 | `POST` | `/api/v1/models/{id}/unload` | Unload a model |
 | `POST` | `/api/v1/models/{id}/pin` | Protect from LRU eviction |
@@ -1796,6 +1821,12 @@ and the checksum is required, so a catalog mirror cannot write outside the model
 directory or hand over bytes nobody pinned. `nanoasr models pull` on a model that is
 already installed fetches the ones it is missing and wires them into the manifest beside
 the weights, which is how an installation from an earlier version catches up.
+
+A request that names a catalog model not yet on disk downloads it first. With
+`registry.auto_download: false` it is refused instead, and a model arrives only through
+`nanoasr models pull` or `POST /api/v1/models/{id}/download` — the setting for an
+application that lets its user decide what to download, and the one `nanoasr managed`
+runs with.
 
 Models are loaded on demand, evicted by LRU and can be hot-swapped. Concurrent residency
 is bounded by `asr.max_resident_models` and `asr.max_model_rss_mb`.
