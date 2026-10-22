@@ -80,6 +80,9 @@ type graphs interface {
 	// chunk extracts k frames from wav, which holds exactly (k-1)*hop+nfft
 	// samples, and replaces h and c with the state after them.
 	chunk(wav []float32, k int, v *Voice, h, c []float32) ([]float32, error)
+	// fixedFrames is how many frames every call but a stream's last must
+	// carry, or 0 when any number will do.
+	fixedFrames() int
 	close() error
 }
 
@@ -190,7 +193,7 @@ func (s *Stream) Flush() ([]float32, error) {
 	if need := (frames-1)*hop + nfft; len(s.buf) < need {
 		s.buf = append(s.buf, make([]float32, need-len(s.buf))...)
 	}
-	out, err := s.run()
+	out, err := s.drain(true)
 	if err != nil {
 		return nil, err
 	}
@@ -199,10 +202,22 @@ func (s *Stream) Flush() ([]float32, error) {
 	return out, nil
 }
 
-func (s *Stream) run() ([]float32, error) {
+func (s *Stream) run() ([]float32, error) { return s.drain(false) }
+
+// drain extracts every frame the buffer holds. A graph of fixed size is only
+// called with a full chunk until the stream ends, because the state it
+// returns after zero padding is not the state after the audio that follows.
+func (s *Stream) drain(final bool) ([]float32, error) {
 	var out []float32
+	per := framesPerRun
+	if f := s.g.fixedFrames(); f > 0 {
+		per = f
+	}
 	for len(s.buf) >= nfft {
-		k := min(framesPerRun, 1+(len(s.buf)-nfft)/hop)
+		k := min(per, 1+(len(s.buf)-nfft)/hop)
+		if k < per && s.g.fixedFrames() > 0 && !final {
+			break
+		}
 		fr, err := s.g.chunk(s.buf[:(k-1)*hop+nfft], k, s.v, s.h, s.c)
 		if err != nil {
 			return nil, err
@@ -401,6 +416,8 @@ func (g *ortGraphs) chunk(wav []float32, k int, v *Voice, h, c []float32) ([]flo
 	copy(c, cOut)
 	return frames, nil
 }
+
+func (g *ortGraphs) fixedFrames() int { return 0 }
 
 func (g *ortGraphs) close() error {
 	var first error

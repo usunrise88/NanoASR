@@ -14,11 +14,20 @@ type identity struct {
 	calls int
 	// state counts the calls through h, to see that it crosses chunks.
 	lastState float32
+	// fixed, when set, makes the graph one of fixed size: every call must
+	// carry exactly this many frames except the last, which may carry fewer.
+	fixed int
+	short int // calls with fewer frames than fixed
 }
 
 func (g *identity) enroll(sample []float32) (*Voice, error) { return &Voice{}, nil }
 
+func (g *identity) fixedFrames() int { return g.fixed }
+
 func (g *identity) chunk(wav []float32, k int, _ *Voice, h, c []float32) ([]float32, error) {
+	if g.fixed > 0 && k != g.fixed {
+		g.short++
+	}
 	g.calls++
 	g.lastState = h[0]
 	h[0]++
@@ -146,5 +155,42 @@ func TestEnrollWantsThreeSeconds(t *testing.T) {
 	}
 	if _, err := m.Enroll(make([]float32, EnrollSamples)); err != nil {
 		t.Error(err)
+	}
+}
+
+// A graph of fixed size sees whole chunks only, whatever the pushes are, and
+// the output is the same as from one that takes any size.
+func TestFixedSizeGraphGetsWholeChunks(t *testing.T) {
+	x := signal(SampleRate*3 + 777)
+	g := &identity{fixed: 100}
+	m := &Model{g: g}
+	s := m.NewStream(&Voice{})
+	var out []float32
+	for at := 0; at < len(x); at += 3001 {
+		y, err := s.Push(x[at:min(at+3001, len(x))])
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, y...)
+	}
+	y, err := s.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out = append(out, y...)
+	if g.short > 1 {
+		t.Errorf("%d calls carried a partial chunk; only the last may", g.short)
+	}
+	ref, err := (&Model{g: &identity{}}).Isolate(context.Background(), x, &Voice{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) < len(x) {
+		t.Fatalf("%d samples out of %d", len(out), len(x))
+	}
+	for i := range x {
+		if d := math.Abs(float64(out[i] - ref[i])); d > 1e-5 {
+			t.Fatalf("sample %d: %g, any-size graph gives %g", i, out[i], ref[i])
+		}
 	}
 }

@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"runtime"
 	"time"
 
+	"github.com/usunrise88/nanoasr/internal/config"
 	"github.com/usunrise88/nanoasr/internal/core"
 	"github.com/usunrise88/nanoasr/internal/registry"
 )
@@ -33,6 +35,10 @@ type Settings struct {
 	// Isolation extracts one voice from a recording. It needs Diarization.
 	Isolation bool `json:"isolation"`
 
+	// Provider is where the models run: "cpu", or "coreml" on a Mac, which
+	// runs the CoreML build of every chosen model that has one on the Neural
+	// Engine. Empty is the CPU.
+	Provider string `json:"provider,omitempty"`
 	// Threads is each inference's thread count; 0 chooses from the CPU.
 	Threads int `json:"threads"`
 	// MaxConcurrent is how many files are transcribed at once; 0 is one.
@@ -151,6 +157,17 @@ func (s Settings) Validate(lookup Lookup) error {
 	if s.Isolation && !s.Diarization {
 		return core.Errorf(core.CodeInvalidRequest,
 			"isolation needs diarization: it finds the voices with it").WithParam("isolation")
+	}
+	switch s.Provider {
+	case "", config.ProviderCPU:
+	case config.ProviderCoreML:
+		if runtime.GOOS != "darwin" {
+			return core.Errorf(core.CodeInvalidRequest,
+				"provider coreml exists on macOS only").WithParam("provider")
+		}
+	default:
+		return core.Errorf(core.CodeInvalidRequest,
+			"provider must be cpu or coreml").WithParam("provider")
 	}
 	if s.Threads < 0 || s.Threads > maxThreads {
 		return core.Errorf(core.CodeInvalidRequest, "threads must be 0 to %d", maxThreads).WithParam("threads")

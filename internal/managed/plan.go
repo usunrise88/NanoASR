@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/usunrise88/nanoasr/internal/config"
+	"github.com/usunrise88/nanoasr/internal/registry"
 )
 
 // Features, in the order they are reported.
@@ -57,20 +58,36 @@ type Plan struct {
 // wants lists the models each feature needs under these settings.
 func (s Settings) wants() map[string][]string {
 	def := config.Default()
-	w := map[string][]string{FeatureVAD: {def.VAD.Model}}
+	w := map[string][]string{FeatureVAD: {s.model(def.VAD.Model)}}
 	if s.DefaultModel != "" {
-		w[FeatureTranscription] = []string{s.DefaultModel}
+		w[FeatureTranscription] = []string{s.model(s.DefaultModel)}
 	}
 	if s.RealtimeModel != "" {
-		w[FeatureRealtime] = []string{s.RealtimeModel}
+		w[FeatureRealtime] = []string{s.model(s.RealtimeModel)}
 	}
 	if s.Diarization {
-		w[FeatureDiarization] = []string{s.diarizationModel()}
+		w[FeatureDiarization] = []string{s.model(s.diarizationModel())}
 	}
 	if s.Isolation {
-		w[FeatureIsolation] = []string{def.Isolation.Model, def.Isolation.EmbeddingModel}
+		w[FeatureIsolation] = []string{s.model(def.Isolation.Model), s.model(def.Isolation.EmbeddingModel)}
 	}
 	return w
+}
+
+// model is the build of a model these settings run: on provider coreml, its
+// CoreML build where the catalog has one, and the model itself otherwise.
+//
+// The settings keep naming the models the application chose; the build is a
+// consequence of the provider, so switching the provider back needs no other
+// change, and a model with no CoreML build keeps working on the CPU.
+func (s Settings) model(id string) string {
+	if s.Provider != config.ProviderCoreML || id == "" {
+		return id
+	}
+	if b := registry.CoreMLBuild(id); b != "" {
+		return b
+	}
+	return id
 }
 
 func (s Settings) diarizationModel() string {
@@ -111,7 +128,7 @@ func NewPlan(s Settings, o Options) (Plan, error) {
 	cfg.Audio.FFmpegPath = s.FFmpegPath
 
 	cfg.ASR.ModelsDir = o.Paths.Models
-	cfg.ASR.DefaultModel = s.DefaultModel
+	cfg.ASR.DefaultModel = s.model(s.DefaultModel)
 	started[FeatureTranscription] = wants[FeatureTranscription]
 	threads := s.Threads
 	if threads == 0 {
@@ -121,10 +138,20 @@ func NewPlan(s Settings, o Options) (Plan, error) {
 	}
 	cfg.ASR.NumThreads = threads
 	cfg.Isolation.NumThreads = threads
+	if s.Provider != "" {
+		cfg.ASR.Provider = s.Provider
+	}
+	if s.Provider == config.ProviderCoreML {
+		// The Neural Engine takes a window of segments per call, and fills it
+		// better the more segments a call is handed.
+		cfg.ASR.Batch.MaxSize = 64
+		cfg.ASR.Batch.MaxSeconds = 600
+	}
 	cfg.ASR.MaxResidentModels = 1
 	cfg.Jobs.MaxConcurrent = max(s.MaxConcurrent, 1)
 	cfg.ASR.InferenceSlots = cfg.Jobs.MaxConcurrent
 
+	cfg.VAD.Model = s.model(cfg.VAD.Model)
 	if present(wants[FeatureVAD]) {
 		started[FeatureVAD] = wants[FeatureVAD]
 	} else {
@@ -132,7 +159,7 @@ func NewPlan(s Settings, o Options) (Plan, error) {
 	}
 
 	if ids := wants[FeatureRealtime]; len(ids) > 0 && present(ids) {
-		cfg.Realtime.Model = s.RealtimeModel
+		cfg.Realtime.Model = s.model(s.RealtimeModel)
 		cfg.API.Dialects = append(cfg.API.Dialects, config.DialectRealtime)
 		started[FeatureRealtime] = ids
 	}
@@ -140,11 +167,13 @@ func NewPlan(s Settings, o Options) (Plan, error) {
 	if s.Diarization {
 		cfg.Diarization.Enabled = true
 		cfg.Diarization.Backend = config.DiarizationSortformer
-		cfg.Diarization.Model = s.diarizationModel()
+		cfg.Diarization.Model = s.model(s.diarizationModel())
 		started[FeatureDiarization] = wants[FeatureDiarization]
 	}
 	if s.Isolation {
 		cfg.Isolation.Enabled = true
+		cfg.Isolation.Model = s.model(cfg.Isolation.Model)
+		cfg.Isolation.EmbeddingModel = s.model(cfg.Isolation.EmbeddingModel)
 		started[FeatureIsolation] = wants[FeatureIsolation]
 	}
 

@@ -176,3 +176,8 @@ func unshift(ts []float32, seconds float64) []float32 {
 	}
 	return out
 }
+
+// WholeFile decodes uploaded recordings with any streaming recogniser, each
+// segment as one utterance — the adapter the streaming models of this package
+// use, for the streaming models of other engines.
+func WholeFile(s asr.Streaming) asr.Recognizer { return newWholeFile(s) }

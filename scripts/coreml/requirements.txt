@@ -1,0 +1,26 @@
+# What the converters in this directory were run with when the catalog's
+# CoreML archives were built (Python 3.12, macOS 15+ on Apple Silicon):
+#   uv venv --python 3.12 .venv && uv pip install -r requirements.txt
+# coremltools 9.0 warns that torch 2.7.1 is untested; 2.7.0 behaves the same.
+coremltools==9.0
+torch==2.7.1
+torchaudio==2.7.1
+numpy==1.26.4
+onnx==1.23.2
+onnxruntime==1.31.0
+safetensors==0.8.0
+huggingface_hub==1.33.0
+sentencepiece==0.2.2
+soundfile==0.14.0
+omegaconf==2.3.1
+hydra-core==1.3.7
+pyyaml==6.0.3
+scipy==1.17.1
+requests==2.34.2
+# Nemotron-3-Diarization's reference implementation, at the revision the ONNX
+# export pins (scripts/diar-research/requirements-export.txt); its feature
+# extractor, whose filterbank the package carries, needs librosa.
+librosa==0.11.0
+transformers @ git+https://github.com/huggingface/transformers@f324707307757d9c0b8dac1c4462eceff911fa2f
+# Voxlock's speaker encoder is WeSpeaker's ECAPA, at the revision voxlock pins.
+wespeaker @ git+https://github.com/wenet-e2e/wespeaker.git@8f53b6485d9f88a207bd17e7f8dba899495ec794

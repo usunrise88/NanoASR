@@ -621,6 +621,7 @@ Content-Type: application/json
 | `diarization` | bool | `false` | Разрешить `diarize=true` (кто говорит). |
 | `diarization_model` | string | `""` (= `nemotron-3-diarization`) | Модель диаризации, `kind: diarization`. |
 | `isolation` | bool | `false` | Выделение голосов. Требует `diarization: true`. |
+| `provider` | string | `""` (= `cpu`) | Где работают модели: `cpu` или, только на macOS 15+, `coreml` — Neural Engine и GPU. С `coreml` вместо каждой выбранной модели, у которой в каталоге есть CoreML-сборка (`<id>-coreml`), скачивается и работает она; в настройках остаются исходные имена. |
 | `threads` | int | `0` (авто: четверть ядер, 1–4) | Потоков на одно распознавание, 0–64. |
 | `max_concurrent` | int | `0` (= 1) | Сколько файлов распознавать одновременно, 0–16. |
 | `ffmpeg_path` | string | `""` | Путь к ffmpeg для сжатых форматов (mp3, opus, m4a…). Без него принимаются только WAV и сырой PCM. Файл должен существовать. |

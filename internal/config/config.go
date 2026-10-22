@@ -146,11 +146,15 @@ type VAD struct {
 const (
 	ProviderCPU  = "cpu"
 	ProviderCUDA = "cuda"
+	// ProviderCoreML runs the recognisers on Apple's CoreML, which puts them on
+	// the GPU and the Neural Engine. It exists on macOS only.
+	ProviderCoreML = "coreml"
 )
 
 type ASR struct {
 	ModelsDir string `yaml:"models_dir"`
-	// Provider is the onnxruntime execution provider: "cpu" or "cuda".
+	// Provider is the onnxruntime execution provider, "cpu" or "cuda", or, on
+	// macOS 15 and later, "coreml".
 	//
 	// It is one setting for every recogniser rather than one per model,
 	// because the provider is a property of the native libraries the process
@@ -159,7 +163,12 @@ type ASR struct {
 	// refuses to run rather than fall back to the CPU without saying so, which
 	// is what onnxruntime does on its own.
 	//
-	// VAD stays on the CPU whatever this says — see sherpa.ProviderFor.
+	// "coreml" is not handed to onnxruntime: it runs the models converted for
+	// Core ML (the catalog's "-coreml" entries) and serves a request naming a
+	// model with its build when that is installed. Whatever has no build runs
+	// on the CPU.
+	//
+	// Under cpu and cuda the VAD stays on the CPU — see sherpa.ProviderFor.
 	Provider          string   `yaml:"provider"`
 	DefaultModel      string   `yaml:"default_model"`
 	MaxResidentModels int      `yaml:"max_resident_models"`

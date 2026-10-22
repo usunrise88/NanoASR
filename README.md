@@ -441,6 +441,91 @@ the `sherpa` diarization backend. Two things stay on the CPU whatever it says:
   CPU; moving it would be a change in `internal/diarize/sortformer` and is not one to
   make without a device to measure it on.
 
+### Apple silicon: the Neural Engine
+
+On a Mac with Apple silicon and macOS 15 or later, `asr.provider: coreml` moves
+recognition, the VAD, diarization and voice isolation onto the Neural Engine and the GPU.
+It does so with models converted for Core ML, which the catalog lists under their own
+ids — the model's id with `-coreml` after it — and which download like any other:
+
+| CoreML build | Converted from | Runs on |
+|---|---|---|
+| `gigaam-v3-ctc-punct-ru-coreml` | `gigaam-v3-ctc-punct-ru` | Neural Engine |
+| `gigaam-v3-rnnt-punct-ru-coreml` | `gigaam-v3-rnnt-punct-ru` | Neural Engine |
+| `silero-vad-v5-coreml` | `silero-vad-v5` | Neural Engine |
+| `nemotron-3-diarization-coreml` | `nemotron-3-diarization` | Neural Engine |
+| `voxlock-int8-coreml` | `voxlock-int8` | GPU and Neural Engine |
+| `campplus-sv-zh-en-coreml` | `campplus-sv-zh-en` | GPU and Neural Engine |
+| `t-one-ctc-ru-coreml` | `t-one-ctc-ru` | GPU |
+| `nemotron-3.5-streaming-multi-coreml` | `nemotron-3.5-streaming-multi` | Neural Engine |
+
+The configuration names the builds:
+
+```yaml
+asr:
+  provider: coreml
+  default_model: gigaam-v3-ctc-punct-ru-coreml
+  batch:
+    # GigaAM's encoder takes 20 s of packed segments per call: hand it more of
+    # them at once than a CPU batch would hold.
+    max_size: 64
+    max_seconds: 600
+vad:
+  model: silero-vad-v5-coreml
+diarization:
+  model: nemotron-3-diarization-coreml
+realtime:
+  model: t-one-ctc-ru-coreml
+isolation:
+  model: voxlock-int8-coreml
+  embedding_model: campplus-sv-zh-en-coreml
+```
+
+```bash
+nanoasr models pull gigaam-v3-ctc-punct-ru-coreml silero-vad-v5-coreml nemotron-3-diarization-coreml t-one-ctc-ru-coreml
+```
+
+A request may go on naming the model itself: with `asr.provider: coreml`,
+`model=gigaam-v3-rnnt-punct-ru` is served by `gigaam-v3-rnnt-punct-ru-coreml` when that
+is installed, and by the ONNX model on the CPU when it is not. A request for hotwords or
+beam search keeps the ONNX model, because the builds decode greedily. An application that
+runs NanoASR as its background process sets `"provider": "coreml"` in its settings
+instead ([nanoasr-embedded.md](nanoasr-embedded.md)), and the builds of the models it
+chose are the ones downloaded and run.
+
+Measured on an M1 against the same server on the CPU (two threads), over a 37.7-minute
+meeting recording:
+
+| | CPU | CoreML |
+|---|---|---|
+| Transcription, `gigaam-v3-ctc-punct-ru` | 138 s | 9.1 s |
+| Transcription, `gigaam-v3-rnnt-punct-ru` | 151 s | 15.7 s |
+| Transcription with speakers (`diarize=true`) | 256 s | 16.9 s |
+| `/v1/audio/transcriptions`, 5 minutes | 22.5 s | 1.3 s |
+| Voice isolation of 5 minutes, three voices: analysis, extraction, transcript | 27 s, 334 s, 35 s | 3.1 s, 75 s, 2.1 s |
+
+On the same segments the CoreML GigaAM builds are 0.42% (CTC) and 0.53% (transducer) CER
+from GigaAM's fp32 checkpoints. Against the CPU path the whole transcript differs by about 3%, the VAD's
+different cuts and the ONNX models' int8 weights between them — as much as the CPU's own
+CTC and transducer transcripts differ from each other. The speakers' talk times agree to
+within 1%. Both streaming builds keep up with audio sent at four times real time, the
+first words arriving within 0.6 s.
+
+onnxruntime's own CoreML provider is not used: measured on every model in the catalog it
+was 10 to 30 times slower than the CPU, and on T-one it aborted the process. Whatever has
+no build — the punctuation model, the other recognisers, the `sherpa` diarization
+backend — runs on the CPU as it does under `asr.provider: cpu`.
+
+The first load of a model on a machine compiles it for the Neural Engine, which takes
+from seconds to a minute and a half (Voxlock). macOS caches the result, so later starts
+load in under a second. The VAD and the realtime model load before the server listens:
+measured on an M1, the first start with new models took 40 s, 31 of them the VAD's
+compile, and the next one 5 s. Recognition,
+diarization and isolation models load on first use, and that request waits for them.
+
+How the builds are made, from their authors' weights and with pinned versions, is in
+[scripts/coreml](scripts/coreml/README.md).
+
 ### Building from source
 
 Requires Go 1.25+, a C/C++ compiler (cgo is mandatory — sherpa-onnx is written in C++)
@@ -1211,6 +1296,7 @@ list of which installed models the dictionaries can actually be applied to.
 | `streaming-zipformer-small-ru` | no | streaming: a recogniser is biased when it is built, not per request |
 | `nemotron-3.5-streaming-multi` | no | streaming, and its package carries no subword vocabulary to tokenise phrases with |
 | `zipformer-small-en` | no | transducer with subwords, and no vocabulary file is published for it |
+| `gigaam-v3-ctc-punct-ru-coreml`, `gigaam-v3-rnnt-punct-ru-coreml`, `t-one-ctc-ru-coreml`, `nemotron-3.5-streaming-multi-coreml` | no | the [CoreML builds](#apple-silicon-the-neural-engine) decode greedily |
 
 `gigaam-v3-rnnt-punct-ru` is the entry to use for biasing, and it is also the Russian
 model with the best vocabulary — 1024 subwords, punctuation and capitals of its own, and
@@ -1869,6 +1955,14 @@ separate punctuation model is required for Russian.
 | `campplus-sv-zh-en` | Speaker embeddings | multi | 28 MB | Permitted |
 | `wespeaker-voxceleb-resnet34` | Speaker embeddings | multi | 27 MB | Permitted |
 | `voxlock-int8` | Voice isolation (target speaker) | multi | 79 MB | Permitted (Apache-2.0) |
+| `gigaam-v3-ctc-punct-ru-coreml` | Recognition, CTC, [Neural Engine](#apple-silicon-the-neural-engine) | ru | 409 MB | Permitted (MIT) |
+| `gigaam-v3-rnnt-punct-ru-coreml` | Recognition, transducer, Neural Engine | ru | 412 MB | Permitted (MIT) |
+| `t-one-ctc-ru-coreml` | Streaming recognition, CTC, 8 kHz, GPU | ru | 133 MB | Permitted |
+| `nemotron-3.5-streaming-multi-coreml` | Streaming recognition, transducer, 560 ms, Neural Engine | 32 locales | 572 MB | Permitted (OpenMDW-1.1) |
+| `silero-vad-v5-coreml` | Voice activity detection, Neural Engine | multi | 0.4 MB | Permitted |
+| `nemotron-3-diarization-coreml` | Diarization, Neural Engine | multi | 154 MB | Permitted |
+| `campplus-sv-zh-en-coreml` | Speaker embeddings, GPU and Neural Engine | multi | 14 MB | Permitted |
+| `voxlock-int8-coreml` | Voice isolation (target speaker), GPU and Neural Engine | multi | 52 MB | Permitted (Apache-2.0) |
 
 "Unconfirmed" means nobody has established the terms from the download itself. The
 `registry.strict_license` setting refuses to download weights whose commercial use is

@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -330,4 +333,117 @@ func encodeStereo(t *testing.T, left, right int, args ...string) []byte {
 		t.Fatalf("encoding stereo fixture: %v\n%s", err, stderr.String())
 	}
 	return out.Bytes()
+}
+
+// writeFFmpegScript installs a stand-in ffmpeg. It is a shell script, so the
+// tests that use it are POSIX only.
+func writeFFmpegScript(t *testing.T, body string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in ffmpeg is a shell script")
+	}
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// refusesSoxr is the script of an ffmpeg built without libsoxr: it fails on the
+// soxr resampler the way Homebrew's build does, and otherwise runs the real one.
+func refusesSoxr(real string) string {
+	return `case "$*" in
+*resampler=soxr*) echo "Requested resampling engine is unavailable" >&2; exit 1 ;;
+esac
+exec '` + real + `' "$@"
+`
+}
+
+func TestFFmpegArgsChooseTheResampler(t *testing.T) {
+	for _, mode := range []core.ChannelMode{core.ChannelDownmix, core.ChannelFirst, core.ChannelSplit} {
+		for _, soxr := range []bool{true, false} {
+			d := &FFmpegDecoder{path: "ffmpeg", soxr: soxr}
+			args := strings.Join(d.args(Options{ChannelMode: mode}), " ")
+
+			if got := strings.Contains(args, "resampler=soxr"); got != soxr {
+				t.Errorf("%s, soxr=%v: soxr in the arguments = %v\n%s", mode, soxr, got, args)
+			}
+			if !strings.Contains(args, "aresample") {
+				t.Errorf("%s, soxr=%v: no resampling at all\n%s", mode, soxr, args)
+			}
+		}
+	}
+}
+
+func TestFFmpegProbesForSoxr(t *testing.T) {
+	cases := []struct {
+		name   string
+		script string
+		want   bool
+	}{
+		{"accepts soxr", "cat >/dev/null\n", true},
+		// Does not read stdin either, so the probe has to survive a broken pipe.
+		{"refuses soxr", `case "$*" in *resampler=soxr*) exit 1 ;; esac` + "\n", false},
+		{"fails outright", "exit 1\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := NewFFmpegDecoder(writeFFmpegScript(t, c.script), time.Second)
+			if d == nil {
+				t.Fatal("NewFFmpegDecoder returned nil for an executable file")
+			}
+			if d.SoxR() != c.want {
+				t.Errorf("SoxR() = %v, want %v", d.SoxR(), c.want)
+			}
+		})
+	}
+}
+
+// The failure this guards against was reported from a Mac: Homebrew's ffmpeg
+// has no libsoxr, so every compressed upload failed with "ffmpeg could not
+// decode this input" while WAV, which never reaches ffmpeg, worked.
+func TestFFmpegDecodesWithoutSoxr(t *testing.T) {
+	requireFFmpeg(t)
+	real, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewFFmpegDecoder(writeFFmpegScript(t, refusesSoxr(real)), 30*time.Second)
+	if d == nil || d.SoxR() {
+		t.Fatalf("decoder = %+v, want one that has detected the missing libsoxr", d)
+	}
+
+	t.Run("downmix", func(t *testing.T) {
+		raw := encodeWith(t, "-f", "mp3")
+		tracks, err := d.Decode(context.Background(), bytes.NewReader(raw),
+			Options{TargetSampleRate: 16000, MaxDurationSec: 60})
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if dur := tracks[0].Duration(); dur < 0.9 || dur > 1.3 {
+			t.Errorf("Duration = %.3fs, want about 1s", dur)
+		}
+		if amp := goertzel(interior(tracks[0].Samples), 1000, 16000); amp < fixtureAmplitude/3 {
+			t.Errorf("1 kHz amplitude = %.4f, want near %.4f", amp, fixtureAmplitude)
+		}
+	})
+
+	for _, mode := range []core.ChannelMode{core.ChannelFirst, core.ChannelSplit} {
+		t.Run(string(mode), func(t *testing.T) {
+			raw := encodeStereo(t, 1000, 3000, "-c:a", "libmp3lame", "-b:a", "64k", "-f", "mp3")
+			tracks, err := d.Decode(context.Background(), bytes.NewReader(raw), Options{
+				TargetSampleRate: 16000, ChannelMode: mode, MaxDurationSec: 60, MaxSplitChannels: 2,
+			})
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			want := 1
+			if mode == core.ChannelSplit {
+				want = 2
+			}
+			if len(tracks) != want {
+				t.Errorf("%d tracks, want %d", len(tracks), want)
+			}
+		})
+	}
 }

@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -24,6 +25,11 @@ import (
 type FFmpegDecoder struct {
 	path    string
 	timeout time.Duration
+	// soxr says whether this ffmpeg was built with libsoxr, which resamples
+	// better than swresample's default. Homebrew's ffmpeg is not, and asking
+	// such a build for it fails every decode, so without it the default
+	// resampler is used instead.
+	soxr bool
 }
 
 // NewFFmpegDecoder returns nil when ffmpeg is not configured or not installed,
@@ -40,7 +46,7 @@ func NewFFmpegDecoder(path string, timeout time.Duration) *FFmpegDecoder {
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
 	}
-	return &FFmpegDecoder{path: resolved, timeout: timeout}
+	return &FFmpegDecoder{path: resolved, timeout: timeout, soxr: supportsSoxr(resolved)}
 }
 
 // Path is the resolved binary, for startup logging.
@@ -50,6 +56,51 @@ func (d *FFmpegDecoder) Path() string {
 	}
 	return d.path
 }
+
+// SoxR reports whether resampling goes through libsoxr; false means this
+// ffmpeg lacks it and swresample's default is used, for startup logging.
+func (d *FFmpegDecoder) SoxR() bool {
+	return d != nil && d.soxr
+}
+
+// soxrProbed remembers the answer per binary. The decoder is built more than
+// once at startup and a binary does not change under a running server.
+var soxrProbed sync.Map // resolved path -> bool
+
+func supportsSoxr(path string) bool {
+	if known, ok := soxrProbed.Load(path); ok {
+		return known.(bool)
+	}
+	ok := probeSoxr(path)
+	soxrProbed.Store(path, ok)
+	return ok
+}
+
+// probeSoxr runs the resampler on a few milliseconds of silence. Asking the
+// binary itself, rather than reading its build flags, is what stays right for
+// a wrapper script or a static build. Any failure counts as "no": the default
+// resampler works everywhere, so a wrong "no" costs a little quality and a
+// wrong "yes" costs every decode.
+func probeSoxr(path string) bool {
+	var wav bytes.Buffer
+	if err := WriteWAV(&wav, 8000, make([]float32, 800)); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path,
+		"-hide_banner", "-nostdin", "-loglevel", "error",
+		"-i", "pipe:0", "-vn", "-ac", "1", "-ar", "16000",
+		"-af", resampleSoxr, "-f", "null", "-")
+	cmd.Stdin = &wav
+	cmd.WaitDelay = 5 * time.Second
+	return cmd.Run() == nil
+}
+
+const (
+	resampleSoxr    = "aresample=resampler=soxr"
+	resampleDefault = "aresample"
+)
 
 func (d *FFmpegDecoder) CanDecode(f Format) bool {
 	return d != nil && f != FormatUnknown && !f.Native()
@@ -72,7 +123,10 @@ func (d *FFmpegDecoder) args(opts Options) []string {
 	if rate <= 0 {
 		rate = 16000
 	}
-	const resample = "aresample=resampler=soxr"
+	resample := resampleDefault
+	if d.soxr {
+		resample = resampleSoxr
+	}
 
 	args := []string{
 		"-hide_banner", "-nostdin", "-loglevel", "error",

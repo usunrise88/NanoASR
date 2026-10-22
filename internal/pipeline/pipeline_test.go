@@ -518,3 +518,28 @@ func newHarnessWithDecoder(
 	p := New(audio.NewRouter(dec), fakeSegmenter{segments: segs}, models, pool.NewGovernor(4), opt)
 	return &harness{pipeline: p, rec: rec}
 }
+
+// ModelAlias runs a named model as another build of it, unless the request
+// needs what only the named one decodes: beam search, hotwords.
+func TestModelAliasStepsAsideForBeamSearchAndHotwords(t *testing.T) {
+	alias := func(id string) string { return id + "-coreml" }
+	p := &Pipeline{opt: Options{DefaultModel: "default", ModelAlias: alias}}
+	for _, c := range []struct {
+		req  core.Request
+		want string
+	}{
+		{core.Request{ModelID: "m"}, "m-coreml"},
+		{core.Request{}, "default"},
+		{core.Request{ModelID: "m", DecodingMethod: "modified_beam_search"}, "m"},
+		{core.Request{ModelID: "m", Hotwords: []string{"NanoASR"}}, "m"},
+		{core.Request{ModelID: "m", HotwordDicts: []string{"terms"}}, "m"},
+	} {
+		if got, err := p.resolveModel(c.req); err != nil || got != c.want {
+			t.Errorf("%+v: %q, %v; want %q", c.req, got, err, c.want)
+		}
+	}
+	p.opt.HotwordDictionaries = []string{"always"}
+	if got, _ := p.resolveModel(core.Request{ModelID: "m"}); got != "m" {
+		t.Errorf("with a dictionary on every request: %q", got)
+	}
+}
