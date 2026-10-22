@@ -88,6 +88,11 @@ asr:
   # or the nanoasr GPU image); the server checks that at startup and refuses to
   # run rather than fall back to the CPU without saying so, which is what
   # onnxruntime does on its own. `nanoasr gpu` reports what the libraries can do.
+  #
+  # "coreml", on macOS 15 and later, runs the models converted for Apple's
+  # Neural Engine — the catalog's "-coreml" entries, named in this file in place
+  # of the models they were converted from — and everything else on the CPU.
+  # See "Apple silicon: the Neural Engine" in the README.
   provider: cpu
   models_dir: /var/lib/nanoasr/models
   default_model: gigaam-v3-ctc-punct-ru

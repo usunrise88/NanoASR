@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/usunrise88/nanoasr/internal/asr"
+	"github.com/usunrise88/nanoasr/internal/asr/coremlasr"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/core"
 	"github.com/usunrise88/nanoasr/internal/pool"
@@ -184,9 +185,13 @@ func (m *Models) describe(man registry.Manifest, state core.ModelState) core.Mod
 	if man.Streaming {
 		if fam, err := sherpa.LookupOnlineFamily(man.Family); err == nil {
 			caps = fam.Capabilities()
+		} else if c, ok := coremlasr.FamilyCapabilities(man.Family); ok {
+			caps = c
 		}
 	} else if fam, err := sherpa.LookupFamily(man.Family); err == nil {
 		caps = fam.Capabilities()
+	} else if c, ok := coremlasr.FamilyCapabilities(man.Family); ok {
+		caps = c
 	}
 	if state != core.ModelAbsent {
 		caps.PunctuationBuiltin = m.vocabularyPunctuates(man)

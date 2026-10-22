@@ -137,6 +137,48 @@ func TestPlanStartsWithoutTheModels(t *testing.T) {
 	}
 }
 
+// On provider coreml the settings go on naming the models the application
+// chose, and the plan runs, and asks for, the CoreML build of each one that
+// has a build. One without a build runs as itself, on the CPU.
+func TestPlanRunsTheCoreMLBuilds(t *testing.T) {
+	s := Settings{DefaultModel: "gigaam-v3-ctc-punct-ru", RealtimeModel: "t-one-ctc-ru",
+		Diarization: true, Isolation: true, Provider: config.ProviderCoreML}
+	builds := []string{"silero-vad-v5-coreml", "gigaam-v3-ctc-punct-ru-coreml", "t-one-ctc-ru-coreml",
+		"nemotron-3-diarization-coreml", "voxlock-int8-coreml", "campplus-sv-zh-en-coreml"}
+	p := planWith(t, s, builds...)
+	cfg := p.Config
+	for _, c := range [][2]string{
+		{cfg.VAD.Model, "silero-vad-v5-coreml"},
+		{cfg.ASR.DefaultModel, "gigaam-v3-ctc-punct-ru-coreml"},
+		{cfg.Realtime.Model, "t-one-ctc-ru-coreml"},
+		{cfg.Diarization.Model, "nemotron-3-diarization-coreml"},
+		{cfg.Isolation.Model, "voxlock-int8-coreml"},
+		{cfg.Isolation.EmbeddingModel, "campplus-sv-zh-en-coreml"},
+	} {
+		if c[0] != c[1] {
+			t.Errorf("runs %s, want %s", c[0], c[1])
+		}
+	}
+	if cfg.ASR.Provider != config.ProviderCoreML || !cfg.VAD.Enabled ||
+		!cfg.API.DialectEnabled(config.DialectRealtime) {
+		t.Error("with every build present, the provider, the VAD or realtime is not on")
+	}
+	for name, f := range features(s, p.Started, func(id string) bool { return slices.Contains(builds, id) }) {
+		if f.State != StateReady {
+			t.Errorf("%s: %s, missing %v", name, f.State, f.Missing)
+		}
+	}
+
+	s.DefaultModel = "zipformer-small-en"
+	if got := planWith(t, s).Config.ASR.DefaultModel; got != "zipformer-small-en" {
+		t.Errorf("a model without a build runs as %s", got)
+	}
+	s.Provider = ""
+	if got := planWith(t, s).Config.VAD.Model; got != config.Default().VAD.Model {
+		t.Errorf("on the CPU the VAD is %s", got)
+	}
+}
+
 func TestFeatureStates(t *testing.T) {
 	diar := config.Default().Diarization.Model
 	s := Settings{DefaultModel: "offline", RealtimeModel: "streaming", Diarization: true}

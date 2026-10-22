@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -48,21 +49,28 @@ func buildIsolation(
 		// Validate refuses this; reaching it means a caller skipped it.
 		return nil, nil, 0, fmt.Errorf("isolation needs diarization")
 	}
-	if err := ortenv.Supported(); err != nil {
-		return nil, nil, 0, fmt.Errorf("isolation: %w", err)
-	}
 	mb := 0
-	for _, want := range []struct{ id, kind, family string }{
-		{cfg.Isolation.Model, registry.KindTSE, "voxlock"},
-		{cfg.Isolation.EmbeddingModel, registry.KindEmbedding, ""},
+	for _, want := range []struct {
+		id, kind string
+		families []string
+	}{
+		{cfg.Isolation.Model, registry.KindTSE, []string{"voxlock", voxlock.FamilyCoreML}},
+		{cfg.Isolation.EmbeddingModel, registry.KindEmbedding, nil},
 	} {
 		man, err := reg.Resolve(ctx, want.id)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("isolation model %q: %w", want.id, err)
 		}
-		if man.EffectiveKind() != want.kind || (want.family != "" && man.Family != want.family) {
+		if man.EffectiveKind() != want.kind || (want.families != nil && !slices.Contains(want.families, man.Family)) {
 			return nil, nil, 0, fmt.Errorf("isolation model %q is a %s model of family %s, not %s %s",
-				want.id, man.EffectiveKind(), man.Family, want.kind, want.family)
+				want.id, man.EffectiveKind(), man.Family, want.kind, strings.Join(want.families, " or "))
+		}
+		// The ONNX extractor needs the onnxruntime sherpa-onnx carries; the
+		// CoreML builds do not.
+		if man.Family == "voxlock" {
+			if err := ortenv.Supported(); err != nil {
+				return nil, nil, 0, fmt.Errorf("isolation: %w", err)
+			}
 		}
 		if man.SampleRate != tse.SampleRate {
 			return nil, nil, 0, fmt.Errorf("isolation model %q is %d Hz; isolation runs at %d",
@@ -158,7 +166,13 @@ type isolationModels struct {
 	mu     sync.Mutex
 	loaded *tse.Engine
 	model  *voxlock.Model
-	emb    *tse.SherpaEmbedder
+	emb    closingEmbedder
+}
+
+// closingEmbedder is a speaker embedder the server frees at shutdown.
+type closingEmbedder interface {
+	tse.Embedder
+	Close()
 }
 
 func (m *isolationModels) engine(ctx context.Context) (isolation.Engine, error) {
@@ -188,24 +202,18 @@ func (m *isolationModels) engine(ctx context.Context) (isolation.Engine, error) 
 		}
 		return man.FilePath(dir, role)
 	}
-	enroll, err := path(m.cfg.Model, "enroll")
+	family := func(id string) (string, error) {
+		man, err := m.reg.Resolve(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		return man.Family, nil
+	}
+	model, err := m.loadExtractor(path, family)
 	if err != nil {
 		return nil, err
 	}
-	chunk, err := path(m.cfg.Model, "chunk")
-	if err != nil {
-		return nil, err
-	}
-	embPath, err := path(m.cfg.EmbeddingModel, "model")
-	if err != nil {
-		return nil, err
-	}
-	model, err := voxlock.Load(voxlock.Files{Enroll: enroll, Chunk: chunk},
-		ortenv.Tuning{IntraOpThreads: m.cfg.NumThreads, NoSpinning: true})
-	if err != nil {
-		return nil, err
-	}
-	emb, err := tse.NewSherpaEmbedder(embPath, 1)
+	emb, err := m.loadEmbedder(path, family)
 	if err != nil {
 		_ = model.Close()
 		return nil, err
@@ -218,6 +226,55 @@ func (m *isolationModels) engine(ctx context.Context) (isolation.Engine, error) 
 		Gate:      tse.DefaultGate(),
 	}
 	return m.loaded, nil
+}
+
+func (m *isolationModels) loadExtractor(path func(id, role string) (string, error),
+	family func(string) (string, error)) (*voxlock.Model, error) {
+	fam, err := family(m.cfg.Model)
+	if err != nil {
+		return nil, err
+	}
+	var files map[string]*string
+	var f voxlock.Files
+	var cf voxlock.CoreMLFiles
+	if fam == voxlock.FamilyCoreML {
+		files = map[string]*string{"enroll": &cf.Enroll, "front": &cf.Front, "back": &cf.Back}
+	} else {
+		files = map[string]*string{"enroll": &f.Enroll, "chunk": &f.Chunk}
+	}
+	for role, dst := range files {
+		if *dst, err = path(m.cfg.Model, role); err != nil {
+			return nil, err
+		}
+	}
+	if fam == voxlock.FamilyCoreML {
+		return voxlock.LoadCoreML(cf)
+	}
+	return voxlock.Load(f, ortenv.Tuning{IntraOpThreads: m.cfg.NumThreads, NoSpinning: true})
+}
+
+func (m *isolationModels) loadEmbedder(path func(id, role string) (string, error),
+	family func(string) (string, error)) (closingEmbedder, error) {
+	fam, err := family(m.cfg.EmbeddingModel)
+	if err != nil {
+		return nil, err
+	}
+	if fam == tse.FamilyCoreMLCampplus {
+		fb, err := path(m.cfg.EmbeddingModel, "fbank")
+		if err != nil {
+			return nil, err
+		}
+		net, err := path(m.cfg.EmbeddingModel, "net")
+		if err != nil {
+			return nil, err
+		}
+		return tse.NewCoreMLEmbedder(fb, net)
+	}
+	p, err := path(m.cfg.EmbeddingModel, "model")
+	if err != nil {
+		return nil, err
+	}
+	return tse.NewSherpaEmbedder(p, 1)
 }
 
 // Close frees the models; the service using them must have stopped.

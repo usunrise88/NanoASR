@@ -61,6 +61,13 @@ type Options struct {
 	NumThreads int
 
 	Observer core.Observer
+
+	// ModelAlias names the build a requested model is run as, or returns the
+	// id unchanged. It is how asr.provider: coreml reaches a client that
+	// names its model: the request says which model, the server which build.
+	// A request that needs beam search or hotwords keeps the model it named,
+	// since no CoreML build decodes either way.
+	ModelAlias func(id string) string
 }
 
 // WithDiarizer attaches the speaker pass. It is set after construction rather
@@ -270,6 +277,10 @@ func (p *Pipeline) transcribe(ctx context.Context, id string, req core.Request) 
 
 func (p *Pipeline) resolveModel(req core.Request) (string, error) {
 	if req.ModelID != "" {
+		if p.opt.ModelAlias != nil && req.DecodingMethod != "modified_beam_search" &&
+			len(req.Hotwords) == 0 && len(req.HotwordDicts) == 0 && len(p.opt.HotwordDictionaries) == 0 {
+			return p.opt.ModelAlias(req.ModelID), nil
+		}
 		return req.ModelID, nil
 	}
 	if p.opt.DefaultModel != "" {

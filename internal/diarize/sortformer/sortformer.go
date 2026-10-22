@@ -2,9 +2,10 @@
 // an end-to-end Sortformer that orders speakers by first arrival and so has no
 // clustering step and no threshold to tune.
 //
-// The model runs as two ONNX graphs through onnxruntime directly, not through
-// sherpa-onnx, which has no Sortformer support; internal/ortenv brings up the
-// one onnxruntime the process shares with sherpa-onnx.
+// The model runs as two graphs: ONNX through onnxruntime directly, not through
+// sherpa-onnx, which has no Sortformer support — internal/ortenv brings up the
+// one onnxruntime the process shares with sherpa-onnx — or, on a Mac, the
+// CoreML build of the same graphs on the Neural Engine.
 package sortformer
 
 import (
@@ -15,18 +16,24 @@ import (
 	"math"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/core"
+	"github.com/usunrise88/nanoasr/internal/coreml"
 	"github.com/usunrise88/nanoasr/internal/diarize"
 	"github.com/usunrise88/nanoasr/internal/ortenv"
 )
 
+// FamilyCoreML is the catalog family of the CoreML build; the ONNX one is
+// "sortformer".
+const FamilyCoreML = "coreml_sortformer"
+
 // Files are the model's files on disk.
 type Files struct {
-	Embed      string // embed.onnx: log-mel -> encoder input embeddings
-	Step       string // step.onnx: embeddings -> speaker logits
+	Embed      string // embed.onnx or embed.mlmodelc: log-mel -> encoder input embeddings
+	Step       string // step.onnx or step.mlmodelc: embeddings -> speaker logits
 	MelFilters string // mel_filters.bin: float32 [128][257]
 	Silence    string // silence_embeds.bin: float32 [512]
 	Config     string // config.json: the offline pass's parameters
@@ -42,6 +49,8 @@ type Options struct {
 	// NumThreads is the thread budget of one step, the slots the pipeline
 	// reserves from its governor around the diarize stage.
 	NumThreads int
+	// CoreML says the model is the CoreML build, which needs no onnxruntime.
+	CoreML bool
 }
 
 // Diarizer is Nemotron-3-Diarization: an end-to-end Sortformer that labels up
@@ -75,7 +84,11 @@ func New(opt Options) (*Diarizer, error) {
 	if opt.Resolve == nil {
 		return nil, core.Errorf(core.CodeInternal, "sortformer: no model resolver")
 	}
-	if err := ortenv.Supported(); err != nil {
+	check := ortenv.Supported
+	if opt.CoreML {
+		check = coreml.Available
+	}
+	if err := check(); err != nil {
 		return nil, err
 	}
 	return &Diarizer{opt: opt}, nil
@@ -187,7 +200,12 @@ func loadModel(f Files, threads int) (*model, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := newORTRunner(f.Embed, f.Step, ortenv.Tuning{IntraOpThreads: threads})
+	var r runner
+	if strings.HasSuffix(f.Step, ".mlmodelc") {
+		r, err = newCoreMLRunner(f.Embed, f.Step)
+	} else {
+		r, err = newORTRunner(f.Embed, f.Step, ortenv.Tuning{IntraOpThreads: threads})
+	}
 	if err != nil {
 		return nil, err
 	}

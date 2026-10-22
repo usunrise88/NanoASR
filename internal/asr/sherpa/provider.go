@@ -2,14 +2,18 @@ package sherpa
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
+
+	"github.com/usunrise88/nanoasr/internal/coreml"
 )
 
 // Execution providers this build understands. The strings are onnxruntime's,
 // passed straight through to sherpa-onnx.
 const (
-	ProviderCPU  = "cpu"
-	ProviderCUDA = "cuda"
+	ProviderCPU    = "cpu"
+	ProviderCUDA   = "cuda"
+	ProviderCoreML = "coreml"
 )
 
 // Runtime describes the native libraries this process actually loaded and what
@@ -103,6 +107,19 @@ func (rt Runtime) driverOrUnknown() string {
 // the driver differently (WSL2 does) would make a refusal wrong.
 func CheckProvider(provider string) (warnings []string, err error) {
 	if provider == "" || provider == ProviderCPU {
+		return nil, nil
+	}
+	if provider == ProviderCoreML {
+		// Served by the models converted for Core ML (internal/coreml), not
+		// by onnxruntime, so there are no libraries to probe: only the
+		// platform, and the macOS release those models are built for.
+		if runtime.GOOS != "darwin" {
+			return nil, fmt.Errorf(
+				"asr.provider is %q, but CoreML exists on macOS only; set asr.provider: cpu", ProviderCoreML)
+		}
+		if err := coreml.Available(); err != nil {
+			return nil, fmt.Errorf("asr.provider is %q, but %w; set asr.provider: cpu", ProviderCoreML, err)
+		}
 		return nil, nil
 	}
 	if provider != ProviderCUDA {

@@ -25,6 +25,11 @@ func TestWhichCatalogModelsCanBeBiased(t *testing.T) {
 		"streaming-zipformer-small-ru": false, // streaming: biased at load, not per request
 		"zipformer-small-en":           false, // transducer, subwords, no vocabulary file
 		"nemotron-3.5-streaming-multi": false, // streaming, and its package carries no subword vocabulary
+
+		"gigaam-v3-ctc-punct-ru-coreml":       false, // CoreML builds decode greedily
+		"gigaam-v3-rnnt-punct-ru-coreml":      false,
+		"t-one-ctc-ru-coreml":                 false,
+		"nemotron-3.5-streaming-multi-coreml": false,
 	}
 
 	entries, err := (&Local{}).Catalog(context.Background())

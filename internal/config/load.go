@@ -216,10 +216,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("audio.max_split_channels must be at least 1, got %d", c.Audio.MaxSplitChannels)
 	}
 	switch c.ASR.Provider {
-	case ProviderCPU, ProviderCUDA:
+	case ProviderCPU, ProviderCUDA, ProviderCoreML:
 	default:
-		return fmt.Errorf("asr.provider must be %q or %q, got %q",
-			ProviderCPU, ProviderCUDA, c.ASR.Provider)
+		return fmt.Errorf("asr.provider must be %q, %q or %q, got %q",
+			ProviderCPU, ProviderCUDA, ProviderCoreML, c.ASR.Provider)
 	}
 	if err := c.validateRealtime(); err != nil {
 		return err

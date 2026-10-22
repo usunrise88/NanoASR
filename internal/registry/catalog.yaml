@@ -607,3 +607,264 @@ models:
       size_bytes: 643854
     license: mit
     commercial_use: "yes"
+
+  # ===========================================================================
+  # CoreML builds, for the Neural Engine of an Apple Silicon Mac (macOS 15 or
+  # later). Each is the model whose id it extends, converted by scripts/coreml
+  # from its original weights: fp16, fixed shapes, every layer the Neural
+  # Engine lacks rewritten, so nothing falls back to the CPU. They are chosen by
+  # asr.provider: coreml in a managed instance, or named directly.
+  #
+  # The first load of each on a machine compiles it for the Neural Engine, a
+  # one-off of tens of seconds that the system then caches.
+  # ===========================================================================
+
+  - id: gigaam-v3-ctc-punct-ru-coreml
+    revision: "2026-10-22"
+    kind: asr
+    family: coreml_gigaam_ctc
+    display_name: GigaAM v3 CTC punct (Russian, Neural Engine)
+    languages: [ru]
+    sample_rate: 16000
+    modeling_unit: bpe
+    files:
+      encoder: encoder.mlmodelc
+      rope: rope.bin
+      tokens: tokens.txt
+      config: config.json
+    features:
+      sample_rate: 16000
+      dim: 64
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      approx_rss_mb: 450
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-coreml-1/gigaam-v3-ctc-punct-ru-coreml-2026-10-22.tar.gz
+      sha256: c0263970e3d572b3083544835c3abd9ea457c5aba14c5609f8b41d4ef2c44dff
+      size_bytes: 409236479
+    license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
+    commercial_use: "yes"
+    notes: >-
+      Converted from GigaAM's own v3_e2e_ctc checkpoint, not from the int8
+      ONNX export, the same way as the transducer below: one encoder call
+      takes 20.48 s of audio into which the segments are packed, log-mel front
+      end and CTC log-probabilities included, and the host collapses the best
+      token of each frame. Measured on an M1 over 1703 s of speech: 5.5 s,
+      against 130 s for the ONNX model on two CPU threads, at 0.42% CER from
+      the fp32 checkpoint on the same segments.
+
+  - id: gigaam-v3-rnnt-punct-ru-coreml
+    revision: "2026-10-22"
+    kind: asr
+    family: coreml_gigaam_rnnt
+    display_name: GigaAM v3 RNNT punct (Russian, Neural Engine)
+    languages: [ru]
+    sample_rate: 16000
+    modeling_unit: bpe
+    files:
+      encoder: encoder.mlmodelc
+      step: step.mlmodelc
+      rope: rope.bin
+      tokens: tokens.txt
+      config: config.json
+    features:
+      sample_rate: 16000
+      dim: 64
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      # Measured: 369 MB resident with the encoder loaded.
+      approx_rss_mb: 450
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-coreml-1/gigaam-v3-rnnt-punct-ru-coreml-2026-10-22.tar.gz
+      sha256: f8c81b20655770c9107aadb48a46b406b9c3daf135c0dc9a66ac774cb55f12d4
+      size_bytes: 412253683
+    license: https://github.com/salute-developers/GigaAM/blob/main/LICENSE
+    commercial_use: "yes"
+    notes: >-
+      Converted from GigaAM's own v3_e2e_rnnt checkpoint, not from the int8
+      ONNX export. One encoder call takes 20.48 s of audio into which the
+      segments are packed, log-mel front end included; the decoder advances
+      eight segments per call. Measured on an M1 over 1697 s of speech: 6.2 s,
+      against 132 s for the ONNX model on two CPU threads, at 0.53% CER from
+      the fp32 checkpoint. Greedy decoding only, so no hotwords.
+
+  - id: silero-vad-v5-coreml
+    revision: "2026-10-22"
+    kind: vad
+    family: coreml_silero_vad
+    display_name: Silero VAD (Neural Engine)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      model: silero.mlmodelc
+    resources:
+      approx_rss_mb: 16
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-coreml-1/silero-vad-v5-coreml-2026-10-22.tar.gz
+      sha256: c36b50de761bf1065f457e6ed5a634de3f6ed66dc7d0edb73b54cb1f0e893de6
+      size_bytes: 374262
+    license: mit
+    commercial_use: "yes"
+    notes: >-
+      The network silero-vad-v5 ships (k2-fsa's 16 kHz export, Silero v4 by its
+      own metadata), rebuilt from that file's weights; 128 windows per call,
+      with sherpa-onnx's segmentation ported to Go. Measured on an M1 over a
+      37.7-minute recording: 0.78 s against sherpa-onnx's 6.0 s, 441 of 471
+      segments within two windows of its boundaries.
+
+  - id: nemotron-3-diarization-coreml
+    revision: "2026-10-22"
+    kind: diarization
+    family: coreml_sortformer
+    display_name: Nemotron-3-Diarization (Sortformer, Neural Engine)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      embed: embed.mlmodelc
+      step: step.mlmodelc
+      mel_filters: mel_filters.bin
+      silence_embeds: silence_embeds.bin
+      config: config.json
+    resources:
+      approx_rss_mb: 300
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-coreml-1/nemotron-3-diarization-coreml-2026-10-22.tar.gz
+      sha256: f46d66ee7a66481245fdaecb2cc082b75fdd25214b5032fa2c073c73aa4adcbf
+      size_bytes: 153563666
+    license: https://openmdw.ai/license/1-1/
+    commercial_use: "yes"
+    notes: >-
+      The same two graphs as nemotron-3-diarization, exported from the same
+      pinned checkpoint at the largest shapes the chunk loop uses, the step
+      with a mask over its valid prefix so a short step reproduces a dense one
+      to 6e-6. On the reference recording no frame decision differs from the
+      fp32 reference; 72 ms per 27 s step on an M1. OpenMDW-1.1: keep the
+      licence and notices when redistributing.
+
+  - id: voxlock-int8-coreml
+    revision: "2026-10-22"
+    kind: tse
+    family: coreml_voxlock
+    display_name: Voxlock voice isolation (Neural Engine)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      enroll: enroll.mlmodelc
+      front: front.mlmodelc
+      back: back.mlmodelc
+    resources:
+      approx_rss_mb: 300
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-coreml-1/voxlock-int8-coreml-2026-10-22.tar.gz
+      sha256: b7534ccea92d4f73092c824fd21a0a80f03eb7b63eb58ec211b638b6104c0a18
+      size_bytes: 51508505
+    license: apache-2.0
+    commercial_use: "yes"
+    notes: >-
+      Converted from Voxlock's own fp32 weights (model.safetensors at the
+      revision voxlock-int8 pins), with the author's streaming chunk graph and
+      its twelve LSTMs written out as matrix products. The STFT and the voice
+      conditioning run on the GPU, the band-split RNN on the Neural Engine,
+      100 frames (0.8 s) per call. Over a minute of a meeting the isolated
+      audio agrees with the fp32 ONNX graphs to 31.1 dB SI-SDR (the int8 graph
+      to 37.2 dB).
+
+  - id: campplus-sv-zh-en-coreml
+    revision: "2026-10-22"
+    kind: embedding
+    family: coreml_campplus
+    display_name: CAM++ speaker embedding (zh/en, Neural Engine)
+    languages: [multi]
+    sample_rate: 16000
+    files:
+      fbank: fbank.mlmodelc
+      net: net.mlmodelc
+    resources:
+      approx_rss_mb: 60
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-coreml-1/campplus-sv-zh-en-coreml-2026-10-22.tar.gz
+      sha256: 00e59bc3257557425ef4f7512eae2838b882f728aef3149d457d985c1339fe1e
+      size_bytes: 13828703
+    license: apache-2.0
+    commercial_use: "yes"
+    notes: >-
+      Converted from 3D-Speaker's campplus_cn_en_common.pt, the checkpoint
+      campplus-sv-zh-en was exported from. sherpa-onnx's Kaldi filterbank runs
+      on the GPU in fp32, the network on the Neural Engine at 2, 4, 6, 10 and
+      20 s with the true length as a mask; within a cosine of 0.999 of the
+      ONNX model's embedding on real speech.
+
+  - id: t-one-ctc-ru-coreml
+    revision: "2026-10-22"
+    kind: asr
+    streaming: true
+    family: coreml_t_one_ctc
+    display_name: T-one streaming CTC (Russian, 8 kHz, GPU)
+    languages: [ru]
+    sample_rate: 8000
+    modeling_unit: char
+    files:
+      model: model.mlmodelc
+      tokens: tokens.txt
+    features:
+      sample_rate: 8000
+      dim: 64
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      approx_rss_mb: 300
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-coreml-1/t-one-ctc-ru-coreml-2026-10-22.tar.gz
+      sha256: 7919a587875f93ca238ec2fc424e3d84bc56ee75a7acde4c334b85e5a4267ffa
+      size_bytes: 132643967
+    license: apache-2.0
+    commercial_use: "yes"
+    notes: >-
+      Converted from t-tech/T-one's own weights with the authors' export
+      wrapper, the state as six tensors and the attention cache length baked
+      into one function per value it takes. Runs on the GPU: the Neural
+      Engine is planned out for this graph although it supports every op. 9 ms
+      per 300 ms chunk on an M1, transcripts within 0.05% CER of the ONNX
+      model's, the same endpointing as sherpa-onnx gives it.
+
+  - id: nemotron-3.5-streaming-multi-coreml
+    revision: "2026-10-22"
+    kind: asr
+    streaming: true
+    family: coreml_nemotron_streaming
+    display_name: Nemotron 3.5 ASR streaming (multilingual, 560 ms, Neural Engine)
+    languages: [multi]
+    locales: [
+      en-US, en-GB, es-US, es-ES, fr-FR, fr-CA, it-IT, pt-BR,
+      pt-PT, nl-NL, de-DE, tr-TR, ru-RU, ar-AR, hi-IN, ja-JP,
+      ko-KR, vi-VN, uk-UA, pl-PL, sv-SE, cs-CZ, nb-NO, da-DK,
+      bg-BG, fi-FI, hr-HR, sk-SK, zh-CN, hu-HU, ro-RO, et-EE
+    ]
+    sample_rate: 16000
+    modeling_unit: bpe
+    files:
+      encoder: encoder.mlmodelc
+      decoder_joint: decoder_joint.mlmodelc
+      tokens: tokenizer.json
+      metadata: metadata.json
+    features:
+      sample_rate: 16000
+      dim: 128
+    runtime:
+      decoding_method: greedy_search
+    resources:
+      approx_rss_mb: 900
+    source:
+      url: https://github.com/usunrise88/NanoASR/releases/download/models-coreml-1/nemotron-3.5-streaming-multi-coreml-2026-10-22.tar.gz
+      sha256: fb30488727a87cd7492bdca95e62709a5a0d6888ad933d69655348da1dfb0d0b
+      size_bytes: 571978671
+    license: https://openmdw.ai/license/1-1/
+    commercial_use: "yes"
+    notes: >-
+      FluidInference's CoreML build of the same model (multilingual/560ms,
+      revision 1a41b757; int8 and 6-bit palettized encoder), driven the way
+      their FluidAudio SDK drives it. Encoder and decoder-joint on the Neural
+      Engine, the log-mel on the host. 21 times real time for one stream on an
+      M1. FluidAudio's "blank rescue" re-decode is not ported.

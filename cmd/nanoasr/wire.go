@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/usunrise88/nanoasr/internal/asr"
+	"github.com/usunrise88/nanoasr/internal/asr/coremlasr"
 	"github.com/usunrise88/nanoasr/internal/asr/sherpa"
 	"github.com/usunrise88/nanoasr/internal/audio"
 	"github.com/usunrise88/nanoasr/internal/config"
@@ -93,12 +94,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 		return nil, err
 	}
 
-	models := pool.New(reg,
-		sherpa.NewLoader(sherpa.LoaderOptions{
-			Provider:   cfg.ASR.Provider,
-			NumThreads: cfg.ASR.NumThreads,
-			Debug:      cfg.Log.Level == "debug",
-		}),
+	models := pool.New(reg, asrLoader(cfg),
 		pool.Options{
 			MaxResidentModels: cfg.ASR.MaxResidentModels,
 			MaxModelRSSMB:     cfg.ASR.MaxModelRSSMB,
@@ -169,6 +165,7 @@ func build(ctx context.Context, cfg config.Config, log *slog.Logger) (*server, e
 			BatchMaxSize:         cfg.ASR.Batch.MaxSize,
 			BatchMaxSeconds:      cfg.ASR.Batch.MaxSeconds,
 			NumThreads:           cfg.ASR.NumThreads,
+			ModelAlias:           modelAlias(cfg, reg),
 		}).WithDiarizer(diarizer).WithPostProc(post).WithDictionaries(store.Dictionaries())
 
 	hooks := webhook.New(webhook.Options{
@@ -381,6 +378,61 @@ func buildRegistry(cfg config.Config, log *slog.Logger) (*registry.Remote, error
 	return remote, nil
 }
 
+// onnxProvider is the provider for everything that runs on onnxruntime.
+//
+// asr.provider: coreml is not passed down. onnxruntime's own CoreML provider
+// was measured on every model this server ships and was 10 to 30 times slower
+// than the CPU, and aborted the process on T-one; CoreML is served instead by
+// the models converted for it, which the catalog lists under their own ids.
+// Whatever has no such build runs where it always did.
+func onnxProvider(cfg config.Config) string {
+	if cfg.ASR.Provider == config.ProviderCoreML {
+		return config.ProviderCPU
+	}
+	return cfg.ASR.Provider
+}
+
+// modelAlias is the pipeline's ModelAlias: on asr.provider: coreml, a model
+// whose CoreML build is installed is run as that build. Without the build on
+// disk the request keeps the model it named, which still works on the CPU.
+func modelAlias(cfg config.Config, reg *registry.Remote) func(string) string {
+	if cfg.ASR.Provider != config.ProviderCoreML {
+		return nil
+	}
+	return func(id string) string {
+		b := registry.CoreMLBuild(id)
+		if b == "" || b == id {
+			return id
+		}
+		if _, err := reg.Dir(b); err != nil {
+			return id
+		}
+		return b
+	}
+}
+
+// asrLoader loads a recogniser with whichever engine its family belongs to.
+func asrLoader(cfg config.Config) pool.Loader {
+	onnx := sherpa.NewLoader(sherpa.LoaderOptions{
+		Provider:   onnxProvider(cfg),
+		NumThreads: cfg.ASR.NumThreads,
+		Debug:      cfg.Log.Level == "debug",
+	})
+	return func(ctx context.Context, m registry.Manifest, dir string, v asr.Variant) (asr.Recognizer, error) {
+		if coremlasr.IsFamily(m.Family) {
+			return coremlasr.Load(ctx, m, dir, v)
+		}
+		if coremlasr.IsStreamingFamily(m.Family) {
+			st, err := coremlasr.LoadStreaming(ctx, m, dir, coremlasr.StreamingOptions{})
+			if err != nil {
+				return nil, err
+			}
+			return sherpa.WholeFile(st), nil
+		}
+		return onnx(ctx, m, dir, v)
+	}
+}
+
 // buildDecoder wires the native path first so WAV never pays for a process,
 // and adds ffmpeg only when it is actually installed.
 func buildDecoder(cfg config.Config, log *slog.Logger) *audio.Router {
@@ -420,6 +472,23 @@ func buildVAD(ctx context.Context, cfg config.Config, reg *registry.Remote, log 
 	path, err := man.FilePath(dir, "model")
 	if err != nil {
 		return nil, err
+	}
+
+	if man.Family == vad.FamilyCoreMLSilero {
+		// One instance serves every job: its state lives in each Segment
+		// call, and CoreML runs one prediction at a time anyway.
+		d, err := vad.NewCoreML(vad.Config{
+			Threshold:    cfg.VAD.Threshold,
+			MinSilenceMS: cfg.VAD.MinSilenceMS,
+			MinSpeechMS:  cfg.VAD.MinSpeechMS,
+			MaxSpeechSec: cfg.VAD.MaxSpeechSec,
+			SampleRate:   cfg.Audio.TargetSampleRate,
+		}, path)
+		if err != nil {
+			return nil, err
+		}
+		log.Info("vad ready", "model", man.Key(), "engine", d.String())
+		return d, nil
 	}
 
 	// One detector per concurrent job: the detector is stateful, so sharing one
@@ -596,7 +665,8 @@ func buildSortformer(
 	if err != nil {
 		return nil, 0, fmt.Errorf("diarization.model %q: %w", id, err)
 	}
-	if man.EffectiveKind() != registry.KindDiarization || man.Family != "sortformer" {
+	coremlBuild := man.Family == diarizesortformer.FamilyCoreML
+	if man.EffectiveKind() != registry.KindDiarization || (man.Family != "sortformer" && !coremlBuild) {
 		return nil, 0, fmt.Errorf("diarization.model %q is a %s model of family %s, not a sortformer diarizer",
 			id, man.EffectiveKind(), man.Family)
 	}
@@ -609,6 +679,7 @@ func buildSortformer(
 
 	d, err := diarizesortformer.New(diarizesortformer.Options{
 		NumThreads: cfg.ASR.NumThreads,
+		CoreML:     coremlBuild,
 		Resolve: func(ctx context.Context) (diarizesortformer.Files, error) {
 			dir, err := reg.Ensure(ctx, id)
 			if err != nil {
@@ -806,17 +877,27 @@ func buildRealtime(
 		return nil, nil, err
 	}
 
-	rec, err := sherpa.NewOnline(ctx, man, dir, sherpa.OnlineOptions{
-		Provider:                cfg.ASR.Provider,
-		NumThreads:              cfg.Realtime.NumThreads,
-		Debug:                   cfg.Log.Level == "debug",
-		DecodingMethod:          cfg.Realtime.DecodingMethod,
-		MaxActivePaths:          cfg.Realtime.MaxActivePaths,
-		EnableEndpoint:          cfg.Realtime.Endpoint.Enabled,
-		Rule1MinTrailingSilence: cfg.Realtime.Endpoint.Rule1MinTrailingSilence,
-		Rule2MinTrailingSilence: cfg.Realtime.Endpoint.Rule2MinTrailingSilence,
-		Rule3MinUtteranceLength: cfg.Realtime.Endpoint.Rule3MinUtteranceLength,
-	})
+	var rec asr.Streaming
+	if coremlasr.IsStreamingFamily(man.Family) {
+		rec, err = coremlasr.LoadStreaming(ctx, man, dir, coremlasr.StreamingOptions{
+			EnableEndpoint:          cfg.Realtime.Endpoint.Enabled,
+			Rule1MinTrailingSilence: cfg.Realtime.Endpoint.Rule1MinTrailingSilence,
+			Rule2MinTrailingSilence: cfg.Realtime.Endpoint.Rule2MinTrailingSilence,
+			Rule3MinUtteranceLength: cfg.Realtime.Endpoint.Rule3MinUtteranceLength,
+		})
+	} else {
+		rec, err = sherpa.NewOnline(ctx, man, dir, sherpa.OnlineOptions{
+			Provider:                onnxProvider(cfg),
+			NumThreads:              cfg.Realtime.NumThreads,
+			Debug:                   cfg.Log.Level == "debug",
+			DecodingMethod:          cfg.Realtime.DecodingMethod,
+			MaxActivePaths:          cfg.Realtime.MaxActivePaths,
+			EnableEndpoint:          cfg.Realtime.Endpoint.Enabled,
+			Rule1MinTrailingSilence: cfg.Realtime.Endpoint.Rule1MinTrailingSilence,
+			Rule2MinTrailingSilence: cfg.Realtime.Endpoint.Rule2MinTrailingSilence,
+			Rule3MinUtteranceLength: cfg.Realtime.Endpoint.Rule3MinUtteranceLength,
+		})
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("realtime model %q: %w", cfg.Realtime.Model, err)
 	}
@@ -890,7 +971,7 @@ func buildPostProc(
 		return nil, nil, err
 	}
 
-	pooled, err := postprocsherpa.NewPool(path, cfg.ASR.Provider, cfg.ASR.NumThreads, cfg.Jobs.MaxConcurrent)
+	pooled, err := postprocsherpa.NewPool(path, onnxProvider(cfg), cfg.ASR.NumThreads, cfg.Jobs.MaxConcurrent)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -437,6 +437,93 @@ verdict       cuda can be served
   Перенести его — это правка в `internal/diarize/sortformer`, и делать её без
   устройства, на котором можно измерить результат, не стоит.
 
+### Apple silicon: Neural Engine
+
+На Mac с Apple silicon и macOS 15 или новее `asr.provider: coreml` переносит
+распознавание, VAD, диаризацию и выделение голоса на Neural Engine и GPU. Для этого
+служат модели, сконвертированные под Core ML: в каталоге они записаны под своими
+идентификаторами — идентификатор исходной модели плюс `-coreml` — и скачиваются как
+любые другие:
+
+| CoreML-сборка | Из модели | Где работает |
+|---|---|---|
+| `gigaam-v3-ctc-punct-ru-coreml` | `gigaam-v3-ctc-punct-ru` | Neural Engine |
+| `gigaam-v3-rnnt-punct-ru-coreml` | `gigaam-v3-rnnt-punct-ru` | Neural Engine |
+| `silero-vad-v5-coreml` | `silero-vad-v5` | Neural Engine |
+| `nemotron-3-diarization-coreml` | `nemotron-3-diarization` | Neural Engine |
+| `voxlock-int8-coreml` | `voxlock-int8` | GPU и Neural Engine |
+| `campplus-sv-zh-en-coreml` | `campplus-sv-zh-en` | GPU и Neural Engine |
+| `t-one-ctc-ru-coreml` | `t-one-ctc-ru` | GPU |
+| `nemotron-3.5-streaming-multi-coreml` | `nemotron-3.5-streaming-multi` | Neural Engine |
+
+В конфигурации указываются сборки:
+
+```yaml
+asr:
+  provider: coreml
+  default_model: gigaam-v3-ctc-punct-ru-coreml
+  batch:
+    # Энкодер GigaAM берёт за вызов 20 с упакованных сегментов: отдавайте ему
+    # за раз больше, чем вместил бы пакет для CPU.
+    max_size: 64
+    max_seconds: 600
+vad:
+  model: silero-vad-v5-coreml
+diarization:
+  model: nemotron-3-diarization-coreml
+realtime:
+  model: t-one-ctc-ru-coreml
+isolation:
+  model: voxlock-int8-coreml
+  embedding_model: campplus-sv-zh-en-coreml
+```
+
+```bash
+nanoasr models pull gigaam-v3-ctc-punct-ru-coreml silero-vad-v5-coreml nemotron-3-diarization-coreml t-one-ctc-ru-coreml
+```
+
+Запрос может по-прежнему называть саму модель: при `asr.provider: coreml` запрос с
+`model=gigaam-v3-rnnt-punct-ru` обслуживает `gigaam-v3-rnnt-punct-ru-coreml`, если она
+установлена, и ONNX-модель на CPU, если нет. Запрос со словарём подсказок или
+лучевым поиском остаётся на ONNX-модели: сборки декодируют жадно. Приложение, которое
+запускает NanoASR своим фоновым процессом, вместо этого задаёт `"provider": "coreml"` в
+настройках ([nanoasr-embedded.md](nanoasr-embedded.md)), и скачиваются и работают
+сборки выбранных им моделей.
+
+Замеры на M1 против того же сервера на CPU (два потока), на записи совещания длиной
+37,7 минуты:
+
+| | CPU | CoreML |
+|---|---|---|
+| Распознавание, `gigaam-v3-ctc-punct-ru` | 138 с | 9,1 с |
+| Распознавание, `gigaam-v3-rnnt-punct-ru` | 151 с | 15,7 с |
+| Распознавание с говорящими (`diarize=true`) | 256 с | 16,9 с |
+| `/v1/audio/transcriptions`, 5 минут | 22,5 с | 1,3 с |
+| Выделение голосов из 5 минут, три голоса: анализ, извлечение, транскрипт | 27 с, 334 с, 35 с | 3,1 с, 75 с, 2,1 с |
+
+На одних и тех же сегментах CoreML-сборки GigaAM расходятся с fp32-чекпойнтами GigaAM на
+0,42% (CTC) и 0,53% (трансдьюсер) CER. С CPU-путём весь транскрипт расходится примерно на 3% — это
+разная нарезка VAD и int8-веса ONNX-моделей, столько же, сколько расходятся между собой
+CTC- и трансдьюсерный транскрипты на самом CPU. Время речи каждого говорящего совпадает с
+точностью до 1%. Обе потоковые сборки успевают за звуком, присланным вчетверо быстрее
+реального времени, и первые слова приходят не позже чем через 0,6 с.
+
+Собственный CoreML-провайдер onnxruntime не используется: на каждой модели каталога он
+оказался в 10–30 раз медленнее CPU, а на T-one ронял процесс. Всё, у чего сборки нет, —
+модель пунктуации, остальные распознаватели, бэкенд диаризации `sherpa` — работает на
+CPU, как и при `asr.provider: cpu`.
+
+Первая загрузка модели на машине компилирует её под Neural Engine — от секунд до
+полутора минут (Voxlock). macOS кэширует результат, так что следующие запуски загружают
+её меньше чем за секунду. VAD и потоковая модель загружаются до того, как сервер начинает
+слушать порт: на M1 первый запуск с новыми моделями занял 40 с, из них 31 — компиляция
+VAD, а следующий — 5 с.
+Модели распознавания, диаризации и выделения голоса загружаются при первом
+использовании, и этот запрос их ждёт.
+
+Как собираются сборки — из весов авторов, с закреплёнными версиями, — описано в
+[scripts/coreml](scripts/coreml/README.md).
+
 ### Сборка из исходников
 
 Требуется Go 1.25+, компилятор C/C++ (cgo обязателен — sherpa-onnx написан на C++) и
@@ -1206,6 +1293,7 @@ Hotwords фиксируются при создании распознавате
 | `streaming-zipformer-small-ru` | нет | потоковая: распознаватель смещается при создании, а не на запрос |
 | `nemotron-3.5-streaming-multi` | нет | потоковая, а в её пакете нет словаря подслов, по которому разбираются фразы |
 | `zipformer-small-en` | нет | трансдьюсер на подсловах, но файла словаря для него никто не публикует |
+| `gigaam-v3-ctc-punct-ru-coreml`, `gigaam-v3-rnnt-punct-ru-coreml`, `t-one-ctc-ru-coreml`, `nemotron-3.5-streaming-multi-coreml` | нет | [CoreML-сборки](#apple-silicon-neural-engine) декодируют жадно |
 
 `gigaam-v3-rnnt-punct-ru` — та запись, которую и стоит брать под смещение, и при этом
 лучшая русская модель каталога: 1024 подслова, собственная пунктуация и заглавные буквы,
@@ -1860,6 +1948,14 @@ source:
 | `campplus-sv-zh-en` | Эмбеддинги говорящих | multi | 28 МБ | Разрешено |
 | `wespeaker-voxceleb-resnet34` | Эмбеддинги говорящих | multi | 27 МБ | Разрешено |
 | `voxlock-int8` | Выделение голоса (целевой говорящий) | multi | 79 МБ | Разрешено (Apache-2.0) |
+| `gigaam-v3-ctc-punct-ru-coreml` | Распознавание, CTC, [Neural Engine](#apple-silicon-neural-engine) | ru | 409 МБ | Разрешено (MIT) |
+| `gigaam-v3-rnnt-punct-ru-coreml` | Распознавание, transducer, Neural Engine | ru | 412 МБ | Разрешено (MIT) |
+| `t-one-ctc-ru-coreml` | Потоковое распознавание, CTC, 8 кГц, GPU | ru | 133 МБ | Разрешено |
+| `nemotron-3.5-streaming-multi-coreml` | Потоковое распознавание, transducer, 560 мс, Neural Engine | 32 локали | 572 МБ | Разрешено (OpenMDW-1.1) |
+| `silero-vad-v5-coreml` | Определение речи, Neural Engine | multi | 0,4 МБ | Разрешено |
+| `nemotron-3-diarization-coreml` | Диаризация, Neural Engine | multi | 154 МБ | Разрешено |
+| `campplus-sv-zh-en-coreml` | Эмбеддинги говорящих, GPU и Neural Engine | multi | 14 МБ | Разрешено |
+| `voxlock-int8-coreml` | Выделение голоса (целевой говорящий), GPU и Neural Engine | multi | 52 МБ | Разрешено (Apache-2.0) |
 
 Значение «уточняется» означает, что условия не установлены по самой загрузке. Параметр
 `registry.strict_license` запрещает скачивать веса, коммерческое использование которых
