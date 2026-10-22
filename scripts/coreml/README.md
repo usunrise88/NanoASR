@@ -56,6 +56,21 @@ models, as the downloader would:
 .venv-coreml/bin/python scripts/coreml/install_local.py /var/lib/nanoasr/models gigaam-v3-rnnt-punct-ru-coreml
 ```
 
+## Publishing
+
+The catalog downloads the archives from the release its URLs name, so the
+release goes up on the commit whose catalog pins their sha256:
+
+```bash
+gh release create models-coreml-1 --target <commit> --latest=false --title models-coreml-1 --notes "…" dist/models-coreml-1/*.tar.gz
+```
+
+`--latest=false` matters: `install.sh` finds the application through
+`releases/latest`, and without it this release would take that place. A
+published archive is never replaced by different bytes: servers on an older
+catalog still check the old sha256. A rebuild that changes them gets a new
+`REVISION` in `common.py`, and with it new archive names.
+
 ## Checks
 
 Each converter checks its rewrite against the original in torch before

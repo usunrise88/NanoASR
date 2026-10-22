@@ -9,6 +9,10 @@ name: models
 # can check that the archive the catalog trusts is the one these scripts make.
 # The build must reproduce the sha256 the catalog pins, byte for byte, or
 # nothing is published.
+#
+# The Core ML builds of the models-coreml-1 release are not made here:
+# compiling them needs Core ML, so they are built on a Mac by scripts/coreml,
+# whose README says how they are published.
 on:
   workflow_dispatch:
     inputs:
@@ -51,9 +55,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
+        # --latest=false: install.sh finds the application through
+        # releases/latest, and a release created after it would take its place.
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes \
+            gh release create "$TAG" --target "$GITHUB_SHA" --latest=false --title "$TAG" --notes \
               "Model archives the NanoASR catalog downloads. Built by the models workflow from scripts/diar-research; see NOTICE inside each archive for origin and licence."
           fi
           gh release upload "$TAG" build/out/*.tar.gz --clobber
