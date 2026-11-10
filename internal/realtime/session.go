@@ -51,15 +51,30 @@ type Session struct {
 	item        string
 	items       int
 	itemStartMS int64
+	// clockMS is where, on the client's timeline, the stream's own clock reads
+	// zero: the stream was reset there, and given its lead silence before the
+	// audio. Token times are relative to it. It differs from itemStartMS because
+	// the item's start moves up through a silence the stream was not reset for.
+	clockMS     int64
 	audioMS     int64
 	rate        int
 	text        string
 	spoke       bool
 	lastPartial time.Time
 	chanClosed  bool
-	// committing is a commit that has been accepted and is waiting for the
-	// audio before it to finish decoding.
-	committing bool
+	// closing is what is finishing the current utterance, if anything: the
+	// client's commit, or a pause or the length limit that the engine chose. It
+	// is waiting for the audio before it to finish decoding. While it is set,
+	// audio that arrives stays queued, because it belongs to the next
+	// utterance.
+	closing cutKind
+	// meter is how loud the audio has been, which is how the engine knows
+	// whether the end of it is quiet.
+	meter meter
+	// holding is whether an endpoint is being put off right now, and from where
+	// in the audio, so that it is not put off for ever.
+	holding    bool
+	holdFromMS int64
 	// failed marks a session the loop should tear down at the next step,
 	// because an event it had to deliver could not be.
 	failed bool
@@ -68,14 +83,21 @@ type Session struct {
 	mu             sync.Mutex
 	pending        []chunk
 	pendingSamples int
-	commit         bool
-	clear          bool
-	newLanguage    string
-	languageSet    bool
-	lastAudio      atomic.Int64 // unix nanoseconds
-	closed         atomic.Bool
-	closeOnce      sync.Once
-	dropped        atomic.Int64
+	// enqueued and popped count the samples ever queued and ever taken from the
+	// queue, so that a position in the stream of audio can be named. commit is a
+	// request to end the utterance at commitMark: everything queued before the
+	// request, and nothing after.
+	enqueued    int64
+	popped      int64
+	commit      bool
+	commitMark  int64
+	clear       bool
+	newLanguage string
+	languageSet bool
+	lastAudio   atomic.Int64 // unix nanoseconds
+	closed      atomic.Bool
+	closeOnce   sync.Once
+	dropped     atomic.Int64
 }
 
 type chunk struct {
@@ -149,6 +171,7 @@ func (s *Session) Append(sampleRate int, samples []float32) error {
 			s.pending = append(s.pending,
 				chunk{rate: sampleRate, samples: append([]float32(nil), samples...)})
 			s.pendingSamples += len(samples)
+			s.enqueued += int64(len(samples))
 			s.mu.Unlock()
 
 			s.lastAudio.Store(s.engine.now().UnixNano())
@@ -177,6 +200,7 @@ func (s *Session) Commit() {
 	}
 	s.mu.Lock()
 	s.commit = true
+	s.commitMark = s.enqueued
 	s.mu.Unlock()
 	s.engine.poke()
 }
@@ -189,6 +213,7 @@ func (s *Session) Clear() {
 	s.mu.Lock()
 	s.pending = nil
 	s.pendingSamples = 0
+	s.popped = s.enqueued
 	// A commit that has not been acted on is dropped with the audio it was
 	// about; otherwise clearing the buffer would still produce a transcript of
 	// it.
@@ -217,31 +242,67 @@ func (s *Session) Close() error {
 // signal that a client cannot keep up.
 func (s *Session) Dropped() int64 { return s.dropped.Load() }
 
-// feed moves queued audio into the recogniser. Loop goroutine only.
-func (s *Session) feed() {
-	s.mu.Lock()
-	queued := s.pending
-	s.pending = nil
-	s.pendingSamples = 0
-	s.mu.Unlock()
+// feedPieceLimit is the most audio handed to the recogniser at once. It is what
+// the position of the audio can be resolved to: a boundary is decided between
+// pieces, so a client that sends a second at a time gets boundaries a tenth of
+// a second apart all the same.
+const feedPieceLimit = 100 * time.Millisecond
 
-	for _, c := range queued {
-		s.rate = c.rate
-		s.stream.Accept(c.rate, c.samples)
-		// The timeline is in milliseconds of audio the client sent, not of
-		// audio the model consumed: it is what a client can line its own
-		// recording up against.
-		s.audioMS += int64(len(c.samples)) * 1000 / int64(c.rate)
+// popPiece takes the next piece of queued audio, and says whether there was
+// one. Loop goroutine only.
+//
+// Audio is taken a piece at a time, from the queue itself, rather than the
+// queue being emptied into the recogniser. What stays queued is not in the
+// stream: so when the engine decides an utterance ends here, the audio after
+// the decision is not in the stream to be flushed with it, and a client that
+// clears the buffer discards exactly the audio that has not been used yet.
+func (s *Session) popPiece() (chunk, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pending) == 0 || (s.commit && s.popped >= s.commitMark) {
+		// Nothing queued, or nothing queued before the commit: what is there
+		// arrived after it and belongs to the next utterance.
+		return chunk{}, false
 	}
+	c := s.pending[0]
+	if n := int(feedPieceLimit/time.Millisecond) * c.rate / 1000; n > 0 && len(c.samples) > n {
+		s.pending[0] = chunk{rate: c.rate, samples: c.samples[n:]}
+		c = chunk{rate: c.rate, samples: c.samples[:n]}
+	} else {
+		s.pending = s.pending[1:]
+	}
+	s.pendingSamples -= len(c.samples)
+	s.popped += int64(len(c.samples))
+	return c, true
 }
 
-// takeCommit and takeClear read and clear the request flags. Loop goroutine.
+// feedPiece gives the recogniser the next piece of queued audio. Loop
+// goroutine only.
+func (s *Session) feedPiece() bool {
+	c, ok := s.popPiece()
+	if !ok {
+		return false
+	}
+	s.rate = c.rate
+	s.stream.Accept(c.rate, c.samples)
+	// The timeline is in milliseconds of audio the client sent, not of audio
+	// the model consumed: it is what a client can line its own recording up
+	// against.
+	s.audioMS += int64(len(c.samples)) * 1000 / int64(c.rate)
+	s.meter.add(c.rate, c.samples)
+	return true
+}
+
+// takeCommit says whether a commit is waiting and everything queued before it
+// has been given to the recogniser, and if so takes it. Loop goroutine.
 func (s *Session) takeCommit() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	was := s.commit
+	if !s.commit || s.popped < s.commitMark {
+		return false
+	}
 	s.commit = false
-	return was
+	return true
 }
 
 // SetLanguage asks for a different language from the next chunk. Like Commit
@@ -291,6 +352,7 @@ func (s *Session) nextItem(startMS int64) {
 	s.text = ""
 	s.spoke = false
 	s.lastPartial = time.Time{}
+	s.holding = false
 }
 
 // emit delivers an event, or decides what to do when it cannot.
@@ -324,13 +386,20 @@ func (s *Session) assemble(h asr.Hypothesis, endMS int64) []core.Word {
 	if len(h.Timestamps) == 0 {
 		return nil
 	}
-	return words.Assemble(
+	start := float64(s.itemStartMS) / 1000
+	ws := words.Assemble(
 		asr.Recognition{Text: h.Text, Tokens: h.Tokens, Timestamps: h.Timestamps},
 		words.Options{
 			ModelingUnit: s.engine.rec.ModelingUnit(),
-			SegmentStart: float64(s.itemStartMS) / 1000,
+			SegmentStart: float64(s.clockMS) / 1000,
 			SegmentEnd:   float64(endMS) / 1000,
 		})
+	// A token written for the silence itself would start before the utterance.
+	for i := range ws {
+		ws[i].Start = max(ws[i].Start, start)
+		ws[i].End = max(ws[i].End, ws[i].Start)
+	}
+	return ws
 }
 
 var _ core.RealtimeSession = (*Session)(nil)

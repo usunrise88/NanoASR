@@ -34,7 +34,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -499,12 +501,7 @@ func (c *conn) updateSession(ctx context.Context, ev clientEvent) bool {
 			c.params.AutoTurns = auto
 		}
 		if auto {
-			var td turnDetection
-			if err := json.Unmarshal(patch.TurnDetection, &td); err == nil && td.SilenceDurationMS > 0 {
-				c.warn(ctx, "turn_detection_fixed", "turn_detection.silence_duration_ms",
-					"the silence that ends an utterance is fixed when the model is loaded "+
-						"(realtime.endpoint in the server configuration)")
-			}
+			c.checkTurnDetection(ctx, info, patch.TurnDetection)
 		}
 	}
 
@@ -591,7 +588,7 @@ func (c *conn) emit(ctx context.Context, ev core.RealtimeEvent) bool {
 			Type: serverCompleted, EventID: newEventID(), ItemID: ev.Item,
 			Transcript: ev.Text,
 			NanoASR: &completedExtra{
-				StartMS: ev.StartMS, EndMS: ev.EndMS,
+				StartMS: ev.StartMS, EndMS: ev.EndMS, Cut: ev.Cut,
 				Model: c.rt.Describe().Model, Words: ev.Words,
 			},
 		}) == nil
@@ -683,8 +680,10 @@ func (c *conn) sessionState(kind string) eventSessionState {
 			"because a streaming decoder can retract a word it already sent")
 
 	var turn *turnDetection
+	var endpointing *core.RealtimeEndpointing
 	if c.params.AutoTurns {
-		turn = &turnDetection{Type: "server_vad"}
+		turn = &turnDetection{Type: "server_vad", SilenceDurationMS: info.Endpointing.SilenceMS}
+		endpointing = &info.Endpointing
 	}
 
 	id := "sess_pending"
@@ -713,6 +712,7 @@ func (c *conn) sessionState(kind string) eventSessionState {
 				WordTimestamps:  info.WordTimestamps,
 				MaxSessions:     info.MaxSessions,
 				ActiveSessions:  info.Active,
+				Endpointing:     endpointing,
 				Notes:           notes,
 			},
 		},
@@ -750,6 +750,64 @@ func (c *conn) setLanguage(ctx context.Context, info core.RealtimeInfo, asked st
 	c.params.Language = locale
 	if c.sess != nil {
 		c.sess.SetLanguage(locale)
+	}
+}
+
+// checkTurnDetection says, for every setting in a turn_detection object, that
+// it was not applied.
+//
+// Turn detection here is not OpenAI's: utterances end when the recogniser hears
+// the speaker stop, or by the length limit, and what those are is the server's
+// configuration. A client that sends a threshold, a padding or a silence
+// duration gets a session that behaves exactly as if it had not, and the only
+// way for it to find out is to be told, setting by setting. A value equal to
+// the one in effect is not a disagreement and is not reported.
+func (c *conn) checkTurnDetection(ctx context.Context, info core.RealtimeInfo, raw json.RawMessage) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return
+	}
+
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // warnings in a stable order
+
+	const prefix = "turn_detection."
+	for _, key := range keys {
+		switch key {
+		case "type":
+			var typ string
+			if json.Unmarshal(fields[key], &typ) == nil && typ != "" && typ != "server_vad" {
+				c.warn(ctx, "turn_detection_fixed", prefix+key,
+					"there is one kind of turn detection, server_vad, and it is what the session has; "+
+						typ+" is not available")
+			}
+		case "silence_duration_ms":
+			var ms int
+			if json.Unmarshal(fields[key], &ms) == nil && ms == info.Endpointing.SilenceMS {
+				continue
+			}
+			c.warn(ctx, "turn_detection_fixed", prefix+key,
+				fmt.Sprintf("the silence that ends an utterance is fixed at %d ms by the server "+
+					"(realtime.endpoint in its configuration), and the session's turn_detection says so",
+					info.Endpointing.SilenceMS))
+		case "prefix_padding_ms":
+			c.warn(ctx, "turn_detection_fixed", prefix+key,
+				"there is no padding to add: utterances are contiguous, and each begins where the "+
+					"one before it ended, so no audio falls between two of them")
+		case "threshold":
+			c.warn(ctx, "turn_detection_fixed", prefix+key,
+				"there is no voice-activity threshold: the recogniser decides where an utterance "+
+					"ends from what it has decoded")
+		case "create_response", "interrupt_response":
+			c.warn(ctx, "field_ignored", prefix+key,
+				"this server transcribes audio and produces no response")
+		default:
+			c.warn(ctx, "turn_detection_fixed", prefix+key,
+				"this setting is not supported; turn detection is the server's configuration")
+		}
 	}
 }
 

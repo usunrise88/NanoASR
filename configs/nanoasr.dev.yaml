@@ -112,16 +112,26 @@ realtime:
   batch_size: 8
   decoding_method: greedy_search
   max_active_paths: 4
-  # Where one utterance ends and the next begins, in seconds. The three rules
-  # are sherpa-onnx's own and are OR-ed. rule2 is the one a caller feels: it is
-  # the pause after which the final transcript arrives. Switching endpointing
-  # off means utterances end only when the client commits the buffer, which is
-  # how a push-to-talk client works.
+  # Where one utterance ends and the next begins, in seconds. rule1 and rule2
+  # are sherpa-onnx's own: rule2 is the one a caller feels, the pause after
+  # which the final transcript arrives. Switching endpointing off means
+  # utterances end only when the client commits the buffer, which is how a
+  # push-to-talk client works.
+  #
+  # rule3 is the server's own. An utterance has to end by that length even if
+  # the speaker has not stopped. It is not a timer: from pause_search seconds
+  # before the limit the first pause of min_pause or more ends the utterance
+  # (the pause that counts shrinks towards 0.15 s as the limit nears), so a
+  # monologue is cut between phrases, and only a speaker who never pauses is cut
+  # at the limit itself. Either way what the model has heard and not yet written
+  # is flushed first. 0 means no limit; pause_search 0 means cut at the limit.
   endpoint:
     enabled: true
     rule1_min_trailing_silence: 2.4
     rule2_min_trailing_silence: 1.2
     rule3_min_utterance_length: 20
+    pause_search: 8
+    min_pause: 0.4
 
 registry:
   allow_download: true

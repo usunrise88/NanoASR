@@ -89,6 +89,8 @@ func Default() Config {
 				Rule1MinTrailingSilence: 2.4,
 				Rule2MinTrailingSilence: 1.2,
 				Rule3MinUtteranceLength: 20,
+				PauseSearch:             8,
+				MinPause:                0.4,
 			},
 		},
 		Registry: Registry{AllowDownload: true, AutoDownload: true, DownloadConcurrency: 2},

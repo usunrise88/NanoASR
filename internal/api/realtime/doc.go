@@ -29,7 +29,12 @@ func (*Adapter) Doc() adapter.Doc {
 				"input_audio_format takes pcm16 (24 kHz by default), g711_ulaw, " +
 				"g711_alaw, or an object {\"type\":\"audio/pcm\",\"rate\":16000}. " +
 				"The model, the decoding method and the endpoint timings belong to " +
-				"the server and cannot be chosen per session; prompt is not applied. " +
+				"the server and cannot be chosen per session: every turn_detection " +
+				"setting is answered with a warning that it was not applied, and the " +
+				"session object says what is in effect (turn_detection." +
+				"silence_duration_ms and nanoasr.endpointing). An utterance that " +
+				"runs long is closed at a pause, or at the length limit when there " +
+				"is none, and completed says why in nanoasr.cut; prompt is not applied. " +
 				"Authenticate with Authorization: Bearer, or from a browser with the " +
 				"subprotocol openai-insecure-api-key.<key>.",
 		}, {

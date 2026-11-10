@@ -273,3 +273,45 @@ func TestIsolationNeedsDiarization(t *testing.T) {
 		t.Error("a zero ttl was accepted")
 	}
 }
+
+// The length limit of an utterance is the server's rule, and it closes a long
+// utterance at a pause: the shipped defaults have to say so, and the settings
+// that go with it have to be ones the search can use.
+func TestRealtimeEndpointDefaultsSearchForAPauseBeforeTheLimit(t *testing.T) {
+	ep := Default().Realtime.Endpoint
+	if ep.Rule3MinUtteranceLength != 20 {
+		t.Errorf("the length limit is %g s, want the 20 s the recogniser always had", ep.Rule3MinUtteranceLength)
+	}
+	if ep.PauseSearch <= 0 || ep.PauseSearch > ep.Rule3MinUtteranceLength {
+		t.Errorf("pause_search is %g s: with none, a long utterance is cut at the limit and not at a pause", ep.PauseSearch)
+	}
+	if ep.MinPause < 0.15 {
+		t.Errorf("min_pause is %g s, shorter than a gap that can sit inside a word", ep.MinPause)
+	}
+}
+
+func TestRealtimeEndpointSettingsAreChecked(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"negative search", "realtime:\n  endpoint:\n    pause_search: -1\n", "must not be negative"},
+		{"negative pause", "realtime:\n  endpoint:\n    min_pause: -0.1\n", "must not be negative"},
+		{"a pause that is a gap inside a word", "realtime:\n  endpoint:\n    pause_search: 8\n    min_pause: 0.05\n", "inside a word"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, minimalAuth+tc.body))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+
+	// A search longer than the limit is not an error: it is capped to it, so a
+	// configuration that only lowers the limit still starts.
+	if _, err := Load(writeConfig(t, minimalAuth+"realtime:\n  endpoint:\n    rule3_min_utterance_length: 5\n")); err != nil {
+		t.Fatalf("lowering the limit alone must not need pause_search lowered too: %v", err)
+	}
+}

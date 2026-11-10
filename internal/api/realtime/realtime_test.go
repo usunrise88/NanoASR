@@ -799,3 +799,123 @@ func TestBackpressureDoesNotTripTheKeepalive(t *testing.T) {
 		t.Errorf("the session did not take the update: %v", session)
 	}
 }
+
+// A client that sends turn-detection settings gets a session that behaves as if
+// it had not, so every one of them has to be answered with a warning that says
+// so. The ones that were not — padding and threshold — are the ones a client is
+// most likely to send.
+func TestEveryTurnDetectionSettingThatIsNotAppliedIsReported(t *testing.T) {
+	svc := newFakeService()
+	ws, ctx := dial(t, serve(t, svc))
+	expect(t, ctx, ws, serverSessionCreated)
+
+	sendJSON(t, ctx, ws, map[string]any{
+		"type": "session.update",
+		"session": map[string]any{
+			"turn_detection": map[string]any{
+				"type":                "semantic_vad",
+				"threshold":           0.8,
+				"prefix_padding_ms":   600,
+				"silence_duration_ms": 1200,
+				"create_response":     true,
+				"eagerness":           "high",
+			},
+		},
+	})
+
+	codes := map[string]bool{}
+	for range 12 {
+		ev := next(t, ctx, ws)
+		switch ev["type"] {
+		case serverWarning:
+			codes[ev["code"].(string)+":"+str(ev["param"])] = true
+		case serverSessionUpdated:
+			for _, want := range []string{
+				"turn_detection_fixed:turn_detection.type",
+				"turn_detection_fixed:turn_detection.threshold",
+				"turn_detection_fixed:turn_detection.prefix_padding_ms",
+				"turn_detection_fixed:turn_detection.silence_duration_ms",
+				"field_ignored:turn_detection.create_response",
+				"turn_detection_fixed:turn_detection.eagerness",
+			} {
+				if !codes[want] {
+					t.Errorf("no warning %s; got %v", want, codes)
+				}
+			}
+			return
+		}
+	}
+	t.Fatalf("no session.updated arrived; warnings were %v", codes)
+}
+
+func TestASilenceDurationEqualToTheOneInEffectIsNotAComplaint(t *testing.T) {
+	svc := newFakeService()
+	svc.info.Endpointing = core.RealtimeEndpointing{SilenceMS: 1200}
+	ws, ctx := dial(t, serve(t, svc))
+	expect(t, ctx, ws, serverSessionCreated)
+
+	sendJSON(t, ctx, ws, map[string]any{
+		"type": "session.update",
+		"session": map[string]any{
+			"turn_detection": map[string]any{"type": "server_vad", "silence_duration_ms": 1200},
+		},
+	})
+	for range 4 {
+		ev := next(t, ctx, ws)
+		if ev["type"] == serverWarning {
+			t.Fatalf("a setting that matches the server's was reported as ignored: %v", ev)
+		}
+		if ev["type"] == serverSessionUpdated {
+			return
+		}
+	}
+	t.Fatal("no session.updated arrived")
+}
+
+func TestTheSessionObjectSaysWhatEndsAnUtterance(t *testing.T) {
+	svc := newFakeService()
+	svc.info.Endpointing = core.RealtimeEndpointing{
+		SilenceMS: 1200, MaxUtteranceMS: 20000, PauseSearchMS: 8000, MinPauseMS: 400,
+	}
+	ws, ctx := dial(t, serve(t, svc))
+	created := expect(t, ctx, ws, serverSessionCreated)
+
+	session := created["session"].(map[string]any)
+	td := session["turn_detection"].(map[string]any)
+	if td["silence_duration_ms"] != float64(1200) {
+		t.Errorf("turn_detection does not carry the silence in effect: %v", td)
+	}
+	ep := session["nanoasr"].(map[string]any)["endpointing"].(map[string]any)
+	if ep["max_utterance_ms"] != float64(20000) || ep["pause_search_ms"] != float64(8000) ||
+		ep["min_pause_ms"] != float64(400) || ep["silence_ms"] != float64(1200) {
+		t.Errorf("the limits are not reported: %v", ep)
+	}
+
+	// With automatic turns off none of it applies, and none of it is claimed.
+	sendJSON(t, ctx, ws, map[string]any{
+		"type":    "session.update",
+		"session": map[string]any{"turn_detection": nil},
+	})
+	updated := expect(t, ctx, ws, serverSessionUpdated)
+	if _, present := updated["session"].(map[string]any)["nanoasr"].(map[string]any)["endpointing"]; present {
+		t.Error("endpointing is reported for a session that has no automatic turns")
+	}
+}
+
+func TestACompletedTranscriptSaysWhyTheUtteranceEnded(t *testing.T) {
+	svc := newFakeService()
+	ws, ctx := dial(t, serve(t, svc))
+	expect(t, ctx, ws, serverSessionCreated)
+	if err := ws.Write(ctx, websocket.MessageBinary, pcm16Bytes(1)); err != nil {
+		t.Fatal(err)
+	}
+	sess := <-svc.opened
+
+	sess.emit(core.RealtimeEvent{Kind: core.RealtimeFinal, Item: "item_1", Text: "раз", Cut: "max_length"})
+
+	done := expect(t, ctx, ws, serverCompleted)
+	extra, _ := done["nanoasr"].(map[string]any)
+	if extra["cut"] != "max_length" {
+		t.Errorf("completed does not say why the utterance ended: %v", extra)
+	}
+}

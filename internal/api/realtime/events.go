@@ -107,6 +107,12 @@ type sessionObject struct {
 	NanoASR                 sessionExtra        `json:"nanoasr"`
 }
 
+// turnDetection is the session's turn detection as the server reports it.
+//
+// What a client sends is not read into this: the fields a client may send are
+// OpenAI's — threshold, prefix_padding_ms, silence_duration_ms and others — and
+// the server honours none of them, so each is looked at by name when it
+// arrives (see checkTurnDetection) and this carries only what is in effect.
 type turnDetection struct {
 	Type string `json:"type"`
 	// SilenceDurationMS is the trailing silence that ends an utterance. It is
@@ -127,7 +133,11 @@ type sessionExtra struct {
 	WordTimestamps bool     `json:"word_timestamps"`
 	MaxSessions    int      `json:"max_sessions"`
 	ActiveSessions int      `json:"active_sessions"`
-	Notes          []string `json:"notes,omitempty"`
+	// Endpointing is what ends an utterance on this server. It is present while
+	// the session has automatic turns, which is when it applies, and it is the
+	// server's setting: none of it can be changed from the session.
+	Endpointing *core.RealtimeEndpointing `json:"endpointing,omitempty"`
+	Notes       []string                  `json:"notes,omitempty"`
 }
 
 type eventSessionState struct {
@@ -207,10 +217,15 @@ type eventCompleted struct {
 }
 
 type completedExtra struct {
-	StartMS int64       `json:"start_ms"`
-	EndMS   int64       `json:"end_ms"`
-	Model   string      `json:"model"`
-	Words   []core.Word `json:"words,omitempty"`
+	StartMS int64  `json:"start_ms"`
+	EndMS   int64  `json:"end_ms"`
+	Model   string `json:"model"`
+	// Cut is why the utterance ended: "silence" when the speaker stopped,
+	// "pause" when a long utterance was closed at a pause, "max_length" when
+	// the speaker did not pause before the limit, and "commit" when the client
+	// asked. The last two are the server's boundaries and not the speaker's.
+	Cut   string      `json:"cut,omitempty"`
+	Words []core.Word `json:"words,omitempty"`
 }
 
 type eventError struct {

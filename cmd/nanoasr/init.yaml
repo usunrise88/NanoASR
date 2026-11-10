@@ -68,7 +68,9 @@ realtime:
     enabled: true
     rule1_min_trailing_silence: 2.4
     rule2_min_trailing_silence: 1.2
-    rule3_min_utterance_length: 20
+    rule3_min_utterance_length: 20   # closes a long utterance at a pause, not on a timer
+    pause_search: 8
+    min_pause: 0.4
 {{end}}
 jobs:
   queue_size: 100

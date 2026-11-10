@@ -346,6 +346,15 @@ func (c *Config) validateRealtime() error {
 		e.Rule2MinTrailingSilence < 0 || e.Rule3MinUtteranceLength < 0 {
 		return fmt.Errorf("realtime.endpoint rules must not be negative")
 	}
+	if e := r.Endpoint; e.PauseSearch < 0 || e.MinPause < 0 {
+		return fmt.Errorf("realtime.endpoint.pause_search and min_pause must not be negative")
+	}
+	// A pause shorter than this can be the gap inside a word, and the search
+	// would cut it in two.
+	if e := r.Endpoint; e.PauseSearch > 0 && e.MinPause > 0 && e.MinPause < 0.15 {
+		return fmt.Errorf(
+			"realtime.endpoint.min_pause is %gs; a pause shorter than 0.15 s can sit inside a word", e.MinPause)
+	}
 	// Endpointing switched off means no utterance ever ends on its own, so the
 	// only transcripts a client sees are the ones it asks for by committing
 	// the buffer. That is a legitimate mode — it is how a push-to-talk client

@@ -7,16 +7,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/usunrise88/nanoasr/internal/asr"
 	"github.com/usunrise88/nanoasr/internal/core"
 )
 
 // start runs an engine for the duration of the test. tweak, when given, adjusts
 // the engine before the loop is running, which is the only time its unexported
 // fields can be written without racing it.
-func start(t *testing.T, rec *fakeRecognizer, opt Options, tweak ...func(*Engine)) *Engine {
+func start(t *testing.T, rec asr.Streaming, opt Options, tweak ...func(*Engine)) *Engine {
 	t.Helper()
 	if opt.Tick == 0 {
 		opt.Tick = 2 * time.Millisecond
+	}
+	// The scripted fake writes a word for every chunk it decodes, silence
+	// included, so the silence a stream is primed with would be words that
+	// nobody said. A real recogniser, and the lag fake, do not.
+	if _, scripted := rec.(*fakeRecognizer); scripted && opt.LeadSilence == 0 {
+		opt.LeadSilence = -1
 	}
 	e := New(rec, opt)
 	for _, f := range tweak {

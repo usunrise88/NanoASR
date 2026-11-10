@@ -262,9 +262,25 @@ type Endpoint struct {
 	// decoded speech. This is the one a caller feels: it is the pause after
 	// which the final transcript arrives.
 	Rule2MinTrailingSilence float32 `yaml:"rule2_min_trailing_silence"`
-	// Rule3MinUtteranceLength ends it after this many seconds regardless, so a
-	// monologue still produces results.
+	// Rule3MinUtteranceLength is the length by which an utterance is closed
+	// whether or not the speaker has stopped, so a monologue still produces
+	// results. 0 means no limit.
+	//
+	// It is the server's rule, not the recogniser's: the recogniser's own would
+	// cut at the first decoded chunk past the limit, in the middle of a word.
+	// The server closes the utterance at a pause instead (see PauseSearch), and
+	// at the limit itself only when the speaker has not paused at all.
 	Rule3MinUtteranceLength float32 `yaml:"rule3_min_utterance_length"`
+	// PauseSearch is how many seconds before that limit the server starts
+	// looking for a pause to close the utterance at. The first one it finds
+	// from then on ends the utterance, so a long monologue is cut between its
+	// phrases and not on a timer. 0 closes at the limit itself. A value larger
+	// than the limit is the same as the limit: the search then starts at once.
+	PauseSearch float32 `yaml:"pause_search"`
+	// MinPause is the length in seconds of the quiet that counts as a pause
+	// when that search begins. It shrinks to 0.15 s as the limit approaches:
+	// anything shorter can sit inside a word.
+	MinPause float32 `yaml:"min_pause"`
 }
 
 type Registry struct {
