@@ -60,6 +60,28 @@ type RealtimeInfo struct {
 	MaxSessions    int          `json:"max_sessions"`
 	Active         int          `json:"active_sessions"`
 	Capabilities   Capabilities `json:"capabilities"`
+	// Endpointing is how the server ends utterances when a session has not
+	// asked to commit them itself. It is the server's, not the session's: a
+	// client that asks for other values is told these are fixed, and this is
+	// what they are.
+	Endpointing RealtimeEndpointing `json:"endpointing"`
+}
+
+// RealtimeEndpointing is what ends an utterance on its own. Zero is "not
+// applicable": no limit, or no pause search.
+type RealtimeEndpointing struct {
+	// SilenceMS is the pause after which the recogniser ends an utterance, the
+	// one a speaker feels.
+	SilenceMS int `json:"silence_ms"`
+	// MaxUtteranceMS is the length by which an utterance is closed even if the
+	// speaker has not stopped.
+	MaxUtteranceMS int `json:"max_utterance_ms"`
+	// PauseSearchMS is how long before that limit the server starts looking for a
+	// pause to close at, and MinPauseMS the pause that counts when it starts.
+	// An utterance that has run that long ends at the first pause, and only at
+	// the limit itself if the speaker never paused.
+	PauseSearchMS int `json:"pause_search_ms"`
+	MinPauseMS    int `json:"min_pause_ms"`
 }
 
 // RealtimeSession is one open stream of audio.
@@ -134,5 +156,12 @@ type RealtimeEvent struct {
 	// Words carries token timings when the model produces them and the client
 	// asked for them.
 	Words []Word
-	Err   error
+	// Cut says why an utterance ended, on the event that ends it: "silence"
+	// when the recogniser heard the speaker stop, "pause" when the engine
+	// closed a long utterance at a pause, "max_length" when it had to close one
+	// at the limit with no pause to be found, and "commit" when the client
+	// asked. A client that joins utterances back into paragraphs wants to know
+	// which boundaries were the speaker's and which were the server's.
+	Cut string
+	Err error
 }

@@ -877,13 +877,20 @@ func buildRealtime(
 		return nil, nil, err
 	}
 
+	// The length limit is the engine's, not the recogniser's: the recogniser
+	// would cut at the first decoded chunk past it, in the middle of a word, and
+	// with what the model had heard but not yet written thrown away. Its own
+	// rule is set out of reach, and the engine closes the utterance at a pause
+	// (or, with none to be found, at the limit with the tail flushed).
+	const recogniserLength = 24 * 3600 // seconds
+
 	var rec asr.Streaming
 	if coremlasr.IsStreamingFamily(man.Family) {
 		rec, err = coremlasr.LoadStreaming(ctx, man, dir, coremlasr.StreamingOptions{
 			EnableEndpoint:          cfg.Realtime.Endpoint.Enabled,
 			Rule1MinTrailingSilence: cfg.Realtime.Endpoint.Rule1MinTrailingSilence,
 			Rule2MinTrailingSilence: cfg.Realtime.Endpoint.Rule2MinTrailingSilence,
-			Rule3MinUtteranceLength: cfg.Realtime.Endpoint.Rule3MinUtteranceLength,
+			Rule3MinUtteranceLength: recogniserLength,
 		})
 	} else {
 		rec, err = sherpa.NewOnline(ctx, man, dir, sherpa.OnlineOptions{
@@ -895,14 +902,28 @@ func buildRealtime(
 			EnableEndpoint:          cfg.Realtime.Endpoint.Enabled,
 			Rule1MinTrailingSilence: cfg.Realtime.Endpoint.Rule1MinTrailingSilence,
 			Rule2MinTrailingSilence: cfg.Realtime.Endpoint.Rule2MinTrailingSilence,
-			Rule3MinUtteranceLength: cfg.Realtime.Endpoint.Rule3MinUtteranceLength,
+			Rule3MinUtteranceLength: recogniserLength,
 		})
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("realtime model %q: %w", cfg.Realtime.Model, err)
 	}
 
+	// With endpointing off no utterance ends on its own, so there is no length
+	// to enforce either: the client commits.
+	var silence, maxUtterance, pauseSearch, minPause time.Duration
+	if ep := cfg.Realtime.Endpoint; ep.Enabled {
+		silence = seconds(ep.Rule2MinTrailingSilence)
+		maxUtterance = seconds(ep.Rule3MinUtteranceLength)
+		pauseSearch = seconds(ep.PauseSearch)
+		minPause = seconds(ep.MinPause)
+	}
+
 	engine := realtime.New(rec, realtime.Options{
+		EndpointSilence:    silence,
+		MaxUtterance:       maxUtterance,
+		PauseSearch:        pauseSearch,
+		MinPause:           minPause,
 		MaxSessions:        cfg.Realtime.MaxSessions,
 		MaxSessionDuration: cfg.Realtime.MaxSessionDuration.Duration,
 		IdleTimeout:        cfg.Realtime.IdleTimeout.Duration,
@@ -919,6 +940,7 @@ func buildRealtime(
 		"model", man.Key(), "family", man.Family, "model_rate", rec.SampleRate(),
 		"max_sessions", cfg.Realtime.MaxSessions, "provider", cfg.ASR.Provider,
 		"endpointing", cfg.Realtime.Endpoint.Enabled,
+		"max_utterance", maxUtterance, "pause_search", pauseSearch,
 		"punctuation", caps.PunctuationBuiltin)
 	if !caps.PunctuationBuiltin {
 		// Said out loud because it is the first thing a caller comparing the
@@ -929,6 +951,9 @@ func buildRealtime(
 	}
 	return engine, rec, nil
 }
+
+// seconds converts a configured number of seconds to a Duration.
+func seconds(v float32) time.Duration { return time.Duration(float64(v) * float64(time.Second)) }
 
 // closeStreaming is nil-safe: most servers never load a streaming model.
 func closeStreaming(rec asr.Streaming) {

@@ -835,9 +835,28 @@ Differences from the original API:
 
 - The model, the decoding method and the endpoint timings belong to the server. A
   streaming recogniser settles all three when it is loaded, so a session cannot choose
-  them: asking for another model is an error, and asking for other turn-detection
-  timings is a warning. `turn_detection: null` *is* honoured — it means the client will
-  commit the buffer itself, which is how push-to-talk works.
+  them: asking for another model is an error, and every `turn_detection` setting a
+  session sends — `threshold`, `prefix_padding_ms`, `silence_duration_ms`, anything else
+  — is answered with a `warning` event that it was not applied (a value equal to the
+  one in effect is not). What is in effect is in the session object:
+  `turn_detection.silence_duration_ms` and `nanoasr.endpointing`.
+  `turn_detection: null` *is* honoured — it means the client will commit the buffer
+  itself, which is how push-to-talk works.
+- **How utterances end.** The speaker stopping (`realtime.endpoint.rule2…`, 1.2 s by
+  default) ends one, and so does the length limit (`rule3_min_utterance_length`, 20 s):
+  a speaker who does not stop still gets transcripts. The limit is not a timer. From
+  `pause_search` seconds before it (8) the first pause of `min_pause` (0.4 s, shrinking
+  towards 0.15 s as the limit nears) ends the utterance, so a long monologue is cut
+  between its phrases, and only a speaker who never pauses is cut at the limit itself.
+  Utterances are contiguous — each begins where the last ended — and before any of them
+  is closed the model is made to say what it has heard and not yet written. A streaming
+  model decodes late, by up to half a second; closing an utterance without that is what
+  once dropped the last word or two of every one. An endpoint the recogniser raises is
+  also put off, for at most 1.5 s, while the end of the audio is still loud: the
+  recogniser has not decoded the first word of a sentence yet and takes the breath
+  before it for the end of the last. `completed` says which of these ended an
+  utterance in `nanoasr.cut`: `silence`, `pause`, `max_length` or `commit`; the last
+  two are the server's boundaries and not the speaker's.
 - `prompt` is ignored, with a warning. On the offline API it maps to hotword biasing;
   biasing a streaming recogniser would mean a second resident copy of the model per
   bias list.
